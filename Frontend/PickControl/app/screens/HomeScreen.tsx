@@ -1,28 +1,81 @@
-import React from "react";
-import { Text, View, StyleSheet, ScrollView } from "react-native";
-
-const fechas = ['2025-01-17', '2025-01-18'];
-
-const informantes = [
-    { id: '1', nombre: 'Dm7 Gratuito', pronosticos: ['Acierto', 'Fallo'] },
-    { id: '2', nombre: 'Dm7 AllSports', pronosticos: ['Fallo', 'Acierto'] },
-    { id: '3', nombre: 'Mr Bet', pronosticos: ['Acierto', 'Fallo'] },
-    { id: '4', nombre: 'AllSportPick', pronosticos: ['Acierto', 'Acierto'] },
-    { id: '5', nombre: 'Apuesta Diaria', pronosticos: ['Fallo', 'Fallo'] },
-    { id: '6', nombre: 'FutbetPro Free', pronosticos: ['Fallo', 'Acierto'] },
-    { id: '7', nombre: 'FutbetPro VIP Instagram', pronosticos: ['Acierto', 'Fallo'] },
-];
+import React, { useState, useEffect } from "react";
+import { Text, View, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
+import BottomBar from "../components/bottom-bar";
+import { useRouter } from "expo-router";  // Importamos useRouter
 
 const Main = () => {
-    const cellWidth = 120; // Ancho fijo para todas las celdas
+    const [apuestas, setApuestas] = useState([]);  // Estado para almacenar las apuestas obtenidas
+    const [informantes, setInformantes] = useState([]); // Informantes que obtendremos de la API
+
+    const router = useRouter(); // Usamos useRouter para navegación programática
+
+    const cellWidth = 160; // Ampliamos el ancho de la celda para que los nombres largos no se dividan
 
     // Función para renderizar los pronósticos con símbolos
-    const renderPronostico = (resultado) => {
-        if (resultado === 'Acierto') {
+    const renderPronostico = (acierto) => {
+        if (acierto === 'True') {
             return <Text style={[styles.icon, { color: 'green' }]}>✔️</Text>;
+        } else if (acierto === 'False') {
+            return <Text style={[styles.icon, { color: 'red' }]}>❌</Text>;
         }
-        return <Text style={[styles.icon, { color: 'red' }]}>❌</Text>;
+        return <Text>-</Text>;  // Si no hay acierto (es null o vacío), mostramos "-"
     };
+
+    // Función para obtener las apuestas de la API
+    const fetchApuestas = async () => {
+        try {
+            const response = await fetch('http://192.168.1.71:3000/apuestas');  
+            const data = await response.json();
+
+            // Revisamos la estructura de la respuesta para depurar
+            console.log("Datos obtenidos:", data);
+
+            // Creamos un conjunto para los informantes y un objeto para las apuestas
+            const apuestasPorInformante = {};
+            data.picks.forEach((pick) => {
+                const { Informante, Acierto, Apuesta } = pick;
+                if (!apuestasPorInformante[Informante]) {
+                    apuestasPorInformante[Informante] = [];
+                }
+                apuestasPorInformante[Informante].push({ Apuesta, Acierto });
+            });
+
+            // Establecemos las apuestas y los informantes
+            setApuestas(apuestasPorInformante);
+
+            // Extraemos los nombres de los informantes
+            const informantesList = Object.keys(apuestasPorInformante);
+            setInformantes(informantesList);
+        } catch (error) {
+            console.error("Error al obtener las apuestas:", error);
+        }
+    };
+
+    useEffect(() => {
+        fetchApuestas();
+    }, []);
+
+    const handleInformantePress = (informante) => {
+        console.log("Navegando hacia:", informante);  // Log para ver el valor
+        router.push(`/informant-detail/${informante}`);  // Este es el formato correcto
+    };
+    
+
+    // Función para obtener el número máximo de apuestas de un informante
+    const getMaxApuestas = () => {
+        // Si apuestas está vacío, evitamos calcular
+        if (Object.keys(apuestas).length === 0) {
+            return 0; // No hay apuestas, por lo tanto, no hay filas que mostrar
+        }
+
+        const apuestasCount = Object.values(apuestas).map((apuestas) => apuestas.length);
+        const max = Math.max(...apuestasCount);
+        console.log("Número máximo de apuestas:", max);  // Para depurar
+        return max > 0 ? max : 0; // Aseguramos que no sea negativo o NaN
+    };
+
+    const maxApuestas = getMaxApuestas(); // Número de filas necesarias
+    console.log("maxApuestas:", maxApuestas);  // Verificamos el valor de maxApuestas
 
     return (
         <View style={styles.container}>
@@ -33,38 +86,52 @@ const Main = () => {
                 <View>
                     {/* Encabezados */}
                     <View style={styles.header}>
+                        {/* Columna de fecha */}
                         <Text style={[styles.cell, styles.headerCell, styles.border, { width: cellWidth }]}>
                             Fecha
                         </Text>
-                        {informantes.map((informante) => (
-                            <Text
-                                key={informante.id}
-                                style={[styles.cell, styles.headerCell, styles.border, { width: cellWidth }]}
-                            >
-                                {informante.nombre}
-                            </Text>
+
+                        {/* Columnas de informantes convertidas en botones dentro de celdas */}
+                        {informantes.map((informante, index) => (
+                            <View 
+                                key={index} 
+                                style={[styles.cell, styles.border, { width: cellWidth }]}>
+                                
+                                {/* Usamos TouchableOpacity para navegación programática */}
+                                <TouchableOpacity
+                                    onPress={() => handleInformantePress(informante)}  // Navegación usando useRouter
+                                    style={styles.informanteButton}
+                                >
+                                    <Text style={styles.buttonText}>{informante}</Text>
+                                </TouchableOpacity>
+                            </View>
                         ))}
                     </View>
 
-                    {/* Filas de Pronósticos */}
-                    {fechas.map((fecha, index) => (
+                    {/* Filas de pronósticos */}
+                    {[...Array(maxApuestas)].map((_, index) => (
                         <View key={index} style={styles.row}>
-                            {/* Fecha como primera celda */}
-                            <Text style={[styles.cell, styles.dateCell, styles.border, { width: cellWidth }]}>
-                                {fecha}
-                            </Text>
-                            {informantes.map((informante) => (
-                                <View
-                                    key={informante.id}
-                                    style={[styles.cell, styles.border, { width: cellWidth }]}
-                                >
-                                    {renderPronostico(informante.pronosticos[index])}
-                                </View>
-                            ))}
+                            {/* Columna de fecha vacía */}
+                            <Text style={[styles.cell, styles.dateCell, styles.border, { width: cellWidth }]}></Text>
+
+                            {/* Mostrar los aciertos o errores de las apuestas de cada informante */}
+                            {informantes.map((informante) => {
+                                const apuestasInformante = apuestas[informante];
+                                const apuestaInformante = apuestasInformante ? apuestasInformante[index] : null;
+                                return (
+                                    <View
+                                        key={informante}
+                                        style={[styles.cell, styles.border, { width: cellWidth }]}>
+                                        {apuestaInformante ? renderPronostico(apuestaInformante.Acierto) : <Text>-</Text>}
+                                    </View>
+                                );
+                            })}
                         </View>
                     ))}
                 </View>
             </ScrollView>
+
+            <BottomBar />
         </View>
     );
 };
@@ -85,23 +152,24 @@ const styles = StyleSheet.create({
     },
     header: {
         flexDirection: 'row',
-        backgroundColor: '#ddd',
+        backgroundColor: '#4CAF50',  // Mismo color que el botón
         borderBottomWidth: 1,
         borderColor: '#ccc',
     },
     headerCell: {
-        fontSize: 18,
+        fontSize: 18,  // Reduzco el tamaño del texto
         fontWeight: 'bold',
         textAlign: 'center',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#e0e0e0',
+        backgroundColor: '#4CAF50',  // Mismo color que el botón
+        color: 'white',  // Texto blanco
     },
     row: {
         flexDirection: 'row',
     },
     cell: {
-        fontSize: 14,
+        fontSize: 18,
         textAlign: 'center',
         alignItems: 'center',
         justifyContent: 'center',
@@ -119,6 +187,24 @@ const styles = StyleSheet.create({
     icon: {
         fontSize: 20,
         textAlign: 'center',
+    },
+    informanteButton: {
+        backgroundColor: '#4CAF50', // El mismo color que el encabezado y los botones
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+        borderRadius: 10, // Bordes redondeados
+        justifyContent: 'center',
+        alignItems: 'center',
+        width: '100%', // Hace que el botón ocupe el 100% del ancho de la celda
+        minHeight: 40, // Asegura que tenga una altura mínima
+    },
+    buttonText: {
+        color: 'white',
+        fontWeight: 'bold',
+        fontSize: 18, // Un tamaño más pequeño para el texto
+        textAlign: 'center',
+        textOverflow: 'ellipsis', // Para evitar que el texto se divida
+        whiteSpace: 'nowrap', // Mantiene el texto en una sola línea
     },
 });
 
