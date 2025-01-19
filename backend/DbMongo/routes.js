@@ -19,76 +19,115 @@ router.get("/apuestas", async (req, res) => {
     }
 });
 
+router.post("/apuestas", async (req, res) => {
+    const { Apuesta, Informante, TipoDeApuesta, Casa, Acierto, CantidadApostada, Cuota } = req.body;
 
-router.get('/book/:id', async (req, res) => {
     try {
-        const book = await Book.findById(req.params.id); // Busca un libro por su ID en la base de datos
-        if (!book) {
-            return res.status(404).json({ message: 'Libro no encontrado' });
-        }
-        res.json(book); // Devuelve el libro encontrado en formato JSON
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Error interno del servidor' });
-    }
-});
-
-router.post('/new-book', async (req, res) => {
-    try {
-        const { title, author, genre, year, photo } = req.body;
-
-        // Crear una nueva instancia del modelo Book
-        const newBook = new Book({
-            title,
-            author,
-            genre,
-            year,
-            photo
+        // Crear una nueva entrada en la colección 'Picks'
+        const nuevaApuesta = new Pick({
+            Apuesta,
+            Informante,
+            TipoDeApuesta,
+            Casa,
+            Acierto,  // Puede ser nulo o vacío en el momento de la creación
+            CantidadApostada,
+            Cuota
         });
 
-        // Guardar el libro en la base de datos
-        const savedBook = await newBook.save();
+        // Guardar la nueva apuesta en la base de datos
+        await nuevaApuesta.save();
 
-        res.status(201).json(savedBook);
+        res.status(201).json({ message: "Apuesta creada exitosamente", nuevaApuesta });
     } catch (error) {
-        console.error('Error adding new book:', error);
-        res.status(500).json({ message: 'Internal server error' });
+        console.error("Error al crear la apuesta:", error);
+        res.status(400).json({ error: "Error al crear la apuesta" });
     }
 });
 
-router.put('/update-book/:id', async (req, res) => {
+// Endpoint PUT para actualizar el campo Acierto
+router.put("/apuesta/:id", async (req, res) => {
+    const { id } = req.params;
+    const { Acierto } = req.body;
+
+    try {
+        // Buscar la apuesta por su ID y actualizar el campo 'Acierto'
+        const apuestaActualizada = await Pick.findByIdAndUpdate(
+            id,
+            { Acierto },
+            { new: true }  // Esto devolverá el documento actualizado
+        );
+
+        if (!apuestaActualizada) {
+            return res.status(404).json({ error: "Apuesta no encontrada" });
+        }
+
+        res.status(200).json({ message: "Apuesta actualizada", apuestaActualizada });
+    } catch (error) {
+        console.error("Error al actualizar la apuesta:", error);
+        res.status(400).json({ error: "Error al actualizar la apuesta" });
+    }
+});
+router.get("/informante/:informante", async (req, res) => {
+    const { informante } = req.params;
+
+    try {
+        // Buscar todas las apuestas de ese informante
+        const apuestas = await Pick.find({ Informante: informante });
+
+        let totalApuestas = apuestas.length;  // Todas las apuestas, sin importar si tienen Acierto o no
+        let totalAciertos = 0;
+        let ganancias = 0;
+        let apuestasConAcierto = 0;  // Contador para las apuestas con Acierto definido
+
+        apuestas.forEach(apuesta => {
+            // Contamos las apuestas con Acierto definido
+            if (apuesta.Acierto === 'True' || apuesta.Acierto === 'False') {
+                apuestasConAcierto++;
+
+                // Si Acierto es True, sumar a los aciertos y calcular ganancias
+                if (apuesta.Acierto === 'True') {
+                    totalAciertos += 1;
+                    ganancias += apuesta.CantidadApostada * apuesta.Cuota;  // Ganancia ajustada por la cuota
+                }
+            }
+        });
+
+        // El porcentaje de aciertos solo se calcula tomando las apuestas con Acierto definido
+        const porcentajeAciertos = apuestasConAcierto > 0 ? (totalAciertos / apuestasConAcierto) * 100 : 0;
+
+        res.status(200).json({
+            totalApuestas,
+            totalAciertos,
+            ganancias,
+            porcentajeAciertos
+        });
+    } catch (error) {
+        console.error("Error al obtener datos del informante:", error);
+        res.status(400).json({ error: "Error al obtener datos" });
+    }
+});
+
+
+
+router.delete("/apuestas/:id", async (req, res) => {
     const { id } = req.params;
 
     try {
-        const updatedBook = await Book.findByIdAndUpdate(id, req.body, { new: true }); // Encuentra y actualiza el libro por su ID
+        // Buscar y eliminar la apuesta por su ID
+        const apuestaEliminada = await Pick.findByIdAndDelete(id);
 
-        if (!updatedBook) {
-            return res.status(404).json({ message: 'Libro no encontrado' });
+        if (!apuestaEliminada) {
+            return res.status(404).json({ error: "Apuesta no encontrada" });
         }
 
-        res.json(updatedBook); // Devuelve el libro actualizado en formato JSON
+        res.status(200).json({ message: "Apuesta eliminada exitosamente", apuestaEliminada });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Error interno del servidor' });
+        console.error("Error al eliminar la apuesta:", error);
+        res.status(400).json({ error: "Error al eliminar la apuesta" });
     }
 });
 
-router.delete('/delete-book/:id', async (req, res) => {
-    const { id } = req.params;
 
-    try {
-        // Buscar el libro por su ID y borrarlo
-        const deletedBook = await Book.findByIdAndDelete(id);
 
-        if (!deletedBook) {
-            return res.status(404).json({ message: "Libro no encontrado" });
-        }
-
-        res.json({ message: "Libro eliminado correctamente", deletedBook });
-    } catch (error) {
-        console.error("Error al borrar el libro:", error);
-        res.status(500).json({ message: "Error al borrar el libro" });
-    }
-});
 
 export default router;
