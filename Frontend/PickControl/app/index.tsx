@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Text, View, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
-import BottomBar from "../components/bottom-bar";
+import BottomBar from "./components/bottom-bar";
 import { useRouter } from "expo-router";  // Importamos useRouter
 
 const Main = () => {
@@ -56,8 +56,8 @@ const Main = () => {
     }, []);
 
     const handleInformantePress = (informante) => {
-        console.log("Navegando hacia:", informante);  // Log para ver el valor
-        router.push(`/informant-detail/${informante}`);  // Este es el formato correcto
+        console.log("Navegando hacia:", informante);  
+        router.push(`/dynamic-routes/${informante}`); 
     };
     
 
