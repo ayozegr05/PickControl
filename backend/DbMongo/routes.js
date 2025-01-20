@@ -67,43 +67,56 @@ router.put("/apuesta/:id", async (req, res) => {
         res.status(400).json({ error: "Error al actualizar la apuesta" });
     }
 });
+// Endpoint para obtener apuestas de un informante específico
 router.get("/informante/:informante", async (req, res) => {
-    const { informante } = req.params;
+    const { informante } = req.params;  // Extraemos el nombre del informante desde los parámetros de la URL
 
     try {
-        // Buscar todas las apuestas de ese informante
+        // Obtener todas las apuestas del informante
         const apuestas = await Pick.find({ Informante: informante });
 
-        let totalApuestas = apuestas.length;  // Todas las apuestas, sin importar si tienen Acierto o no
-        let totalAciertos = 0;
-        let ganancias = 0;
-        let apuestasConAcierto = 0;  // Contador para las apuestas con Acierto definido
+        if (apuestas.length === 0) {
+            return res.status(404).json({ message: "No se encontraron apuestas para este informante." });
+        }
 
-        apuestas.forEach(apuesta => {
-            // Contamos las apuestas con Acierto definido
+        // Calcular las estadísticas
+        let totalApuestas = apuestas.length;  // Número total de apuestas
+        let totalAciertos = 0;  // Contador de aciertos
+        let ganancias = 0;  // Variable para calcular las ganancias totales
+        let apuestasConAcierto = 0;  // Contador de apuestas que tienen un resultado de "True" o "False"
+
+        // Recorremos todas las apuestas para realizar los cálculos
+        apuestas.forEach((apuesta) => {
+            // Calculamos la ganancia de la apuesta
+            const ganancia = apuesta.CantidadApostada * apuesta.Cuota;
+
+            // Agregamos la ganancia a la propiedad de la apuesta
+            apuesta.ganancia = ganancia.toFixed(2);  // Guardamos la ganancia calculada en cada apuesta
+
             if (apuesta.Acierto === 'True' || apuesta.Acierto === 'False') {
-                apuestasConAcierto++;
-
-                // Si Acierto es True, sumar a los aciertos y calcular ganancias
+                apuestasConAcierto++;  // Solo consideramos las apuestas con un acierto "True" o "False"
                 if (apuesta.Acierto === 'True') {
-                    totalAciertos += 1;
-                    ganancias += apuesta.CantidadApostada * apuesta.Cuota;  // Ganancia ajustada por la cuota
+                    totalAciertos++;  // Si el acierto es "True", incrementamos el contador de aciertos
+                    ganancias += ganancia;  // Sumamos la ganancia de la apuesta a las ganancias totales
                 }
             }
         });
 
-        // El porcentaje de aciertos solo se calcula tomando las apuestas con Acierto definido
+        // Calculamos el porcentaje de aciertos, evitando división por 0
         const porcentajeAciertos = apuestasConAcierto > 0 ? (totalAciertos / apuestasConAcierto) * 100 : 0;
 
-        res.status(200).json({
-            totalApuestas,
-            totalAciertos,
-            ganancias,
-            porcentajeAciertos
+        // Devolvemos los datos de las apuestas y las estadísticas en la respuesta
+        return res.status(200).json({
+            apuestas,               // Devolvemos todas las apuestas (con sus ganancias individuales)
+            totalApuestas,          // Total de apuestas realizadas por el informante
+            totalAciertos,          // Total de aciertos ("True")
+            ganancias,              // Ganancias totales
+            porcentajeAciertos      // Porcentaje de aciertos
         });
+
     } catch (error) {
         console.error("Error al obtener datos del informante:", error);
-        res.status(400).json({ error: "Error al obtener datos" });
+        return res.status(500).json({ error: "Error al obtener las apuestas." });
     }
 });
 
