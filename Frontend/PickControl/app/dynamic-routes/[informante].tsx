@@ -88,15 +88,15 @@ export default function InformantDetail() {
     {
       name: "Aciertos",
       population: totalAciertos,
-      color: "#4CAF50",
-      legendFontColor: "#4CAF50",
+      color: "green",
+      legendFontColor: "white",
       legendFontSize: 15,
     },
     {
       name: "Errores",
       population: totalApuestas - totalAciertos,
-      color: "#FF5722",
-      legendFontColor: "#FF5722",
+      color: "red",
+      legendFontColor: "white",
       legendFontSize: 15,
     },
   ];
@@ -110,10 +110,24 @@ export default function InformantDetail() {
           parseFloat(calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto))
         ), // Solo números, sin símbolos
         strokeWidth: 2,
-        color: (opacity = 1) => `rgba(255, 99, 132, ${opacity})`, // Color de la línea
+        color: (opacity = 1) => `rgb(255, 0, 0), ${opacity})`, // Color de la línea
       },
     ],
   };
+
+  // Configuración general de los gráficos
+const chartConfig = {
+  backgroundColor: "#000000", // Fondo negro
+  backgroundGradientFrom: "#212121", // Degradado oscuro
+  backgroundGradientTo: "#424242", // Más claro hacia abajo
+  decimalPlaces: 2,
+  color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`, // Texto blanco
+  labelColor: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`, // Etiquetas en blanco
+  style: {
+    borderRadius: 16,
+  },
+  formatYLabel: (value) => `${value}€`, // Etiqueta en euros
+};
 
   return (
     <View style={styles.container}>
@@ -146,12 +160,7 @@ export default function InformantDetail() {
             data={pieChartData}
             width={screenWidth - 40} // Ajusta el gráfico al tamaño de la pantalla
             height={220}
-            chartConfig={{
-              color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-              style: {
-                borderRadius: 16,
-              },
-            }}
+            chartConfig={chartConfig}
             accessor={"population"}
             backgroundColor={"transparent"}
             paddingLeft={"15"}
@@ -165,18 +174,7 @@ export default function InformantDetail() {
           data={lineChartData}
           width={screenWidth - 40} // Ajusta el gráfico al tamaño de la pantalla
           height={220}
-          chartConfig={{
-            backgroundColor: "#e26a00",
-            backgroundGradientFrom: "#fb8c00",
-            backgroundGradientTo: "#ffa726",
-            decimalPlaces: 2, // Formato con 2 decimales
-            color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-            labelColor: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-            style: {
-              borderRadius: 16,
-            },
-            formatYLabel: (value) => `${value}€`, // Agrega el símbolo de euro
-          }}
+          chartConfig={chartConfig}
           fromZero={true}
         />
 
@@ -244,7 +242,7 @@ export default function InformantDetail() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f5f5f5",
+    backgroundColor: "#000",
     padding: 20,
   },
   scrollView: {
@@ -258,9 +256,9 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 32,
     fontWeight: "bold",
-    marginBottom: 20,
+    marginVertical: 30,
     textAlign: "center",
-    color: "#4CAF50",
+    color: "green",
   },
   card: {
     backgroundColor: "white",
@@ -274,10 +272,11 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   cardTitle: {
-    fontSize: 18,
+    fontSize: 25,
     fontWeight: "bold",
-    marginBottom: 10,
-    color: "#333",
+    marginBottom: 30,
+    textAlign: "center",
+    color: "black",
   },
   row: {
     flexDirection: "row",
@@ -285,8 +284,9 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   label: {
-    fontSize: 16,
+    fontSize: 18,
     color: "#777",
+
   },
   value: {
     fontSize: 16,
