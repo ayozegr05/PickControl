@@ -43,8 +43,7 @@
       },
       "eas": {
         "projectId": "27afa42a-960f-455c-941f-74571d3ab24b"
-      },
-      "backendUrl": "http://192.168.1.71:3000"
+      }
     },
     "runtimeVersion": {
       "policy": "appVersion"
