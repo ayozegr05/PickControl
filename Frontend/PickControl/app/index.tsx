@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Text, View, StyleSheet, ScrollView, TouchableOpacity, Modal, Alert } from "react-native";
 import BottomBar from "./components/bottom-bar";
 import { useRouter } from "expo-router";
+import TopBar from "./components/top-bar";
 
 const Main = () => {
     const [apuestas, setApuestas] = useState([]);
@@ -10,7 +11,9 @@ const Main = () => {
     const [modalVisible, setModalVisible] = useState(false);
     const [selectedApuesta, setSelectedApuesta] = useState(null);
     const [ranking, setRanking] = useState([]); // Estado para el ranking
-
+    const [showTopBar, setShowTopBar] = useState(true); // Estado para controlar la visibilidad de TopBar
+    const lastScrollY = useRef(0); // Para guardar la última posición de scroll
+    const scrollViewRef = useRef<ScrollView>(null); // Referencia para el ScrollView
 
     const router = useRouter();
 
@@ -27,7 +30,7 @@ const Main = () => {
 
     const fetchApuestas = async () => {
         try {
-            const response = await fetch(`http://192.168.211.34:3000/apuestas`);
+            const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas`);
             const data = await response.json();
             console.log("Datos obtenidos:", data);
 
@@ -107,7 +110,7 @@ const Main = () => {
         if (!selectedApuesta) return;
 
         try {
-            const response = await fetch(`http://192.168.211.34:3000/apuesta/${selectedApuesta._id}`, {
+            const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuesta/${selectedApuesta._id}`, {
                 method: "PUT",
                 headers: {
                     "Content-Type": "application/json",
@@ -144,7 +147,22 @@ const Main = () => {
     
         console.log("Apuestas Pendientes:", pendientes); // Verificamos que las apuestas pendientes se están obteniendo correctamente
         return pendientes;
-    };  
+    }; 
+    
+    // Manejo de scroll para mostrar/ocultar el TopBar
+    const handleScroll = (event) => {
+        const currentOffset = event.nativeEvent.contentOffset.y;
+
+        if (currentOffset > lastScrollY.current) {
+            // Si estamos desplazándonos hacia arriba
+            setShowTopBar(true);
+        } else if (currentOffset < lastScrollY.current && currentOffset > 50) {
+            // Si estamos desplazándonos hacia abajo
+            setShowTopBar(false);
+        }
+
+        lastScrollY.current = currentOffset; // Actualizamos la posición del scroll
+    };
     
 
     const maxApuestas = getMaxApuestas();
@@ -152,10 +170,16 @@ const Main = () => {
 
     return (
         <View style={styles.container}>
-            <Text style={styles.title}>Pick Control</Text>
+            {showTopBar && <TopBar />}
 
             {/* ScrollView Vertical para toda la página */}
-            <ScrollView contentContainerStyle={styles.scrollContainer}>
+            <ScrollView
+                contentContainerStyle={[styles.scrollContainer, { marginTop: showTopBar ? 60 : 0 }]} 
+                onScroll={handleScroll} // Detectamos el scroll
+                scrollEventThrottle={16} // Controla la frecuencia con la que se llama a handleScroll
+                ref={scrollViewRef} // Asociamos la referencia
+            >
+            <Text style={styles.title}>Pick Control</Text>
                 {/* Tabla */}
                 <ScrollView horizontal style={styles.tableContainer}>
                     <View>

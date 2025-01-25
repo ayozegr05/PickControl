@@ -53,7 +53,7 @@ const AddPick = () => {
 
     try {
       // Enviar el POST request a la API
-      const response = await fetch('http://192.168.211.34:3000/apuestas', {
+      const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
