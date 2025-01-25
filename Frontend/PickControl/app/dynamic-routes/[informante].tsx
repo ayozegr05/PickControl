@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from "react-native";
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Modal, TouchableOpacity  } from "react-native";
 import { useLocalSearchParams } from "expo-router"; // Obtener los parámetros de búsqueda
 import BottomBar from "../components/bottom-bar"; // Importar la BottomBar
 import { PieChart, LineChart } from "react-native-chart-kit";
@@ -14,6 +14,9 @@ export default function InformantDetail() {
   const { informante } = useLocalSearchParams(); // Obtener el parámetro dinámico
   const [data, setData] = useState(null); // Para almacenar la respuesta del backend
   const [loading, setLoading] = useState(true); // Para manejar el estado de carga
+  const [modalVisible, setModalVisible] = useState(false);
+  const [selectedApuesta, setSelectedApuesta] = useState("");
+
 
   const screenWidth = Dimensions.get("window").width; // Usado para hacer el gráfico responsivo
 
@@ -21,7 +24,7 @@ export default function InformantDetail() {
   useEffect(() => {
     const fetchInformanteData = async () => {
       try {
-        const response = await fetch(`http://192.168.1.71:3000/informante/${informante}`);
+        const response = await fetch(`http://192.168.211.34:3000/informante/${informante}`);
         const result = await response.json();
         setData(result);
       } catch (error) {
@@ -67,21 +70,78 @@ export default function InformantDetail() {
   };
 
   // Función para renderizar los pronósticos con símbolos
-  const renderPronostico = (acierto) => {
+  const renderPronostico = (acierto, apuesta) => {
     if (acierto === "True") {
       return <Text style={[styles.icon, { color: "green" }]}>✔️</Text>;
     } else if (acierto === "False") {
       return <Text style={[styles.icon, { color: "red" }]}>❌</Text>;
     }
-    return <Text style={[styles.icon, { color: "gray" }]}>❓</Text>;
+    return (
+      <TouchableOpacity onPress={() => { 
+        setSelectedApuesta(apuesta); 
+        setModalVisible(true); 
+      }}>
+        <Text style={[styles.icon, { color: "gray" }]}>❓</Text>
+      </TouchableOpacity>
+    );
   };
+  
 
-  // Función para calcular las ganancias totales basadas en las apuestas
+  // Función para calcular las ganancias totales formateadas como string con símbolo de moneda
   const calcularGananciasTotales = () => {
-    return apuestas.reduce((total, apuesta) => {
+    const total = apuestas.reduce((total, apuesta) => {
       return total + parseFloat(calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto));
-    }, 0).toFixed(2);
-  };
+    }, 0);
+  
+  return `${total.toFixed(2)}€`; // Añadimos el símbolo de moneda aquí
+};
+
+
+const actualizarApuesta = async (id, acierto) => {
+  if (!id) {
+    console.error("El ID de la apuesta es nulo o indefinido.");
+    return;
+  }
+  console.log("Actualizar Apuesta - ID:", id, "Acierto:", acierto); 
+  try {
+    const response = await fetch(`http://192.168.211.34:3000/apuesta/${id}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ Acierto: acierto }),
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      
+      // Actualizamos las apuestas en el estado
+      const updatedApuestas = data.apuestas.map((apuesta) =>
+        apuesta._id === id ? { ...apuesta, Acierto: acierto } : apuesta
+      );
+
+      // Recalcular estadísticas
+      const totalAciertos = updatedApuestas.filter(a => a.Acierto === "True").length;
+      const porcentajeAciertos = (totalAciertos / updatedApuestas.length) * 100;
+
+      // Actualizar el estado completo con las nuevas apuestas y estadísticas
+      setData((prevData) => ({
+        ...prevData,
+        apuestas: updatedApuestas,
+        totalAciertos,
+        porcentajeAciertos,
+      }));
+
+      setModalVisible(false); // Cerramos el modal
+    } else {
+      console.error("Error al actualizar la apuesta:", await response.text());
+    }
+  } catch (error) {
+    console.error("Error al actualizar la apuesta:", error);
+  }
+};
+
+  
 
   // Datos para el gráfico de pastel (Aciertos vs Errores)
   const pieChartData = [
@@ -153,6 +213,41 @@ const chartConfig = {
             <Text style={styles.value}>{`${calcularGananciasTotales()}€`}</Text>  
           </View>
         </View>
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={modalVisible}
+          onRequestClose={() => setModalVisible(false)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              {/* Botón de cierre */}
+              <TouchableOpacity 
+                style={styles.closeButton} 
+                onPress={() => setModalVisible(false)}
+              >
+                <Text style={styles.closeButtonText}>✖</Text>
+              </TouchableOpacity>
+
+              <Text style={styles.modalTitle}>Actualizar Apuesta</Text>
+              <Text style={styles.modalText}>¿La apuesta fue correcta?</Text>
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalButton, { backgroundColor: "green" }]}
+                  onPress={() => actualizarApuesta(selectedApuesta._id, "True")}
+                >
+                  <Text style={styles.modalButtonText}>✔️</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButton, { backgroundColor: "red" }]}
+                  onPress={() => actualizarApuesta(selectedApuesta._id, "False")}
+                >
+                  <Text style={styles.modalButtonText}>❌</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
 
         {/* Gráfico de Pastel (Aciertos vs Errores) */}
         <View style={styles.chartContainer}>
@@ -213,16 +308,16 @@ const chartConfig = {
                   <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.Apuesta}</Text>
                 </View>
                 <View style={[styles.tableCell, styles.border]}>
-                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{renderPronostico(apuesta.Acierto)}</Text>
+                  <Text>{renderPronostico(apuesta.Acierto, apuesta)}</Text>
                 </View>
                 <View style={[styles.tableCell, styles.border]}>
                   <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.TipoDeApuesta}</Text>
                 </View>
                 <View style={[styles.tableCell, styles.border]}>
-                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.Cuota}</Text>
+                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{String(apuesta.Cuota)}</Text>
                 </View>
                 <View style={[styles.tableCell, styles.border]}>
-                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.CantidadApostada}</Text>
+                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{String(apuesta.CantidadApostada)}</Text>
                 </View>
                 <View style={[styles.tableCell, styles.border]}>
                   <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{`${calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto)}€`}</Text>  {/* Cambio aquí para tener en cuenta si la apuesta ha fallado */}
@@ -258,7 +353,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     marginVertical: 30,
     textAlign: "center",
-    color: "green",
+    color: "orange",
   },
   card: {
     backgroundColor: "white",
@@ -353,4 +448,64 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     alignItems: "center",
   },
+  modalContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+  },
+  modalContent: {
+    backgroundColor: "white",
+    borderRadius: 10,
+    padding: 20,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+    marginBottom: 15,
+  },
+  modalText: {
+    fontSize: 16,
+    marginBottom: 20,
+  },
+  modalButtons: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  modalButton: {
+    width: 60,
+    height: 60,
+    justifyContent: "center",
+    alignItems: "center",
+    borderRadius: 30,
+    marginHorizontal: 10,
+  },
+  modalButtonText: {
+    fontSize: 30,
+    color: "white",
+  },
+  closeButton: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+    width: 23,
+    height: 23,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "red", // Puedes cambiar el color si lo prefieres
+    borderRadius: 15,
+    zIndex: 1,
+  },
+  closeButtonText: {
+    color: "white",
+    fontSize: 14,
+    fontWeight: "bold",
+    textAlign: "center",
+  },  
 });

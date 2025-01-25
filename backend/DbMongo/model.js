@@ -12,7 +12,7 @@ const apuestaSchema = new mongoose.Schema({
         type: String, required: true 
     },
     Acierto: { 
-        type: String,  // No es obligatorio, puede ser actualizado más tarde
+        type: String,  required: true
     },
     Casa: { 
         type: String, required: true 
