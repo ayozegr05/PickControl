@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Modal, TouchableOpacity  } from "react-native";
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Modal, TouchableOpacity, Alert  } from "react-native";
 import { useLocalSearchParams } from "expo-router"; // Obtener los parámetros de búsqueda
 import BottomBar from "../components/bottom-bar"; // Importar la BottomBar
 import { PieChart, LineChart } from "react-native-chart-kit";
@@ -24,7 +24,7 @@ export default function InformantDetail() {
   useEffect(() => {
     const fetchInformanteData = async () => {
       try {
-        const response = await fetch(`http://192.168.211.34:3000/informante/${informante}`);
+        const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/informante/${informante}`);
         const result = await response.json();
         setData(result);
       } catch (error) {
@@ -36,6 +36,35 @@ export default function InformantDetail() {
 
     fetchInformanteData();
   }, [informante]);
+
+  const eliminarApuesta = async (id) => {
+    try {
+      const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas/${id}`, {
+        method: "DELETE",
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        Alert.alert("Éxito", "La apuesta se ha eliminado correctamente.");
+        
+        // Actualizar las apuestas en el estado
+        const updatedApuestas = data.apuestas.filter(apuesta => apuesta._id !== id);
+        setData({ ...data, apuestas: updatedApuestas });
+        setModalVisible(false); // Cerrar el modal después de la eliminación
+      } else {
+        Alert.alert("Error", "Hubo un problema al eliminar la apuesta.");
+      }
+    } catch (error) {
+      console.error("Error al eliminar la apuesta:", error);
+      Alert.alert("Error", "Hubo un problema al eliminar la apuesta.");
+    }
+  };
+
+  // Función para manejar el modal de eliminación
+  const handleEliminarPress = (apuesta) => {
+    setSelectedApuesta(apuesta);
+    setModalVisible(true); // Mostrar modal de confirmación
+  };
 
   // Si aún estamos cargando, mostramos un indicador de carga
   if (loading) {
@@ -96,7 +125,6 @@ export default function InformantDetail() {
   return `${total.toFixed(2)}€`; // Añadimos el símbolo de moneda aquí
 };
 
-
 const actualizarApuesta = async (id, acierto) => {
   if (!id) {
     console.error("El ID de la apuesta es nulo o indefinido.");
@@ -104,7 +132,7 @@ const actualizarApuesta = async (id, acierto) => {
   }
   console.log("Actualizar Apuesta - ID:", id, "Acierto:", acierto); 
   try {
-    const response = await fetch(`http://192.168.211.34:3000/apuesta/${id}`, {
+    const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuesta/${id}`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -140,8 +168,6 @@ const actualizarApuesta = async (id, acierto) => {
     console.error("Error al actualizar la apuesta:", error);
   }
 };
-
-  
 
   // Datos para el gráfico de pastel (Aciertos vs Errores)
   const pieChartData = [
@@ -302,31 +328,70 @@ const chartConfig = {
             </View>
 
             {/* Filas de datos */}
-            {apuestas.map((apuesta, index) => (
-              <View key={index} style={[styles.tableRow, index % 2 === 0 ? styles.evenRow : styles.oddRow]}>
-                <View style={[styles.tableCell, styles.border]}>
-                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.Apuesta}</Text>
-                </View>
-                <View style={[styles.tableCell, styles.border]}>
-                  <Text>{renderPronostico(apuesta.Acierto, apuesta)}</Text>
-                </View>
-                <View style={[styles.tableCell, styles.border]}>
-                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.TipoDeApuesta}</Text>
-                </View>
-                <View style={[styles.tableCell, styles.border]}>
-                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{String(apuesta.Cuota)}</Text>
-                </View>
-                <View style={[styles.tableCell, styles.border]}>
-                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{String(apuesta.CantidadApostada)}</Text>
-                </View>
-                <View style={[styles.tableCell, styles.border]}>
-                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{`${calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto)}€`}</Text>  {/* Cambio aquí para tener en cuenta si la apuesta ha fallado */}
-                </View>
-              </View>
-            ))}
+{apuestas.map((apuesta, index) => (
+  <View key={index} style={[styles.tableRow, index % 2 === 0 ? styles.evenRow : styles.oddRow]}>
+    <View style={[styles.tableCell, styles.border]}>
+      {/* Hacer clic en la celda de la apuesta abre el modal */}
+      <TouchableOpacity onPress={() => handleEliminarPress(apuesta)}>
+        <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.Apuesta}</Text>
+      </TouchableOpacity>
+    </View>
+    <View style={[styles.tableCell, styles.border]}>
+      <Text>{renderPronostico(apuesta.Acierto, apuesta)}</Text>
+    </View>
+    <View style={[styles.tableCell, styles.border]}>
+      <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.TipoDeApuesta}</Text>
+    </View>
+    <View style={[styles.tableCell, styles.border]}>
+      <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{String(apuesta.Cuota)}</Text>
+    </View>
+    <View style={[styles.tableCell, styles.border]}>
+      <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{String(apuesta.CantidadApostada)}</Text>
+    </View>
+    <View style={[styles.tableCell, styles.border]}>
+      <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{`${calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto)}€`}</Text>  {/* Cambio aquí para tener en cuenta si la apuesta ha fallado */}
+    </View>
+  </View>
+))}
           </View>
         </ScrollView>
       </ScrollView>
+
+
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={modalVisible}
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            {/* Botón de cierre */}
+            <TouchableOpacity 
+              style={styles.closeButton} 
+              onPress={() => setModalVisible(false)}
+            >
+              <Text style={styles.closeButtonText}>✖</Text>
+            </TouchableOpacity>
+
+            <Text style={styles.modalTitle}>¿Estás seguro de eliminar esta apuesta?</Text>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, { backgroundColor: "green" }]}
+                onPress={() => eliminarApuesta(selectedApuesta._id)}  // Eliminamos la apuesta al hacer clic en "Sí"
+              >
+                <Text style={styles.modalButtonText}>Sí</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, { backgroundColor: "gray" }]}
+                onPress={() => setModalVisible(false)}  // Cerramos el modal sin eliminar la apuesta
+              >
+                <Text style={styles.modalButtonText}>No</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* BottomBar siempre visible al fondo */}
       <BottomBar />

@@ -23,6 +23,7 @@
     "expo-blur": "~14.0.2",
     "expo-constants": "~17.0.4",
     "expo-dotenv": "^0.1.0",
+    "expo-env": "^1.1.1",
     "expo-font": "~13.0.3",
     "expo-haptics": "~14.0.1",
     "expo-linking": "~7.0.4",
