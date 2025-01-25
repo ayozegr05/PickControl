@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: my-backend
+    env: node
+    plan: free
+    buildCommand: cd backend && npm install
+    startCommand: cd backend && npm run dev 
+    branch: main
+    isPublic: true
+    envVars:
+      - key: DB_CONNECTION
+        value: "mongodb+srv://asertete:jilberto@cluster0.sazyt.mongodb.net/PickControl?retryWrites=true&w=majority&appName=Cluster0"
+        

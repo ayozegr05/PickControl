@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Modal, TouchableOpacity, Alert  } from "react-native";
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Modal, TouchableOpacity, Alert } from "react-native";
 import { useLocalSearchParams } from "expo-router"; // Obtener los parámetros de búsqueda
 import BottomBar from "../components/bottom-bar"; // Importar la BottomBar
 import { PieChart, LineChart } from "react-native-chart-kit";
