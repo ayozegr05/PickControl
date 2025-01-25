@@ -48,25 +48,30 @@ router.post("/apuestas", async (req, res) => {
 router.put("/apuesta/:id", async (req, res) => {
     const { id } = req.params;
     const { Acierto } = req.body;
-
+  
+    console.log("ID recibido:", id);
+    console.log("Acierto recibido:", Acierto);
+  
     try {
-        // Buscar la apuesta por su ID y actualizar el campo 'Acierto'
-        const apuestaActualizada = await Pick.findByIdAndUpdate(
-            id,
-            { Acierto },
-            { new: true }  // Esto devolverá el documento actualizado
-        );
-
-        if (!apuestaActualizada) {
-            return res.status(404).json({ error: "Apuesta no encontrada" });
-        }
-
-        res.status(200).json({ message: "Apuesta actualizada", apuestaActualizada });
+      const apuestaActualizada = await Pick.findByIdAndUpdate(
+        id,
+        { Acierto },
+        { new: true } // Esto devolverá el documento actualizado
+      );
+  
+      if (!apuestaActualizada) {
+        console.error("Apuesta no encontrada para ID:", id);
+        return res.status(404).json({ error: "Apuesta no encontrada" });
+      }
+  
+      res.status(200).json({ message: "Apuesta actualizada", apuestaActualizada });
     } catch (error) {
-        console.error("Error al actualizar la apuesta:", error);
-        res.status(400).json({ error: "Error al actualizar la apuesta" });
+      console.error("Error al actualizar la apuesta:", error);
+      res.status(400).json({ error: "Error al actualizar la apuesta" });
     }
-});
+  });
+  
+
 // Endpoint para obtener apuestas de un informante específico
 router.get("/informante/:informante", async (req, res) => {
     const { informante } = req.params;  // Extraemos el nombre del informante desde los parámetros de la URL

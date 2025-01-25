@@ -7,10 +7,12 @@ const AddPick = () => {
   // Estados para cada campo
   const [selectedInformante, setSelectedInformante] = useState('');
   const [selectedCasa, setSelectedCasa] = useState('');
-  const [acierto, setAcierto] = useState(null); // Usamos null en vez de cadena vacía
+  const [acierto, setAcierto] = useState('');
   const [cantidadApostada, setCantidadApostada] = useState('');
   const [apuesta, setApuesta] = useState('');
   const [tipoDeApuesta, setTipoDeApuesta] = useState('');
+  const [cuota, setCuota] = useState(''); // Estado para el campo Cuota
+
 
   // Listas de opciones para los dropdowns
   const informantes = [
@@ -33,7 +35,7 @@ const AddPick = () => {
   const aciertos = [
     { label: '✔️', value: 'True' },
     { label: '❌', value: 'False' },
-    { label: '❓', value: 'null' }
+    { label: '❓', value: 'Pending' }
   ];
 
   // Manejo del envío de la apuesta (con fetch para hacer el POST)
@@ -46,12 +48,12 @@ const AddPick = () => {
       Casa: selectedCasa,
       Acierto: acierto,
       CantidadApostada: cantidadApostada,
-      Cuota: 1.5 // Ajusta esto según el valor que quieras poner
+      Cuota: 1.5 
     };
 
     try {
       // Enviar el POST request a la API
-      const response = await fetch('http://192.168.1.71:3000/apuestas', {
+      const response = await fetch('http://192.168.211.34:3000/apuestas', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -63,6 +65,14 @@ const AddPick = () => {
 
       if (response.status === 201) {
         Alert.alert('Apuesta enviada con éxito', responseData.message);
+         // Restablecer los estados al valor inicial
+        setSelectedInformante('');
+        setSelectedCasa('');
+        setAcierto('');
+        setCantidadApostada('');
+        setApuesta('');
+        setTipoDeApuesta('');
+        setCuota(''); // Restablecer la cuota
       } else {
         throw new Error('Hubo un error al enviar la apuesta');
       }
@@ -130,6 +140,14 @@ const AddPick = () => {
             keyboardType="numeric"
             value={cantidadApostada}
             onChangeText={setCantidadApostada}
+          />
+
+          <TextInput
+            style={styles.input}
+            placeholder="Cuota"
+            keyboardType="numeric"
+            value={cuota}
+            onChangeText={(text) => setCuota(text)}
           />
 
           {/* Botón de Enviar Apuesta con TouchableOpacity */}

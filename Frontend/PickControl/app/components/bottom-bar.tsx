@@ -8,6 +8,11 @@ const BottomBar = () => {
 
     return (
         <View style={styles.container}>
+            {/* Botón de Atrás */}
+            <TouchableOpacity onPress={() => router.back()}>
+                <Ionicons name="arrow-back" size={32} color="green" />
+            </TouchableOpacity>
+
             {/* Botón de Inicio */}
             <TouchableOpacity onPress={() => router.push("/")}>
                 <Ionicons name="home" size={32} color="green" />
