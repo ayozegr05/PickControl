@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';  
 import { connectDB } from './DbMongo/db.js';
 import dotenv from 'dotenv';
+import cors from 'cors';
 
 // import exphbs from 'express-handlebars'
 // import path from 'path';
@@ -28,8 +29,6 @@ app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }))
 app.use(router);
-
-const cors = require('cors');
 app.use(cors({ origin: '*' })); // Reemplaza '*' por tu dominio en producción
 
 
