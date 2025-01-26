@@ -30,7 +30,12 @@ const Main = () => {
 
     const fetchApuestas = async () => {
         try {
-            const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas`);
+            const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas`,{
+            method: 'GET',
+            headers: {
+            'Content-Type': 'application/json',
+        },
+            });
             const data = await response.json();
             console.log("Datos obtenidos:", data);
 
