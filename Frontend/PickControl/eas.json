@@ -5,6 +5,7 @@
           "EXPO_PUBLIC_API_BASE_URL": "https://my-backend-hwjf.onrender.com"
         }
       },
+      "workingdir": "frontend/pickcontrol",
       "production": {
         "env": {
           "EXPO_PUBLIC_API_BASE_URL": "https://my-backend-hwjf.onrender.com"
