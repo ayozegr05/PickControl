@@ -1,15 +1,14 @@
 {
-  "build": {
-    "development": {
-      "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://my-backend-hwjf.onrender.com"
-      }
-    },
-    "production": {
-      "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://my-backend-hwjf.onrender.com"
+    "build": {
+      "development": {
+        "env": {
+          "EXPO_PUBLIC_API_BASE_URL": "https://my-backend-hwjf.onrender.com"
+        }
+      },
+      "production": {
+        "env": {
+          "EXPO_PUBLIC_API_BASE_URL": "https://my-backend-hwjf.onrender.com"
+        }
       }
     }
-  },
-  "workingdir": "frontend/pickcontrol"
-}
+  }
