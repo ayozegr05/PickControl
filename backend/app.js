@@ -29,6 +29,10 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }))
 app.use(router);
 
+const cors = require('cors');
+app.use(cors({ origin: '*' })); // Reemplaza '*' por tu dominio en producción
+
+
 app.get("/", (req, res) => {
     res.send("Servidor funcionando");
   });
