@@ -29,7 +29,7 @@ app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }))
 app.use(router);
-app.use(cors({ origin: '*' })); // Reemplaza '*' por tu dominio en producción
+app.use(cors()); // Reemplaza '*' por tu dominio en producción
 
 
 app.get("/", (req, res) => {
