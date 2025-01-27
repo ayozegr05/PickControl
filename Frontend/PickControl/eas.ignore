@@ -1,3 +1,0 @@
-# Ignorar directorios o archivos no necesarios para la construcción
-frontend/*
-!frontend/pickcontrol/
