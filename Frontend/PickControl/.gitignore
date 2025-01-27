@@ -17,6 +17,9 @@ expo-env.d.ts
 *.key
 *.mobileprovision
 
+# Include package.json explicitly
+!package.json
+
 # Metro
 .metro-health-check*
 
