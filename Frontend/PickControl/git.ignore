@@ -1,0 +1,7 @@
+.expo/
+%ProgramData%/
+node_modules/
+babel.config.json
+package-lock.json
+ *.json
+!package.json
