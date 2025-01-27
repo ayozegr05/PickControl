@@ -13,6 +13,9 @@
       "distribution": "internal"
     },
     "production": {
+      "android": {
+        "image": "latest" // Esta imagen tiene las herramientas actualizadas
+      },
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_API_BASE_URL": "https://my-backend-hwjf.onrender.com"
