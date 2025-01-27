@@ -1,14 +1,22 @@
 {
-    "build": {
-      "development": {
-        "env": {
-          "EXPO_PUBLIC_API_BASE_URL": "https://my-backend-hwjf.onrender.com"
-        }
-      },
-      "production": {
-        "env": {
-          "EXPO_PUBLIC_API_BASE_URL": "https://my-backend-hwjf.onrender.com"
-        }
+  "cli": {
+    "version": ">= 3.0.0",
+    "appVersionSource": "remote",
+    "requireCommit": true
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "distribution": "internal"
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://my-backend-hwjf.onrender.com"
       }
     }
   }
+}
