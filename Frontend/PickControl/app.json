@@ -46,8 +46,7 @@
       },
       "eas": {
         "projectId": "27afa42a-960f-455c-941f-74571d3ab24b"
-      },
-      "EXPO_PUBLIC_API_BASE_URL": process.env.EXPO_PUBLIC_API_BASE_URL
+      }
     },
     "updates": {
       "url": "https://u.expo.dev/27afa42a-960f-455c-941f-74571d3ab24b"
