@@ -110,7 +110,7 @@ const AddPick = () => {
           <RNPickerSelect
             onValueChange={(value) => setSelectedInformante(value)}
             items={informantes}
-            placeholder={{ label: 'Selecciona Informante', value: null }}
+            placeholder={{ label: 'Selecciona Informante', value: '' }}
             style={pickerSelectStyles}
             value={selectedInformante}
           />
@@ -119,7 +119,7 @@ const AddPick = () => {
           <RNPickerSelect
             onValueChange={(value) => setSelectedCasa(value)}
             items={casas}
-            placeholder={{ label: 'Selecciona Casa de Apuestas', value: null }}
+            placeholder={{ label: 'Selecciona Casa de Apuestas', value: '' }}
             style={pickerSelectStyles}
             value={selectedCasa}
           />
@@ -128,7 +128,7 @@ const AddPick = () => {
           <RNPickerSelect
             onValueChange={(value) => setAcierto(value)}
             items={aciertos}
-            placeholder={{ label: 'Selecciona Acierto', value: null }}
+            placeholder={{ label: 'Selecciona Acierto', value: '' }}
             style={pickerSelectStyles}
             value={acierto}
           />

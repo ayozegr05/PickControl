@@ -184,7 +184,7 @@ const Main = () => {
                 scrollEventThrottle={16} // Controla la frecuencia con la que se llama a handleScroll
                 ref={scrollViewRef} // Asociamos la referencia
             >
-            <Text style={styles.title}>Pick Control</Text>
+            <Text style={styles.title}>Pick Control CARAJO</Text>
                 {/* Tabla */}
                 <ScrollView horizontal style={styles.tableContainer}>
                     <View>
