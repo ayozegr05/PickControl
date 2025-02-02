@@ -49,7 +49,11 @@
       }
     },
     "updates": {
-      "url": "https://u.expo.dev/27afa42a-960f-455c-941f-74571d3ab24b"
+      "url": "https://u.expo.dev/27afa42a-960f-455c-941f-74571d3ab24b",
+      "enabled": true
+    },
+    "developmentClient": {
+      "enabled": true
     }
   }
 }
