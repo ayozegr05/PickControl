@@ -5,9 +5,9 @@ import BottomBar from "../components/bottom-bar"; // Asegúrate de que BottomBar
 
 const AddPick = () => {
   // Estados para cada campo
-  const [selectedInformante, setSelectedInformante] = useState('');
-  const [selectedCasa, setSelectedCasa] = useState('');
-  const [acierto, setAcierto] = useState('');
+  const [selectedInformante, setSelectedInformante] = useState('FunBet');
+  const [selectedCasa, setSelectedCasa] = useState('Bet365');
+  const [acierto, setAcierto] = useState('Pending');
   const [cantidadApostada, setCantidadApostada] = useState('');
   const [apuesta, setApuesta] = useState('');
   const [tipoDeApuesta, setTipoDeApuesta] = useState('');
@@ -110,7 +110,6 @@ const AddPick = () => {
           <RNPickerSelect
             onValueChange={(value) => setSelectedInformante(value)}
             items={informantes}
-            placeholder={{ label: 'Selecciona Informante', value: '' }}
             style={pickerSelectStyles}
             value={selectedInformante}
           />
@@ -119,7 +118,6 @@ const AddPick = () => {
           <RNPickerSelect
             onValueChange={(value) => setSelectedCasa(value)}
             items={casas}
-            placeholder={{ label: 'Selecciona Casa de Apuestas', value: '' }}
             style={pickerSelectStyles}
             value={selectedCasa}
           />
@@ -128,7 +126,6 @@ const AddPick = () => {
           <RNPickerSelect
             onValueChange={(value) => setAcierto(value)}
             items={aciertos}
-            placeholder={{ label: 'Selecciona Acierto', value: '' }}
             style={pickerSelectStyles}
             value={acierto}
           />

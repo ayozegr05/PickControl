@@ -22,7 +22,11 @@ const apuestaSchema = new mongoose.Schema({
     },
     Cuota: {  // Nuevo campo para la cuota
         type: Number, required: true, default: 1  // Por defecto es 1 si no se proporciona
-    }
+    },
+    Fecha: {
+        type: Date,
+        default: Date.now, // Asignar automáticamente la fecha actual
+      },
 });
 
 // Crear el modelo 'Pick' con el esquema definido y el nombre explícito de la colección
