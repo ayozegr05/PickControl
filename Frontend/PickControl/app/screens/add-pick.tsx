@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, StyleSheet, ScrollView, Alert, TouchableOpacity } from 'react-native';
-import RNPickerSelect from 'react-native-picker-select'; // Nuevo dropdown
-import BottomBar from "../components/bottom-bar"; // Asegúrate de que BottomBar esté correctamente importado
+import RNPickerSelect from 'react-native-picker-select'; 
+import BottomBar from "../components/bottom-bar"; 
 
 const AddPick = () => {
   // Estados para cada campo
