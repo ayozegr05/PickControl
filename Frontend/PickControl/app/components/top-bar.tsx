@@ -2,11 +2,15 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons'; 
+import { useRouter } from "expo-router";
+
 
 const TopBar = () => {
   const [scrollY, setScrollY] = useState(new Animated.Value(0));
   const [visible, setVisible] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false); // Estado para el menú
+
+   const router = useRouter();
 
   useEffect(() => {
     const scrollListener = scrollY.addListener(({ value }) => {
@@ -39,8 +43,10 @@ const TopBar = () => {
       </View>
       {menuOpen && (
         <View style={styles.menuOptions}>
-          <TouchableOpacity><Text style={styles.menuText}>Mi Perfil</Text></TouchableOpacity>
-          <TouchableOpacity><Text style={styles.menuText}>Mis Ganancias</Text></TouchableOpacity>
+          <TouchableOpacity ><Text style={styles.menuText}>Mi Perfil</Text></TouchableOpacity>               
+          <TouchableOpacity onPress={() => router.push("/screens/earns")}>
+            <Text style={styles.menuText}>Mis Ganancias</Text>
+          </TouchableOpacity>
           <TouchableOpacity><Text style={styles.menuText}>Cerrar Sesión</Text></TouchableOpacity>
         </View>
       )}
