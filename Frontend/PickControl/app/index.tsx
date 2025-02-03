@@ -21,7 +21,7 @@ const Main = () => {
 
     const renderPronostico = (acierto) => {
         if (acierto === 'True') {
-            return <Text style={[styles.icon, { color: 'green' }]}>✔️</Text>;
+            return <Text style={[styles.icon, { color: 'green', fontSize: 21 }]}>✅ </Text>;
         } else if (acierto === 'False') {
             return <Text style={[styles.icon, { color: 'red' }]}>❌</Text>;
         }
@@ -41,11 +41,11 @@ const Main = () => {
 
             const apuestasPorInformante = {};
             data.picks.forEach((pick) => {
-                const { Informante, Acierto, Apuesta, _id } = pick;
+                const { Informante, Acierto, Apuesta, _id, Fecha } = pick;
                 if (!apuestasPorInformante[Informante]) {
                     apuestasPorInformante[Informante] = [];
                 }
-                apuestasPorInformante[Informante].push({ _id, Apuesta, Acierto });
+                apuestasPorInformante[Informante].push({ _id, Apuesta, Acierto, Fecha });
             });
 
             setApuestas(apuestasPorInformante);
@@ -174,9 +174,9 @@ const Main = () => {
     console.log("maxApuestas:", maxApuestas);
 
     return (
+        <View style={styles.botbarContainer}>
         <View style={styles.container}>
             {showTopBar && <TopBar />}
-
             {/* ScrollView Vertical para toda la página */}
             <ScrollView
                 contentContainerStyle={[styles.scrollContainer, { marginTop: showTopBar ? 60 : 0 }]} 
@@ -184,7 +184,7 @@ const Main = () => {
                 scrollEventThrottle={16} // Controla la frecuencia con la que se llama a handleScroll
                 ref={scrollViewRef} // Asociamos la referencia
             >
-            <Text style={styles.title}>Pick Control CARAJO</Text>
+            <Text style={styles.title}>Pick Control</Text>
                 {/* Tabla */}
                 <ScrollView horizontal style={styles.tableContainer}>
                     <View>
@@ -206,7 +206,29 @@ const Main = () => {
 
                         {[...Array(maxApuestas)].map((_, index) => (
                             <View key={index} style={styles.row}>
-                                <Text style={[styles.cell, styles.dateCell, styles.border, { width: cellWidth }]}></Text>
+                                <Text style={[styles.cell, styles.dateCell, styles.border, { width: cellWidth }]}>
+                                {informantes.some(inf => {
+                                        const apuestasInformante = apuestas[inf];
+                                        return apuestasInformante && apuestasInformante[index] && apuestasInformante[index].Fecha;
+                                    })
+                                        ? (() => {
+                                            // Obtenemos la primera fecha válida de la fila
+                                            const fechaEncontrada = informantes
+                                                .map(inf => {
+                                                const apuestasInformante = apuestas[inf];
+                                                return apuestasInformante ? apuestasInformante[index]?.Fecha : null;
+                                                })
+                                                .find(fecha => fecha !== null);
+                                            const fechaObj = new Date(fechaEncontrada);
+                                            // Si la fecha no es válida, usamos la fecha de hoy
+                                            if (isNaN(fechaObj)) {
+                                                return new Date().toLocaleDateString();
+                                            } else {
+                                                return fechaObj.toLocaleDateString();
+                                            }
+                                        })()
+                                        : '-'}
+                                </Text>
                                 {informantes.map((informante) => {
                                     const apuestasInformante = apuestas[informante];
                                     const apuestaInformante = apuestasInformante ? apuestasInformante[index] : null;
@@ -224,26 +246,39 @@ const Main = () => {
                 {apuestasPendientes.length > 0 && (
                     <View style={styles.card}>
                         <Text style={styles.cardTitle}>Apuestas Pendientes</Text>
-                        <Text style={styles.cardSubtitle}>Tienes {apuestasPendientes.length} apuestas pendientes</Text>
+                        <Text style={styles.subtitleContainer}>
+                            Tienes <Text style={styles.cardSubtitle}>{apuestasPendientes.length}</Text> apuestas pendientes
+                        </Text>
+
 
                         <ScrollView style={styles.pendingList}>
-                            {apuestasPendientes.map((apuesta, index) => (
-                                <View key={index} style={styles.pendingItem}>
-                                    <Text style={styles.pendingText}>Apuesta: {apuesta.Apuesta}</Text>
-                                    <Text style={styles.pendingText}>Informante: {apuesta.Informante}</Text>
-
-                                    {/* Mostrar ícono de interrogación si la apuesta está pendiente */}
-                                    {apuesta.Acierto !== 'True' && apuesta.Acierto !== 'False' && (
-                                        <TouchableOpacity 
-                                            style={styles.updateButton} 
-                                            onPress={() => handleActualizarApuesta(apuesta, apuesta.Informante)}
-                                        >
-                                            <Text style={styles.updateButtonText}>❓</Text>
-                                        </TouchableOpacity>
-                                    )}
+                        {apuestasPendientes.map((apuesta, index) => (
+                            <View key={index} style={styles.pendingItem}>
+                                {/* Contenedor para Apuesta y su dato */}
+                                <View style={styles.pendingRow}>
+                                    <Text style={styles.pendingText}>Apuesta</Text>
+                                    <Text style={styles.pendingTextValue}>{apuesta.Apuesta}</Text>
                                 </View>
-                            ))}
-                        </ScrollView>
+                                
+                                {/* Contenedor para Informante y su dato */}
+                                <View style={styles.pendingRow}>
+                                    <Text style={styles.pendingText}>Informante</Text>
+                                    <Text style={styles.pendingTextValue}>{apuesta.Informante}</Text>
+                                </View>
+
+                                {/* Mostrar ícono de interrogación si la apuesta está pendiente */}
+                                {apuesta.Acierto !== 'True' && apuesta.Acierto !== 'False' && (
+                                    <TouchableOpacity 
+                                        style={styles.updateButton} 
+                                        onPress={() => handleActualizarApuesta(apuesta, apuesta.Informante)}
+                                    >
+                                        <Text style={styles.updateButtonText}>❓</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+                        ))}
+                    </ScrollView>
+
                     </View>
                 )}
 
@@ -251,7 +286,7 @@ const Main = () => {
             {ranking.length > 0 && (
                 <View style={styles.card}>
                     <Text style={styles.cardTitle}>Ranking de Tipsters</Text>
-                    <Text style={styles.cardSubtitle}>Top 5 por porcentaje de aciertos</Text>
+                    <Text style={styles.subtitleContainer}>Top 5 por porcentaje de aciertos</Text>
 
                     {ranking.map((rank, index) => (
                         <View key={index} style={styles.rankingItem}>
@@ -265,8 +300,6 @@ const Main = () => {
                     ))}
                 </View>
             )}
-            </ScrollView>
-
             {/* Modal */}
             {modalVisible && (
                 <Modal
@@ -304,6 +337,8 @@ const Main = () => {
                     </View>
                 </Modal>
             )}
+            </ScrollView>
+            </View>
 
             {/* Bottom Bar */}
             <BottomBar />
@@ -315,26 +350,32 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         padding: 10,
-        backgroundColor: '#f5f5f5',
+        backgroundColor: '#2F4F4F',
         alignItems: 'center',
+        justifyContent: 'flex-end',
+        width: '100%'
+    },
+    botbarContainer:{
+        flex: 1
     },
     scrollContainer: {
         flexGrow: 1,
-        paddingBottom: 50,  // Para dar espacio antes del BottomBar
+        paddingBottom: 120,  // Para dar espacio antes del BottomBar
     },
     title: {
-        fontSize: 32,
+        fontSize: 45,
         fontWeight: 'bold',
         marginBottom: 20,
-        color: 'green',
+        color: '#e3931f',
         textAlign: 'center',
     },
     tableContainer: {
         marginBottom: 20, // Espacio entre la tabla y las apuestas pendientes
+        backgroundColor: '#ffdaa4'
     },
     header: {
         flexDirection: 'row',
-        backgroundColor: '#4CAF50',
+        backgroundColor: '#186720',
         borderBottomWidth: 1,
         borderColor: '#ccc',
     },
@@ -344,7 +385,7 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#4CAF50',
+        backgroundColor: '#186720',
         color: 'white',
     },
     row: {
@@ -360,7 +401,7 @@ const styles = StyleSheet.create({
     },
     dateCell: {
         fontWeight: 'bold',
-        backgroundColor: '#f9f9f9',
+        backgroundColor: '#ffdaa4',
     },
     border: {
         borderWidth: 1,
@@ -371,7 +412,7 @@ const styles = StyleSheet.create({
         textAlign: 'center',
     },
     informanteButton: {
-        backgroundColor: '#4CAF50',
+        backgroundColor: '#186720',
         paddingHorizontal: 10,
         paddingVertical: 5,
         borderRadius: 10,
@@ -406,10 +447,16 @@ const styles = StyleSheet.create({
     },
     cardSubtitle: {
         fontSize: 18,
-        color: '#4CAF50', // Color destacado
+        color: 'red', // Color destacado
         fontWeight: 'bold', // Negrita para resaltar
         textAlign: 'center',
         marginBottom: 10,
+    },
+    subtitleContainer:{
+        fontSize: 18,
+        textAlign: 'center',
+        color: '#f3b02b',
+        marginBottom: 10
     },
     pendingList: {
         marginBottom: 20,
@@ -426,6 +473,9 @@ const styles = StyleSheet.create({
         fontSize: 16,
         color: 'white',
         flex: 1, // Para ocupar el espacio disponible
+    },
+    pendingTextValue:{
+        color: '#1dbb2e'
     },
     updateButton: {
         marginLeft: 10, // Espacio entre el texto y el botón

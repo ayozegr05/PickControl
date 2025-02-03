@@ -10,17 +10,17 @@ const BottomBar = () => {
         <View style={styles.container}>
             {/* Botón de Atrás */}
             <TouchableOpacity onPress={() => router.back()}>
-                <Ionicons name="arrow-back" size={32} color="green" />
+                <Ionicons name="arrow-back" size={32} color="orange" />
             </TouchableOpacity>
 
             {/* Botón de Inicio */}
             <TouchableOpacity onPress={() => router.push("/")}>
-                <Ionicons name="home" size={32} color="green" />
+                <Ionicons name="home" size={32} color="orange" />
             </TouchableOpacity>
 
             {/* Botón de Añadir */}
             <TouchableOpacity onPress={() => router.push("/screens/add-pick")}>
-                <Ionicons name="add-circle" size={32} color="green" />
+                <Ionicons name="add-circle" size={32} color="orange" />
             </TouchableOpacity>
         </View>
     );
@@ -33,9 +33,7 @@ const styles = StyleSheet.create({
         alignItems: "center",
         height: 60,
         width: '100%',
-        backgroundColor: "#f5f5f5",
-        borderTopWidth: 1,
-        borderColor: "#ccc",
+        backgroundColor: "#131313",
         position: "absolute",
         bottom: 0,
     },

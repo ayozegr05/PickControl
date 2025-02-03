@@ -131,13 +131,16 @@ const AddPick = () => {
           />
 
           {/* Cantidad Apostada */}
-          <TextInput
-            style={styles.input}
-            placeholder="Cantidad Apostada (€)"
-            keyboardType="numeric"
-            value={cantidadApostada}
-            onChangeText={setCantidadApostada}
-          />
+          <View style={styles.inputContainer}>
+            <TextInput
+              style={[styles.input, styles.inputWithPrefix]}
+              placeholder="Cantidad Apostada"
+              keyboardType="numeric"
+              value={cantidadApostada}
+              onChangeText={setCantidadApostada}
+            />
+            <Text style={styles.prefix}>€</Text>
+          </View>
 
           <TextInput
             style={styles.input}
@@ -220,6 +223,30 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: 'bold',
     fontSize: 22, // Tamaño de fuente 18
+  },
+    // Contenedor para input con prefijo
+
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 5,
+    marginVertical: 10,
+    backgroundColor: 'white'
+  },
+  // Estilo para el texto del prefijo (símbolo de euro)
+  prefix: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    paddingHorizontal: 10,
+    paddingBottom: 8,
+    color: 'black',
+  },
+  // Ajuste para el TextInput cuando se usa con prefijo
+  inputWithPrefix: {
+    flex: 1,
+    height: 45,
+    paddingLeft: 10,
+    borderColor: 'white'
   },
 });
 
