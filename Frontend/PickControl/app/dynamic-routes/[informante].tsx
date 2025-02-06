@@ -4,6 +4,7 @@ import { useLocalSearchParams } from "expo-router"; // Obtener los parámetros d
 import BottomBar from "../components/bottom-bar"; // Importar la BottomBar
 import { PieChart, LineChart } from "react-native-chart-kit";
 import { Dimensions } from "react-native";
+import { useRouter } from "expo-router";
 
 
 
@@ -18,7 +19,7 @@ export default function InformantDetail() {
   const [modalDeleteVisible, setModalDeleteVisible] = useState(false);
   const [selectedApuesta, setSelectedApuesta] = useState("");
 
-
+  const router = useRouter();
   const screenWidth = Dimensions.get("window").width; // Usado para hacer el gráfico responsivo
 
   // Hacer fetch a la API con los datos del informante
@@ -44,15 +45,37 @@ export default function InformantDetail() {
       const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas/${id}`, {
         method: "DELETE",
       });
-
+  
       if (response.ok) {
         const result = await response.json();
-        Alert.alert("Éxito", "La apuesta se ha eliminado correctamente.");
         
         // Actualizar las apuestas en el estado
         const updatedApuestas = data.apuestas.filter(apuesta => apuesta._id !== id);
+        
+        // Si no hay más apuestas, vaciar la lista
         setData({ ...data, apuestas: updatedApuestas });
-        setModalUpdateVisible(false); // Cerrar el modal después de la eliminación
+  
+        if (updatedApuestas.length === 0) {
+          // Si ya no quedan apuestas, muestra un alerta y redirige a inicio al presionar OK
+          Alert.alert(
+            "Éxito", 
+            "La última apuesta ha sido eliminada. Serás redirigido al inicio.",
+            [
+              {
+                text: "OK",
+                onPress: () => {
+                  // Redirige a la página principal cuando el usuario presiona "OK"
+                  router.push("/");
+                }
+              }
+            ]
+          );
+        } else {
+          // Si aún quedan apuestas, solo muestra un alerta de éxito normal
+          Alert.alert("Éxito", "La apuesta ha sido eliminada exitosamente.");
+        }
+        
+        setModalDeleteVisible(false);
       } else {
         Alert.alert("Error", "Hubo un problema al eliminar la apuesta.");
       }
@@ -61,11 +84,14 @@ export default function InformantDetail() {
       Alert.alert("Error", "Hubo un problema al eliminar la apuesta.");
     }
   };
+  
+  
+
 
   // Función para manejar el modal de eliminación
   const handleEliminarPress = (apuesta) => {
     setSelectedApuesta(apuesta);
-    setModalDeleteVisible(true); // Mostrar modal de confirmación
+    setModalDeleteVisible(true); 
   };
 
   // Si aún estamos cargando, mostramos un indicador de carga
@@ -77,7 +103,6 @@ export default function InformantDetail() {
       </View>
     );
   }
-
   // Si no hay datos, mostramos un mensaje de error
   if (!data) {
     return (
@@ -88,19 +113,25 @@ export default function InformantDetail() {
   }
 
   // Extraemos los datos de la respuesta
-  const { totalApuestas, totalAciertos, ganancias, porcentajeAciertos, apuestas } = data;
+  const { totalApuestas, totalAciertos, porcentajeAciertos, apuestas } = data;
 
   // Función para calcular las ganancias de cada apuesta (en euros)
   const calcularGanancia = (cantidadApostada, cuota, acierto) => {
-    // Si la apuesta es un acierto, multiplicamos la cantidad apostada por la cuota
-    if (acierto === "True") {
-      return (cantidadApostada * (cuota - 1)).toFixed(2);  // Ganancia positiva
+    if (!apuestas || apuestas.length === 0) {
+      return "0.00€"; // O cualquier otro valor por defecto
+    }
+    if (acierto === "Pending") {
+      return 0; 
+    } if (acierto === "True") {
+      return (cantidadApostada * (cuota - 1)).toFixed(2); // Ganancia positiva
     } 
-    // Si la apuesta ha fallado, restamos la cantidad apostada
-    return (-cantidadApostada).toFixed(2);  // Ganancia negativa
+    return (-cantidadApostada).toFixed(2); // Ganancia negativa
   };
 
   const calcularGananciaAcumulada = (apuestas) => {
+    if (!apuestas || apuestas.length === 0) {
+      return [0]; // O cualquier otro valor por defecto
+    }
     let acumulado = 0;
     return apuestas.map((apuesta) => {
       const ganancia = calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto);
@@ -129,10 +160,13 @@ export default function InformantDetail() {
 
   // Función para calcular las ganancias totales formateadas como string con símbolo de moneda
   const calcularGananciasTotales = () => {
+    if (!apuestas || apuestas.length === 0) {
+      return "0.00€"; // O cualquier otro valor por defecto
+    }
+
     const total = apuestas.reduce((total, apuesta) => {
       return total + parseFloat(calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto));
     }, 0);
-  
   return `${total.toFixed(2)}€`; // Añadimos el símbolo de moneda aquí
   };
 
@@ -179,19 +213,18 @@ export default function InformantDetail() {
       console.error("Error al actualizar la apuesta:", error);
     }
   };
-
   // Datos para el gráfico de pastel (Aciertos vs Errores)
   const pieChartData = [
     {
       name: "Aciertos",
-      population: totalAciertos,
+      population: porcentajeAciertos,
       color: "green",
       legendFontColor: "white",
       legendFontSize: 15,
     },
     {
       name: "Errores",
-      population: totalApuestas - totalAciertos,
+      population: 100 - porcentajeAciertos,
       color: "red",
       legendFontColor: "white",
       legendFontSize: 15,
@@ -343,34 +376,34 @@ export default function InformantDetail() {
             </View>
 
             {/* Filas de datos */}
-{apuestas.map((apuesta, index) => (
-  <View key={index} style={[styles.tableRow, index % 2 === 0 ? styles.evenRow : styles.oddRow]}>
-    <View style={[styles.tableCell, styles.border]}>
-      {/* Hacer clic en la celda de la apuesta abre el modal */}
-      <TouchableOpacity onPress={() => handleEliminarPress(apuesta)}>
-        <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.Apuesta}</Text>
-      </TouchableOpacity>
-    </View>
-    <View style={[styles.tableCell, styles.border]}>
-      <Text>{renderPronostico(apuesta.Acierto, apuesta)}</Text>
-    </View>
-    <View style={[styles.tableCell, styles.border]}>
-        <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{new Date(apuesta.Fecha).toLocaleDateString()}</Text> {/* Nueva columna de Fecha */}
-      </View>
-    <View style={[styles.tableCell, styles.border]}>
-      <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.TipoDeApuesta}</Text>
-    </View>
-    <View style={[styles.tableCell, styles.border]}>
-      <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{String(apuesta.Cuota)}</Text>
-    </View>
-    <View style={[styles.tableCell, styles.border]}>
-      <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{String(apuesta.CantidadApostada)}</Text>
-    </View>
-    <View style={[styles.tableCell, styles.border]}>
-      <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{`${calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto)}€`}</Text>  {/* Cambio aquí para tener en cuenta si la apuesta ha fallado */}
-    </View>
-  </View>
-))}
+          {apuestas.map((apuesta, index) => (
+            <View key={index} style={[styles.tableRow, index % 2 === 0 ? styles.evenRow : styles.oddRow]}>
+              <View style={[styles.tableCell, styles.border]}>
+                {/* Hacer clic en la celda de la apuesta abre el modal */}
+                <TouchableOpacity onPress={() => handleEliminarPress(apuesta)}>
+                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.Apuesta}</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={[styles.tableCell, styles.border]}>
+                <Text>{renderPronostico(apuesta.Acierto, apuesta)}</Text>
+              </View>
+              <View style={[styles.tableCell, styles.border]}>
+                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{new Date(apuesta.Fecha).toLocaleDateString()}</Text> {/* Nueva columna de Fecha */}
+                </View>
+              <View style={[styles.tableCell, styles.border]}>
+                <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.TipoDeApuesta}</Text>
+              </View>
+              <View style={[styles.tableCell, styles.border]}>
+                <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{String(apuesta.Cuota)}</Text>
+              </View>
+              <View style={[styles.tableCell, styles.border]}>
+                <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{String(apuesta.CantidadApostada)}</Text>
+              </View>
+              <View style={[styles.tableCell, styles.border]}>
+                <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{`${calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto)}€`}</Text>  {/* Cambio aquí para tener en cuenta si la apuesta ha fallado */}
+              </View>
+            </View>
+          ))}
           </View>
         </ScrollView>
       </ScrollView>
