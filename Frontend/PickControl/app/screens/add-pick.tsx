@@ -2,16 +2,21 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, StyleSheet, ScrollView, Alert, TouchableOpacity } from 'react-native';
 import RNPickerSelect from 'react-native-picker-select'; 
 import BottomBar from "../components/bottom-bar"; 
+import { useRouter } from "expo-router";
+
 
 const AddPick = () => {
   // Estados para cada campo
-  const [selectedInformante, setSelectedInformante] = useState('FunBet');
+  const [selectedInformante, setSelectedInformante] = useState('Dm7 Gratis');
   const [selectedCasa, setSelectedCasa] = useState('Bet365');
   const [acierto, setAcierto] = useState('Pending');
   const [cantidadApostada, setCantidadApostada] = useState('');
   const [apuesta, setApuesta] = useState('');
   const [tipoDeApuesta, setTipoDeApuesta] = useState('');
-  const [cuota, setCuota] = useState(''); // Estado para el campo Cuota
+  const [cuota, setCuota] = useState(''); 
+
+  const router = useRouter();
+  
 
 
   // Listas de opciones para los dropdowns
@@ -48,7 +53,7 @@ const AddPick = () => {
       Casa: selectedCasa,
       Acierto: acierto,
       CantidadApostada: cantidadApostada,
-      Cuota: 1.5 
+      Cuota: cuota 
     };
 
     try {
@@ -64,7 +69,13 @@ const AddPick = () => {
       const responseData = await response.json();
 
       if (response.status === 201) {
-        Alert.alert('Apuesta enviada con éxito', responseData.message);
+        Alert.alert(
+          'Apuesta enviada con éxito',
+          responseData.message,
+          [
+              { text: "OK", onPress: () => router.push("/") } 
+          ]
+        );
          // Restablecer los estados al valor inicial
         setSelectedInformante('');
         setSelectedCasa('');
@@ -72,7 +83,7 @@ const AddPick = () => {
         setCantidadApostada('');
         setApuesta('');
         setTipoDeApuesta('');
-        setCuota(''); // Restablecer la cuota
+        setCuota(''); 
       } else {
         throw new Error('Hubo un error al enviar la apuesta');
       }
