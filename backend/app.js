@@ -38,7 +38,7 @@ app.get("/", (req, res) => {
 
 // Función para mantener el servidor activo
 const keepAlive = () => {
-    const serverUrl = process.env.SERVER_URL || 'https://my-backend-hwjf.onrender.com'; 
+    const serverUrl = process.env.SERVER_URL
     setInterval(async () => {
         try {
             const response = await fetch(`${serverUrl}/`);
@@ -46,7 +46,8 @@ const keepAlive = () => {
         } catch (error) {
             console.error('Error en keep-alive ping:', error);
         }
-    }, 14 * 60 * 1000);
+    }, 14 * 60 * 1000); 
+};
 
 // Iniciar el keep-alive después de que el servidor esté funcionando
 if (process.env.NODE_ENV === 'production') {
