@@ -17,7 +17,7 @@ const Main = () => {
 
     const router = useRouter();
 
-    const cellWidth = 160;
+    const cellWidth = 105;
 
     const renderPronostico = (acierto) => {
         if (acierto === 'True') {
@@ -78,6 +78,7 @@ const Main = () => {
     
 
     useEffect(() => {
+        console.log('API BASE URL:', process.env.EXPO_PUBLIC_API_BASE_URL);
         fetchApuestas();
     }, []);  // Solo se ejecuta una vez cuando el componente se monta
 
@@ -189,7 +190,7 @@ const Main = () => {
                 <ScrollView horizontal style={styles.tableContainer}>
                     <View>
                         <View style={styles.header}>
-                            <Text style={[styles.cell, styles.headerCell, styles.border, { width: cellWidth }]}>
+                            <Text style={[styles.cell, styles.headerCell, styles.border, { width: cellWidth, paddingTop: 26 }]}>
                                 Fecha
                             </Text>
                             {informantes.map((informante, index) => (
@@ -360,7 +361,8 @@ const styles = StyleSheet.create({
     },
     scrollContainer: {
         flexGrow: 1,
-        paddingBottom: 120,  // Para dar espacio antes del BottomBar
+        paddingBottom: 120,  
+        paddingHorizontal:10
     },
     title: {
         fontSize: 45,
@@ -371,7 +373,7 @@ const styles = StyleSheet.create({
     },
     tableContainer: {
         marginBottom: 20, // Espacio entre la tabla y las apuestas pendientes
-        backgroundColor: '#ffdaa4'
+        backgroundColor: '#ffdaa4',
     },
     header: {
         flexDirection: 'row',
