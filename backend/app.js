@@ -7,7 +7,6 @@ import { dirname, join } from 'path';
 import { connectDB } from './DbMongo/db.js';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import fetch from 'node-fetch';
 
 // import exphbs from 'express-handlebars'
 // import path from 'path';
@@ -39,7 +38,7 @@ app.get("/", (req, res) => {
 
 // Función para mantener el servidor activo
 const keepAlive = () => {
-    const serverUrl = process.env.SERVER_URL || 'https://my-backend-hwjf.onrender.com'; // Reemplaza con tu URL de Render
+    const serverUrl = process.env.SERVER_URL || 'https://my-backend-hwjf.onrender.com'; 
     setInterval(async () => {
         try {
             const response = await fetch(`${serverUrl}/`);
@@ -47,8 +46,7 @@ const keepAlive = () => {
         } catch (error) {
             console.error('Error en keep-alive ping:', error);
         }
-    }, 14 * 60 * 1000); // Ping cada 14 minutos (Render tiene un tiempo límite de 15 minutos)
-};
+    }, 14 * 60 * 1000);
 
 // Iniciar el keep-alive después de que el servidor esté funcionando
 if (process.env.NODE_ENV === 'production') {
