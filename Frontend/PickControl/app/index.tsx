@@ -127,7 +127,7 @@ const Main = () => {
             const data = await response.json();
             if (response.ok) {
                 console.log("Apuesta actualizada:", data);
-                Alert.alert('Apuesta actualizada con éxito');
+                // Alert.alert('Apuesta actualizada con éxito');
                 fetchApuestas(); // Volvemos a cargar las apuestas
                 setModalVisible(false); // Cerramos el modal
             } else {
