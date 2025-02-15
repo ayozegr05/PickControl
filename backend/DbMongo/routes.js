@@ -1,9 +1,95 @@
 import express from 'express';
-import Book from './model.js';
-import Pick from './model.js';
-// import Apuesta from './model.js';
+import { Pick, User } from './model.js';
+import jwt from 'jsonwebtoken';
 
 const router = express.Router();
+
+// Endpoint de registro
+router.post("/register", async (req, res) => {
+    try {
+        const { name, email, password } = req.body;
+
+        // Verificar si el usuario ya existe
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(400).json({ message: 'El email ya está registrado' });
+        }
+
+        // Crear nuevo usuario
+        const user = await User.create({
+            name,
+            email,
+            password // La contraseña se hasheará automáticamente por el middleware
+        });
+
+        // Generar token
+        const token = jwt.sign(
+            { userId: user._id, email: user.email, role: user.role },
+            process.env.JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+
+        res.status(201).json({
+            message: 'Usuario creado exitosamente',
+            token,
+            user: {
+                id: user._id,
+                name: user.name,
+                email: user.email,
+                role: user.role
+            }
+        });
+
+    } catch (error) {
+        console.error('Error en registro:', error);
+        res.status(500).json({ message: 'Error al registrar usuario', error: error.message });
+    }
+});
+
+// Endpoint de login
+router.post("/login", async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        // Buscar usuario
+        const user = await User.findOne({ email });
+        if (!user) {
+            return res.status(401).json({ message: 'Credenciales inválidas' });
+        }
+
+        // Verificar contraseña
+        const isValidPassword = await user.comparePassword(password);
+        if (!isValidPassword) {
+            return res.status(401).json({ message: 'Credenciales inválidas' });
+        }
+
+        // Actualizar último login
+        user.lastLogin = new Date();
+        await user.save();
+
+        // Generar token
+        const token = jwt.sign(
+            { userId: user._id, email: user.email, role: user.role },
+            process.env.JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+
+        res.json({
+            message: 'Login exitoso',
+            token,
+            user: {
+                id: user._id,
+                name: user.name,
+                email: user.email,
+                role: user.role
+            }
+        });
+
+    } catch (error) {
+        console.error('Error en login:', error);
+        res.status(500).json({ message: 'Error al iniciar sesión', error: error.message });
+    }
+});
 
 router.get("/apuestas", async (req, res) => {
     try {
@@ -23,13 +109,24 @@ router.post("/apuestas", async (req, res) => {
     const { Apuesta, Informante, TipoDeApuesta, Casa, Acierto, CantidadApostada, Cuota } = req.body;
 
     try {
+        // Obtener el token del encabezado de autorización
+        const token = req.headers.authorization?.split(' ')[1];
+        if (!token) {
+            return res.status(401).json({ error: "No se proporcionó token de autenticación" });
+        }
+
+        // Verificar el token y obtener el ID del usuario
+        const decodedToken = jwt.verify(token, process.env.JWT_SECRET);
+        const userId = decodedToken.userId;
+
         // Crear una nueva entrada en la colección 'Picks'
         const nuevaApuesta = new Pick({
+            usuario: userId, // Añadir el ID del usuario
             Apuesta,
             Informante,
             TipoDeApuesta,
             Casa,
-            Acierto,  // Puede ser nulo o vacío en el momento de la creación
+            Acierto,
             CantidadApostada,
             Cuota
         });
@@ -40,7 +137,11 @@ router.post("/apuestas", async (req, res) => {
         res.status(201).json({ message: "Apuesta creada exitosamente", nuevaApuesta });
     } catch (error) {
         console.error("Error al crear la apuesta:", error);
-        res.status(400).json({ error: "Error al crear la apuesta" });
+        if (error.name === 'JsonWebTokenError') {
+            res.status(401).json({ error: "Token inválido" });
+        } else {
+            res.status(400).json({ error: "Error al crear la apuesta" });
+        }
     }
 });
 
@@ -147,5 +248,17 @@ router.delete("/apuestas/:id", async (req, res) => {
 
 
 
+
+// Endpoint de logout
+router.post('/logout', async (req, res) => {
+  try {
+    // Aquí podrías invalidar el token en una lista negra si lo deseas
+    // Por ahora, simplemente confirmamos el logout
+    res.status(200).json({ message: 'Logout exitoso' });
+  } catch (error) {
+    console.error('Error en logout:', error);
+    res.status(500).json({ message: 'Error en el servidor' });
+  }
+});
 
 export default router;
