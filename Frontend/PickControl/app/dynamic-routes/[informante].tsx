@@ -6,10 +6,6 @@ import { PieChart, LineChart } from "react-native-chart-kit";
 import { Dimensions } from "react-native";
 import { useRouter } from "expo-router";
 
-
-
-
-
 export default function InformantDetail() {
 
   const { informante } = useLocalSearchParams(); // Obtener el parámetro dinámico
@@ -99,7 +95,7 @@ export default function InformantDetail() {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#4CAF50" />
-        <Text>Cargando información...</Text>
+        <Text style={styles.loadingText}>Cargando información...</Text>
       </View>
     );
   }
@@ -107,7 +103,7 @@ export default function InformantDetail() {
   if (!data) {
     return (
       <View style={styles.container}>
-        <Text>No se encontraron datos para este informante.</Text>
+        <Text style={styles.errorText}>No se encontraron datos para este informante.</Text>
       </View>
     );
   }
@@ -118,25 +114,26 @@ export default function InformantDetail() {
   // Función para calcular las ganancias de cada apuesta (en euros)
   const calcularGanancia = (cantidadApostada, cuota, acierto) => {
     if (!apuestas || apuestas.length === 0) {
-      return "0.00€"; // O cualquier otro valor por defecto
+      return 0; // Devolvemos número en lugar de string
     }
     if (acierto === "Pending") {
       return 0; 
     } if (acierto === "True") {
-      return (cantidadApostada * (cuota - 1)).toFixed(2); // Ganancia positiva
+      return Number((cantidadApostada * (cuota - 1)).toFixed(2)); // Convertimos a número
     } 
-    return (-cantidadApostada).toFixed(2); // Ganancia negativa
+    return Number((-cantidadApostada).toFixed(2)); // Convertimos a número
   };
 
+  // Función para calcular las ganancias acumuladas
   const calcularGananciaAcumulada = (apuestas) => {
     if (!apuestas || apuestas.length === 0) {
-      return [0]; // O cualquier otro valor por defecto
+      return [0];
     }
     let acumulado = 0;
     return apuestas.map((apuesta) => {
       const ganancia = calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto);
-      acumulado += parseFloat(ganancia);
-      return acumulado;
+      acumulado += ganancia;
+      return Number(acumulado.toFixed(2)); // Aseguramos que devolvemos un número con 2 decimales
     });
   };
 
@@ -158,16 +155,15 @@ export default function InformantDetail() {
   };
   
 
-  // Función para calcular las ganancias totales formateadas como string con símbolo de moneda
+  // Función para calcular las ganancias totales
   const calcularGananciasTotales = () => {
     if (!apuestas || apuestas.length === 0) {
-      return "0.00€"; // O cualquier otro valor por defecto
+      return <Text>0€</Text>;
     }
-
-    const total = apuestas.reduce((total, apuesta) => {
-      return total + parseFloat(calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto));
+    const total = apuestas.reduce((acc, apuesta) => {
+      return acc + calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto);
     }, 0);
-  return `${total.toFixed(2)}€`; // Añadimos el símbolo de moneda aquí
+    return <Text>{total.toFixed(2)}€</Text>;
   };
 
   const actualizarApuesta = async (id, acierto) => {
@@ -213,55 +209,49 @@ export default function InformantDetail() {
       console.error("Error al actualizar la apuesta:", error);
     }
   };
-  // Datos para el gráfico de pastel (Aciertos vs Errores)
-  const pieChartData = [
-    {
-      name: "Aciertos",
-      population: porcentajeAciertos,
-      color: "green",
-      legendFontColor: "white",
-      legendFontSize: 15,
-    },
-    {
-      name: "Errores",
-      population: 100 - porcentajeAciertos,
-      color: "red",
-      legendFontColor: "white",
-      legendFontSize: 15,
-    },
-  ];
+
+  // Función para formatear la fecha
+  const formatearFecha = (fecha: string) => {
+    return new Date(fecha).toLocaleDateString('es-ES', {
+      day: '2-digit',
+      month: '2-digit',
+      year: '2-digit'
+    });
+  };
 
   // Datos para el gráfico de líneas (Evolución de las ganancias)
   const lineChartData = {
-    labels: apuestas.map((_, index) => `Apuesta ${index + 1}`), // Etiquetas
+    labels: apuestas.map((apuesta) => formatearFecha(apuesta.Fecha)),
     datasets: [
       {
-        data: calcularGananciaAcumulada(apuestas), // Usamos la ganancia acumulada
+        data: calcularGananciaAcumulada(apuestas),
         strokeWidth: 2,
-        color: (opacity = 1) => `rgba(255, 0, 0, ${opacity})`, // Corregimos el color para que funcione
+        color: (opacity = 1) => `rgba(255, 0, 0, ${opacity})`,
       },
     ],
   };
-  
 
   // Configuración general de los gráficos
   const chartConfig = {
-    backgroundColor: "#000000", // Fondo negro
-    backgroundGradientFrom: "#212121", // Degradado oscuro
-    backgroundGradientTo: "#424242", // Más claro hacia abajo
+    backgroundColor: "#000000",
+    backgroundGradientFrom: "#212121",
+    backgroundGradientTo: "#424242",
     decimalPlaces: 2,
-    color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`, // Texto blanco
-    labelColor: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`, // Etiquetas en blanco
+    color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
+    labelColor: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
     style: {
       borderRadius: 16,
     },
+    propsForLabels: {
+      fontSize: 8,
+    }
   };
 
   return (
     <View style={styles.botbarcontainer}>
-      <View style={styles.container}>     
+       <View style={styles.container}>     
       <ScrollView contentContainerStyle={styles.scrollView}>
-        <Text style={styles.title}>{informante}</Text>
+       <Text style={styles.title}>{informante}</Text>
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Estadísticas</Text>
@@ -279,7 +269,7 @@ export default function InformantDetail() {
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>Ganancias Totales:</Text>
-            <Text style={styles.value}>{`${calcularGananciasTotales()}`}</Text>  
+            <Text style={styles.value}>{calcularGananciasTotales()}</Text>  
           </View>
         </View>
         <Modal
@@ -290,7 +280,6 @@ export default function InformantDetail() {
         >
           <View style={styles.modalContainer}>
             <View style={styles.modalContent}>
-              {/* Botón de cierre */}
               <TouchableOpacity 
                 style={styles.closeButton} 
                 onPress={() => setModalUpdateVisible(false)}
@@ -318,11 +307,26 @@ export default function InformantDetail() {
           </View>
         </Modal>
 
-        {/* Gráfico de Pastel (Aciertos vs Errores) */}
+          Gráfico de Pastel (Aciertos vs Errores)
         <View style={styles.chartContainer}>
             <Text style={styles.graphicTitle}>Porcentaje Aciertos</Text>
             <PieChart
-              data={pieChartData}
+              data={[
+                {
+                  name: "Aciertos",
+                  population: porcentajeAciertos,
+                  color: "green",
+                  legendFontColor: "white",
+                  legendFontSize: 15,
+                },
+                {
+                  name: "Errores",
+                  population: 100 - porcentajeAciertos,
+                  color: "red",
+                  legendFontColor: "white",
+                  legendFontSize: 15,
+                },
+              ]}
               width={screenWidth - 80} // Ajusta el gráfico al tamaño de la pantalla
               height={150}
               chartConfig={chartConfig}
@@ -331,26 +335,28 @@ export default function InformantDetail() {
               paddingLeft={"15"} 
               center={[0, -15]}
             />
-        </View>
+        </View>  
 
-        {/* Gráfico de Líneas (Evolución de las Ganancias) */}
+         Gráfico de Líneas (Evolución de las Ganancias)
         <View style={styles.chartContainer}>
           <Text style={styles.graphicTitle}>Ganancias</Text>
           <LineChart
             data={lineChartData}
-            width={screenWidth - 40} // Ajusta el gráfico al tamaño de la pantalla
+            width={screenWidth - 40}
             height={220}
             chartConfig={chartConfig}
-            fromZero={true}
+            bezier
+            withVerticalLabels={true}
+            withHorizontalLabels={true}
+            yAxisLabel=""
+            yAxisSuffix="€"
           />
 
-        </View>
+        </View>  
 
-        {/* Tabla de Aciertos y Errores */}
         <Text style={styles.cardTitle}>Aciertos y Errores</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <View style={styles.table}>
-            {/* Encabezados de la tabla */}
             <View style={styles.tableRow}>
               <View style={[styles.tableHeaderCell, styles.border]}>
                 <Text style={styles.tableHeaderText}>Apuesta</Text>
@@ -359,7 +365,7 @@ export default function InformantDetail() {
                 <Text style={styles.tableHeaderText}>Acierto</Text>
               </View>
               <View style={[styles.tableHeaderCell, styles.border]}>
-                <Text style={styles.tableHeaderText}>Fecha</Text> {/* Nueva columna de Fecha */}
+                <Text style={styles.tableHeaderText}>Fecha</Text> 
               </View>
               <View style={[styles.tableHeaderCell, styles.border]}>
                 <Text style={styles.tableHeaderText}>Tipo de Apuesta</Text>
@@ -375,11 +381,10 @@ export default function InformantDetail() {
               </View>
             </View>
 
-            {/* Filas de datos */}
+            Filas de datos
           {apuestas.map((apuesta, index) => (
             <View key={index} style={[styles.tableRow, index % 2 === 0 ? styles.evenRow : styles.oddRow]}>
               <View style={[styles.tableCell, styles.border]}>
-                {/* Hacer clic en la celda de la apuesta abre el modal */}
                 <TouchableOpacity onPress={() => handleEliminarPress(apuesta)}>
                   <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.Apuesta}</Text>
                 </TouchableOpacity>
@@ -388,19 +393,25 @@ export default function InformantDetail() {
                 <Text>{renderPronostico(apuesta.Acierto, apuesta)}</Text>
               </View>
               <View style={[styles.tableCell, styles.border]}>
-                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{new Date(apuesta.Fecha).toLocaleDateString()}</Text> {/* Nueva columna de Fecha */}
+                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{formatearFecha(apuesta.Fecha)}</Text>
                 </View>
               <View style={[styles.tableCell, styles.border]}>
                 <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.TipoDeApuesta}</Text>
               </View>
               <View style={[styles.tableCell, styles.border]}>
-                <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{String(apuesta.Cuota)}</Text>
+                <Text style={[styles.cellText, { fontWeight: 'bold' }]}>
+                  {Number(apuesta.Cuota).toFixed(2)}
+                </Text>
               </View>
               <View style={[styles.tableCell, styles.border]}>
-                <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{String(apuesta.CantidadApostada)}</Text>
+                <Text style={[styles.cellText, { fontWeight: 'bold' }]}>
+                  {Number(apuesta.CantidadApostada).toFixed(2)}<Text>€</Text>
+                </Text>
               </View>
               <View style={[styles.tableCell, styles.border]}>
-                <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{`${calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto)}€`}</Text>  {/* Cambio aquí para tener en cuenta si la apuesta ha fallado */}
+                <Text style={[styles.cellText, { fontWeight: 'bold' }]}>
+                  {Number(calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto)).toFixed(2)}<Text>€</Text>
+                </Text>
               </View>
             </View>
           ))}
@@ -414,37 +425,36 @@ export default function InformantDetail() {
         transparent={true}
         visible={modalDeleteVisible}
         onRequestClose={() => setModalDeleteVisible(false)}
-      >
+      > 
         <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            {/* Botón de cierre */}
+          <View style={styles.modalContent}> 
+            
             <TouchableOpacity 
               style={styles.closeButton} 
               onPress={() => setModalDeleteVisible(false)}
             >
               <Text style={styles.closeButtonText}>✖</Text>
-            </TouchableOpacity>
+            </TouchableOpacity> 
 
             <Text style={styles.modalTitle}>¿Estás seguro de eliminar esta apuesta?</Text>
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, { backgroundColor: "green" }]}
                 onPress={() => eliminarApuesta(selectedApuesta._id)}  // Eliminamos la apuesta al hacer clic en "Sí"
-              >
-                <Text style={styles.modalButtonText}>Si</Text>
+              > 
+                <Text style={styles.modalButtonText}>Sí</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalButton, { backgroundColor: "red" }]}
                 onPress={() => setModalDeleteVisible(false)}  // Cerramos el modal sin eliminar la apuesta
               >
-                <Text style={styles.modalButtonText}>No</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+                <Text style={styles.modalButtonText}>No</Text> 
+              </TouchableOpacity> 
+            </View> 
+          </View> 
+        </View> 
+      </Modal> 
       </View>
-      {/* BottomBar siempre visible al fondo */}
       <BottomBar />
     </View>
   );
@@ -461,8 +471,47 @@ const styles = StyleSheet.create({
   },
   loadingContainer: {
     flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: "#000",
+  },
+  errorText: {
+    fontSize: 18,
+    color: "#ffba57",
+    textAlign: "center",
+    marginVertical: 20,
+  },
+  loadingText: {
+    fontSize: 18,
+    color: "#4CAF50",
+    textAlign: "center",
+    marginVertical: 20,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+  modalText: {
+    fontSize: 16,
+    color: '#fff',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  closeButtonText: {
+    fontSize: 20,
+    color: '#fff',
+    textAlign: 'center',
+  },
+  modalButtonText: {
+    fontSize: 18,
+    color: '#fff',
+    textAlign: 'center',
+  },
+  botbarcontainer: {
+    height: '100%'
   },
   title: {
     fontSize: 32,
@@ -586,56 +635,10 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 5,
   },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: "bold",
-    marginVertical: 20
-  },
-  modalText: {
-    fontSize: 16,
-    marginBottom: 20,
-  },
-  modalButtons: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  modalButton: {
-    width: 60,
-    height: 60,
-    justifyContent: "center",
-    alignItems: "center",
-    borderRadius: 30,
-    marginHorizontal: 10,
-  },
-  modalButtonText: {
-    fontSize: 30,
-    color: "white",
-  },
-  closeButton: {
-    position: "absolute",
-    top: 4,
-    right: 4,
-    width: 23,
-    height: 23,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "red", // Puedes cambiar el color si lo prefieres
-    borderRadius: 15,
-    zIndex: 1,
-  },
-  closeButtonText: {
-    color: "white",
-    fontSize: 14,
-    fontWeight: "bold",
-    textAlign: "center",
-  },
   graphicTitle: {
     color: 'white',
     fontSize: 23,
     marginBottom: 20,
     fontWeight: 'bold'
   },
-  botbarcontainer: {
-    height: '100%'
-  }  
 });

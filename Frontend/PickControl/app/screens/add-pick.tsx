@@ -3,6 +3,7 @@ import { View, Text, TextInput, StyleSheet, ScrollView, Alert, TouchableOpacity 
 import RNPickerSelect from 'react-native-picker-select'; 
 import BottomBar from "../components/bottom-bar"; 
 import { useRouter } from "expo-router";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
 const AddPick = () => {
@@ -16,8 +17,6 @@ const AddPick = () => {
   const [cuota, setCuota] = useState(''); 
 
   const router = useRouter();
-  
-
 
   // Listas de opciones para los dropdowns
   const informantes = [
@@ -57,18 +56,29 @@ const AddPick = () => {
     };
 
     try {
+      // Obtener el token del almacenamiento local
+      const token = await AsyncStorage.getItem('userToken');
+      
+      if (!token) {
+        Alert.alert('Error', 'No has iniciado sesión');
+        router.push("/login");
+        return;
+      }
+
       // Enviar el POST request a la API
       const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify(datos) // Convertimos los datos a formato JSON
+        body: JSON.stringify(datos)
       });
 
       const responseData = await response.json();
 
       if (response.status === 201) {
+        console.log("Datos enviados: ", responseData);
         Alert.alert(
           'Apuesta enviada con éxito',
           responseData.message,
@@ -85,11 +95,11 @@ const AddPick = () => {
         setTipoDeApuesta('');
         setCuota(''); 
       } else {
-        throw new Error('Hubo un error al enviar la apuesta');
+        throw new Error(responseData.error || 'Hubo un error al enviar la apuesta');
       }
     } catch (error) {
       console.error('Error al hacer el POST:', error);
-      Alert.alert('Error', 'Hubo un problema al enviar la apuesta');
+      Alert.alert('Error', error.message || 'Hubo un error al enviar la apuesta');
     }
   };
 
