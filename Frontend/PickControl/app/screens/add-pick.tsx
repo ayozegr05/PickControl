@@ -14,6 +14,11 @@ const AddPick = () => {
   const [cantidadApostada, setCantidadApostada] = useState('');
   const [apuesta, setApuesta] = useState('');
   const [tipoDeApuesta, setTipoDeApuesta] = useState('');
+  const [primeraApuestaDoble, setPrimeraApuestaDoble] = useState('');
+  const [segundaApuestaDoble, setSegundaApuestaDoble] = useState('');
+  const [customPrimeraApuesta, setCustomPrimeraApuesta] = useState('');
+  const [customSegundaApuesta, setCustomSegundaApuesta] = useState('');
+  const [isDobleSelected, setIsDobleSelected] = useState(false);
   const [cuota, setCuota] = useState(''); 
 
   const router = useRouter();
@@ -42,13 +47,40 @@ const AddPick = () => {
     { label: '❓', value: 'Pending' }
   ];
 
+  const tiposDeApuesta = [
+    { label: 'Resultado', value: 'Resultado' },
+    { label: 'Gol en ambas mitades', value: 'Gol en ambas mitades' },
+    { label: 'Ambos equipos marcan', value: 'Ambos equipos marcan' },
+    { label: '+1,5 goles', value: '+1,5 goles' },
+    { label: '+2,5 goles', value: '+2,5 goles' },
+    { label: '+3,5 goles', value: '+3,5 goles' },
+    { label: '+4,5 goles', value: '+4,5 goles' },
+    { label: '-4,5 goles', value: '-4,5 goles' },
+    { label: '-3,5 goles', value: '-3,5 goles' },
+    { label: '-2,5 goles', value: '-2,5 goles' },
+    { label: 'Doble', value: 'Doble' },
+    { label: 'Otro', value: 'Otro' },
+  ];
+
+  const tiposDeApuestaSinDoble = tiposDeApuesta.filter(tipo => tipo.value !== 'Doble');
+
   // Manejo del envío de la apuesta (con fetch para hacer el POST)
   const handleSubmit = async () => {
     // Preparamos los datos que vamos a enviar
+    let finalTipoDeApuesta = tipoDeApuesta;
+    
+    if (tipoDeApuesta === 'Otro') {
+      finalTipoDeApuesta = customPrimeraApuesta;
+    } else if (tipoDeApuesta === 'Doble') {
+      const primera = primeraApuestaDoble === 'Otro' ? customPrimeraApuesta : primeraApuestaDoble;
+      const segunda = segundaApuestaDoble === 'Otro' ? customSegundaApuesta : segundaApuestaDoble;
+      finalTipoDeApuesta = `Doble: ${primera} + ${segunda}`;
+    }
+
     const datos = {
       Apuesta: apuesta,
       Informante: selectedInformante,
-      TipoDeApuesta: tipoDeApuesta,
+      TipoDeApuesta: finalTipoDeApuesta,
       Casa: selectedCasa,
       Acierto: acierto,
       CantidadApostada: cantidadApostada,
@@ -93,6 +125,11 @@ const AddPick = () => {
         setCantidadApostada('');
         setApuesta('');
         setTipoDeApuesta('');
+        setPrimeraApuestaDoble('');
+        setSegundaApuestaDoble('');
+        setCustomPrimeraApuesta('');
+        setCustomSegundaApuesta('');
+        setIsDobleSelected(false);
         setCuota(''); 
       } else {
         throw new Error(responseData.error || 'Hubo un error al enviar la apuesta');
@@ -121,12 +158,75 @@ const AddPick = () => {
           />
 
           {/* Campo Tipo de Apuesta */}
-          <TextInput
-            style={styles.input}
-            placeholder="Tipo de Apuesta"
+          <RNPickerSelect
+            onValueChange={(value) => {
+              setTipoDeApuesta(value);
+              if (value === 'Doble') {
+                setIsDobleSelected(true);
+                setPrimeraApuestaDoble('');
+                setSegundaApuestaDoble('');
+                setCustomPrimeraApuesta('');
+                setCustomSegundaApuesta('');
+              } else {
+                setIsDobleSelected(false);
+                setPrimeraApuestaDoble('');
+                setSegundaApuestaDoble('');
+                setCustomPrimeraApuesta('');
+                setCustomSegundaApuesta('');
+              }
+            }}
+            items={tiposDeApuesta}
+            style={pickerSelectStyles}
             value={tipoDeApuesta}
-            onChangeText={setTipoDeApuesta}
+            placeholder={{ label: 'Selecciona tipo de apuesta', value: null }}
           />
+
+          {tipoDeApuesta === 'Otro' && (
+            <TextInput
+              style={styles.input}
+              placeholder="Escribe el tipo de apuesta"
+              value={customPrimeraApuesta}
+              onChangeText={setCustomPrimeraApuesta}
+            />
+          )}
+
+          {isDobleSelected && (
+            <>
+              <Text style={[styles.label, { color: 'white', marginTop: 10 }]}>Primera apuesta:</Text>
+              <RNPickerSelect
+                onValueChange={setPrimeraApuestaDoble}
+                items={tiposDeApuestaSinDoble}
+                style={pickerSelectStyles}
+                value={primeraApuestaDoble}
+                placeholder={{ label: 'Selecciona primera apuesta', value: null }}
+              />
+              {primeraApuestaDoble === 'Otro' && (
+                <TextInput
+                  style={styles.input}
+                  placeholder="Escribe la primera apuesta"
+                  value={customPrimeraApuesta}
+                  onChangeText={setCustomPrimeraApuesta}
+                />
+              )}
+
+              <Text style={[styles.label, { color: 'white', marginTop: 10 }]}>Segunda apuesta:</Text>
+              <RNPickerSelect
+                onValueChange={setSegundaApuestaDoble}
+                items={tiposDeApuestaSinDoble}
+                style={pickerSelectStyles}
+                value={segundaApuestaDoble}
+                placeholder={{ label: 'Selecciona segunda apuesta', value: null }}
+              />
+              {segundaApuestaDoble === 'Otro' && (
+                <TextInput
+                  style={styles.input}
+                  placeholder="Escribe la segunda apuesta"
+                  value={customSegundaApuesta}
+                  onChangeText={setCustomSegundaApuesta}
+                />
+              )}
+            </>
+          )}
 
           {/* Informante Selector */}
           <RNPickerSelect
@@ -270,6 +370,11 @@ const styles = StyleSheet.create({
     height: 45,
     paddingLeft: 10,
     borderColor: 'white'
+  },
+  label: {
+    fontSize: 16,
+    marginBottom: 5,
+    color: 'white',
   },
 });
 

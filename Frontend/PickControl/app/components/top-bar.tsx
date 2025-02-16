@@ -2,16 +2,56 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons'; 
+import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useAuth } from '../context/AuthContext';
 import { Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const TopBar = () => {
-  const [scrollY, setScrollY] = useState(new Animated.Value(0));
+  const [scrollY] = useState(new Animated.Value(0));
   const [visible, setVisible] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [gananciasTotal, setGananciasTotal] = useState(0);
   const router = useRouter();
   const { isAuthenticated, userName, logout } = useAuth();
+
+  const calcularTotalGanancias = (apuestas) => {
+    let total = 0;
+    apuestas.forEach((apuesta) => {
+      if (apuesta.Acierto === "True") {
+        total += (apuesta.CantidadApostada * apuesta.Cuota) - apuesta.CantidadApostada;
+      } else if (apuesta.Acierto === "False") {
+        total -= apuesta.CantidadApostada;
+      }
+    });
+    return total;
+  };
+
+  // Cargar ganancias totales
+  useEffect(() => {
+    const fetchGanancias = async () => {
+      try {
+        const token = await AsyncStorage.getItem('userToken');
+        if (!token) return;
+
+        const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        const data = await response.json();
+        const total = calcularTotalGanancias(data.picks);
+        setGananciasTotal(total);
+      } catch (error) {
+        console.error('Error al cargar ganancias:', error);
+      }
+    };
+
+    if (isAuthenticated) {
+      fetchGanancias();
+    }
+  }, [isAuthenticated]);
 
   useEffect(() => {
     const scrollListener = scrollY.addListener(({ value }) => {
@@ -71,13 +111,33 @@ const TopBar = () => {
   };
   
   return (
-    <Animated.View style={[styles.topBar, { opacity: visible ? 1 : 0 }]}>
-      <View style={styles.leftSection}>
-        <Text style={styles.title}>PickControl</Text>
-      </View>
-      <View style={styles.rightSection}>
+    <Animated.View style={[styles.topBar, { height: visible ? 60 : 0 }]}>
+      <View style={styles.content}>
+        <TouchableOpacity onPress={() => router.push('/')}>
+          <Text style={styles.title}>PickControl</Text>
+        </TouchableOpacity>
+        {isAuthenticated && (
+          <View style={styles.rightSection}>
+            <View style={styles.userContainer}>
+              <View style={[styles.iconContainer, styles.gananciasContainer]}>
+                <Ionicons name="wallet" size={24} color="white" />
+                <Text style={[styles.subText, { color: gananciasTotal >= 0 ? '#4CAF50' : '#F44336' }]}>
+                  {gananciasTotal.toFixed(2)}€
+                </Text>
+              </View>
+              <View style={styles.iconContainer}>
+                <TouchableOpacity onPress={toggleMenu}>
+                  <MaterialCommunityIcons name="account-circle" size={24} color="white" />
+                </TouchableOpacity>
+                {isAuthenticated && (
+                  <Text style={styles.userTitle}>{userName}</Text>
+                )}
+              </View>
+            </View>
+          </View>
+        )}
         {!isAuthenticated ? (
-          <>
+          <View style={styles.rightSection}>
             <TouchableOpacity 
               style={styles.authButton}
               onPress={() => router.push("/screens/login")}
@@ -90,17 +150,8 @@ const TopBar = () => {
             >
               <Text style={styles.authButtonText}>Register</Text>
             </TouchableOpacity>
-          </>
-        ) : (
-          <View style={styles.userContainer}>
-            <TouchableOpacity onPress={toggleMenu}>
-              <MaterialCommunityIcons name="account-circle" size={24} color="#fff" />
-            </TouchableOpacity>
-            {isAuthenticated && (
-              <Text style={styles.userName}>{userName}</Text>
-            )}
           </View>
-        )}
+        ) : null}
       </View>
       {menuOpen && (
         <View style={styles.menuOptions}>
@@ -129,7 +180,6 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: 60,
     backgroundColor: '#2d2d2d',
     flexDirection: 'row',
     alignItems: 'center',
@@ -147,6 +197,12 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#3d3d3d',
   },
+  content: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   leftSection: {
     flex: 1,
     alignItems: 'flex-start',
@@ -162,23 +218,29 @@ const styles = StyleSheet.create({
   userContainer: {
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 16,
   },
-  title: {
-    color: '#ff9f1c',
-    fontSize: 20,
-    fontWeight: 'bold',
+  iconContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  userName: {
-    color: 'white',
+  subText: {
+    color: '#fff',
     fontSize: 12,
     marginTop: 2,
+  },
+  gananciasContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   menuOptions: {
     position: 'absolute',
     top: 60,
     right: 0,
+    alignItems: 'flex-end',
     backgroundColor: '#3d3d3d',
-    width: 200,
+    width: 150,
     padding: 10,
     borderRadius: 8,
     elevation: 5,
@@ -220,6 +282,16 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
   },
+  title: {
+    color: '#ff9f1c',
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  userTitle: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
+  }
 });
 
 export default TopBar;

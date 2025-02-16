@@ -251,7 +251,6 @@ const Main = () => {
                     >
                         <Text style={styles.joinButtonText}>Start</Text>
                     </TouchableOpacity>
-                    <BottomBar />
                 </View>
             );
         } catch (error) {
@@ -262,24 +261,26 @@ const Main = () => {
                     <View style={styles.videoContainer}>
                         <Text style={{ color: 'white' }}>Error al cargar el video</Text>
                     </View>
-                    <BottomBar />
                 </View>
             );
         }
     }
 
     return (
-        <View style={styles.botbarContainer}>
-        <View style={[styles.container, { paddingHorizontal: 10 }]}>
-            {showTopBar && <TopBar />}
-            {/* ScrollView Vertical para toda la página */}
+        <View style={styles.container}>
+            <TopBar />
             <ScrollView
-                contentContainerStyle={[styles.scrollContainer, { marginTop: showTopBar ? 60 : 0 }]} 
-                onScroll={handleScroll} // Detectamos el scroll
-                scrollEventThrottle={16} // Controla la frecuencia con la que se llama a handleScroll
-                ref={scrollViewRef} // Asociamos la referencia
+                ref={scrollViewRef}
+                contentContainerStyle={[
+                    styles.scrollContainer,
+                    isAuthenticated ? { 
+                        paddingHorizontal: 15,
+                        paddingBottom: 80  // Espacio extra para el BottomBar
+                    } : null
+                ]}
+                onScroll={handleScroll}
+                scrollEventThrottle={16}
             >
-            
                 {/* Tabla de pronósticos */}
                 <View style={styles.cardContainer}>
                     <ScrollView 
@@ -413,11 +414,12 @@ const Main = () => {
                     ))}
                 </View>
             )}
-            {/* Modal */}
-            {modalVisible && (
+            </ScrollView>
+            {isAuthenticated && <BottomBar />}
+            {modalVisible && selectedApuesta && (
                 <Modal
-                    transparent={true}
                     animationType="slide"
+                    transparent={true}
                     visible={modalVisible}
                     onRequestClose={() => setModalVisible(false)}
                 >
@@ -450,11 +452,6 @@ const Main = () => {
                     </View>
                 </Modal>
             )}
-            </ScrollView>
-            </View>
-
-            {/* Bottom Bar */}
-            <BottomBar />
         </View>
     );
 };
@@ -469,9 +466,6 @@ const styles = StyleSheet.create({
     },
     scrollContainer: {
         flexGrow: 1,
-        paddingBottom: 120,
-        alignItems: 'center',  
-        paddingHorizontal:10
     },
     cardContainer: {
         backgroundColor: '#303030',
@@ -481,7 +475,7 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.8,
         shadowRadius: 2,
-        marginTop: 20,
+        marginTop: 80,
         padding: 15,
         margin: 0,
         overflow: 'hidden',
