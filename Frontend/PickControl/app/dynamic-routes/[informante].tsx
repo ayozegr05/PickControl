@@ -8,16 +8,17 @@ import { useRouter } from "expo-router";
 import TopBar from "../components/top-bar";
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
-
-
 export default function InformantDetail() {
 
   const { informante } = useLocalSearchParams(); // Obtener el parámetro dinámico
   const [data, setData] = useState(null); // Para almacenar la respuesta del backend
   const [loading, setLoading] = useState(true); // Para manejar el estado de carga
+  const [apuestas, setApuestas] = useState([]);
   const [modalUpdateVisible, setModalUpdateVisible] = useState(false);
   const [modalDeleteVisible, setModalDeleteVisible] = useState(false);
   const [selectedApuesta, setSelectedApuesta] = useState("");
+  // Estado para el período seleccionado
+  const [periodoSeleccionado, setPeriodoSeleccionado] = useState('todo');
 
   const router = useRouter();
   const screenWidth = Dimensions.get("window").width; // Usado para hacer el gráfico responsivo
@@ -39,6 +40,13 @@ export default function InformantDetail() {
 
     fetchInformanteData();
   }, [informante]);
+
+  useEffect(() => {
+    if (data) {
+      const { totalApuestas, totalAciertos, porcentajeAciertos, apuestas: apuestasData } = data;
+      setApuestas(apuestasData);
+    }
+  }, [data]);
 
   const eliminarApuesta = async (id) => {
     try {
@@ -113,8 +121,8 @@ export default function InformantDetail() {
   }
 
   // Extraemos los datos de la respuesta
-  const { totalApuestas, totalAciertos, porcentajeAciertos, apuestas } = data;
-
+  const { totalApuestas, totalAciertos, porcentajeAciertos, apuestas: apuestasData } = data;
+  
   // Función para calcular las ganancias de cada apuesta (en euros)
   const calcularGanancia = (cantidadApostada, cuota, acierto) => {
     if (!apuestas || apuestas.length === 0) {
@@ -214,21 +222,126 @@ export default function InformantDetail() {
     }
   };
 
-  // Función para formatear la fecha
-  const formatearFecha = (fecha: string) => {
-    return new Date(fecha).toLocaleDateString('es-ES', {
-      day: '2-digit',
-      month: '2-digit',
-      year: '2-digit'
-    });
+  // Función para formatear la fecha según el período
+  const formatearFecha = (fecha) => {
+    const date = new Date(fecha);
+    
+    switch(periodoSeleccionado) {
+      case 'año':
+        const meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+        return meses[date.getMonth()];
+      default:
+        return `${date.getDate()}/${date.getMonth() + 1}`;
+    }
+  };
+
+  // Función para agrupar datos por mes si es necesario
+  const agruparDatos = (apuestas) => {
+    if (periodoSeleccionado === 'año') {
+      const datosPorMes = {};
+      
+      // Agrupar datos por mes
+      apuestas.forEach(apuesta => {
+        const fecha = new Date(apuesta.Fecha);
+        const mes = fecha.getMonth();
+        if (!datosPorMes[mes]) {
+          datosPorMes[mes] = {
+            ganancias: [],
+            fecha: new Date(fecha.getFullYear(), mes, 1) // Primer día del mes
+          };
+        }
+        datosPorMes[mes].ganancias.push(calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto));
+      });
+
+      // Calcular media por mes
+      return Object.entries(datosPorMes)
+        .map(([mes, datos]) => ({
+          Fecha: datos.fecha,
+          gananciaMedia: datos.ganancias.reduce((a, b) => a + b, 0) / datos.ganancias.length
+        }))
+        .sort((a, b) => a.Fecha - b.Fecha);
+    }
+    
+    return apuestas;
+  };
+
+  // Función para filtrar las apuestas según el período seleccionado
+  const apuestasFiltradas = () => {
+    switch (periodoSeleccionado) {
+      case 'semana':
+        return apuestas.filter(apuesta => {
+          const fechaApuesta = new Date(apuesta.Fecha);
+          const fechaActual = new Date();
+          const diffTime = Math.abs(fechaActual - fechaApuesta);
+          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          return diffDays <= 7;
+        });
+      case 'mes':
+        return apuestas.filter(apuesta => {
+          const fechaApuesta = new Date(apuesta.Fecha);
+          const fechaActual = new Date();
+          const diffTime = Math.abs(fechaActual - fechaApuesta);
+          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          return diffDays <= 30;
+        });
+      case 'año':
+        return apuestas.filter(apuesta => {
+          const fechaApuesta = new Date(apuesta.Fecha);
+          const fechaActual = new Date();
+          const diffTime = Math.abs(fechaActual - fechaApuesta);
+          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          return diffDays <= 365;
+        });
+      case 'todo':
+        return apuestas;
+      default:
+        return apuestas;
+    }
+  };
+
+  // Función para calcular el ancho del gráfico según el período
+  const calcularAnchoGrafico = () => {
+    const datosVisibles = apuestasFiltradas().length;
+    switch(periodoSeleccionado) {
+      case 'semana':
+        return Math.max(screenWidth, datosVisibles * 60); // 60px por punto para semana
+      case 'mes':
+        return Math.max(screenWidth, datosVisibles * 40); // 40px por punto para mes
+      case 'año':
+        return Math.max(screenWidth, datosVisibles * 20); // 20px por punto para año
+      case 'todo':
+        return Math.max(screenWidth * 1.5, datosVisibles * 80); // Mantener el scroll para todos
+      default:
+        return screenWidth;
+    }
+  };
+
+  // Función para calcular el espaciado según el período
+  const calcularEspaciado = () => {
+    switch(periodoSeleccionado) {
+      case 'semana':
+        return 40; // Más espacio entre puntos para semana
+      case 'mes':
+        return 30; // Espacio medio para mes
+      case 'año':
+        return 20; // Menos espacio para año
+      case 'todo':
+        return 50; // El espaciado original para todos
+      default:
+        return 30;
+    }
   };
 
   // Datos para el gráfico de líneas (Evolución de las ganancias)
   const lineChartData = {
-    labels: apuestas.map((apuesta) => formatearFecha(apuesta.Fecha)),
+    labels: periodoSeleccionado === 'año' 
+      ? agruparDatos(apuestasFiltradas()).map(dato => formatearFecha(dato.Fecha))
+      : apuestasFiltradas().map(apuesta => formatearFecha(apuesta.Fecha)),
     datasets: [
       {
-        data: calcularGananciaAcumulada(apuestas),
+        data: periodoSeleccionado === 'año'
+          ? agruparDatos(apuestasFiltradas()).map(dato => dato.gananciaMedia)
+          : calcularGananciaAcumulada(apuestasFiltradas()),
         strokeWidth: 2,
         color: (opacity = 1) => `rgba(255, 0, 0, ${opacity})`,
       },
@@ -317,62 +430,37 @@ export default function InformantDetail() {
           </View>
         </Modal>
 
-          Gráfico de Pastel (Aciertos vs Errores)
-        <View style={styles.chartContainer}>
-            <Text style={styles.graphicTitle}>Porcentaje Aciertos</Text>
-            <PieChart
-              data={[
-                {
-                  name: "Aciertos",
-                  population: porcentajeAciertos,
-                  color: "green",
-                  legendFontColor: "white",
-                  legendFontSize: 15,
-                },
-                {
-                  name: "Errores",
-                  population: 100 - porcentajeAciertos,
-                  color: "red",
-                  legendFontColor: "white",
-                  legendFontSize: 15,
-                },
-              ]}
-              width={screenWidth - 80} // Ajusta el gráfico al tamaño de la pantalla
-              height={150}
-              chartConfig={chartConfig}
-              accessor={"population"}
-              backgroundColor={"transparent"}
-              paddingLeft={"15"} 
-              center={[0, -15]}
-            />
-        </View>  
-
-         Gráfico de Líneas (Evolución de las Ganancias)
+          {/* Gráfico de Líneas (Evolución de las Ganancias) */}
         <View style={styles.chartContainer}>
           <Text style={styles.graphicTitle}>Ganancias</Text>
           <ScrollView 
             horizontal 
             showsHorizontalScrollIndicator={true}
-            style={styles.chartScrollContainer}
+            style={[
+              styles.chartScrollContainer,
+              periodoSeleccionado !== 'todo' && styles.chartScrollContainerSmall
+            ]}
+            contentContainerStyle={
+              periodoSeleccionado !== 'todo' ? styles.chartContentCentered : null
+            }
           >
             <LineChart
               data={lineChartData}
-              width={Math.max(screenWidth * 1.5, apuestas.length * 80)} // Ancho dinámico basado en número de apuestas
+              width={calcularAnchoGrafico()}
               height={220}
               chartConfig={{
                 ...chartConfig,
+                spacing: calcularEspaciado(),
                 propsForLabels: {
                   ...chartConfig.propsForLabels,
-                  fontSize: 12, // Aumentamos el tamaño de la fuente
+                  fontSize: periodoSeleccionado === 'todo' ? 8 : 10,
                 },
                 propsForVerticalLabels: {
-                  fontSize: 12,
-                 // Rotamos las etiquetas para mejor legibilidad
+                  fontSize: periodoSeleccionado === 'todo' ? 8 : 10,
                 },
                 propsForHorizontalLabels: {
-                  fontSize: 12,
-                },
-                spacing: 50, // Aumentamos el espacio entre puntos
+                  fontSize: periodoSeleccionado === 'todo' ? 8 : 10,
+                }
               }}
               bezier
               withVerticalLabels={true}
@@ -382,7 +470,35 @@ export default function InformantDetail() {
               style={styles.lineChart}
             />
           </ScrollView>
-        </View>  
+          
+          {/* Botones de filtro */}
+          <View style={styles.filterButtons}>
+            <TouchableOpacity
+              style={[styles.filterButton, periodoSeleccionado === 'semana' && styles.filterButtonActive]}
+              onPress={() => setPeriodoSeleccionado('semana')}
+            >
+              <Text style={styles.filterButtonText}>Semana</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.filterButton, periodoSeleccionado === 'mes' && styles.filterButtonActive]}
+              onPress={() => setPeriodoSeleccionado('mes')}
+            >
+              <Text style={styles.filterButtonText}>Mes</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.filterButton, periodoSeleccionado === 'año' && styles.filterButtonActive]}
+              onPress={() => setPeriodoSeleccionado('año')}
+            >
+              <Text style={styles.filterButtonText}>Año</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.filterButton, periodoSeleccionado === 'todo' && styles.filterButtonActive]}
+              onPress={() => setPeriodoSeleccionado('todo')}
+            >
+              <Text style={styles.filterButtonText}>Todo</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
 
         <Text style={styles.cardTitle}>Aciertos y Errores</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -412,7 +528,7 @@ export default function InformantDetail() {
             </View>
 
             Filas de datos
-          {apuestas.map((apuesta, index) => (
+          {apuestasFiltradas().map((apuesta, index) => (
             <View key={index} style={[styles.tableRow, index % 2 === 0 ? styles.evenRow : styles.oddRow]}>
               <View style={[styles.tableCell, styles.border]}>
                 <TouchableOpacity onPress={() => handleEliminarPress(apuesta)}>
@@ -475,14 +591,10 @@ export default function InformantDetail() {
                 style={[styles.modalButton, { backgroundColor: "#F44336" }]}
                 onPress={() => eliminarApuesta(selectedApuesta._id)}  // Eliminamos la apuesta al hacer clic en "Sí"
               > 
-                <Text style={styles.modalButtonText}>Eliminar</Text>
+                <Text style={styles.modalButtonText}> 
+                  <MaterialCommunityIcons name="trash-can-outline" size={26} color="white" />
+                </Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, { backgroundColor: "#9E9E9E" }]}
-                onPress={() => setModalDeleteVisible(false)}  // Cerramos el modal sin eliminar la apuesta
-              >
-                <Text style={styles.modalButtonText}>Cancelar</Text> 
-              </TouchableOpacity> 
             </View> 
           </View> 
         </View> 
@@ -699,6 +811,15 @@ const styles = StyleSheet.create({
   },
   chartScrollContainer: {
     marginTop: 10,
+    width: '100%',
+  },
+  chartScrollContainerSmall: {
+    alignSelf: 'center',
+  },
+  chartContentCentered: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   lineChart: {
     marginVertical: 8,
@@ -709,5 +830,32 @@ const styles = StyleSheet.create({
     fontSize: 23,
     marginBottom: 20,
     fontWeight: 'bold'
+  },
+  filterButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: 10,
+    paddingHorizontal: 10,
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  filterButton: {
+    backgroundColor: 'rgba(33, 33, 33, 0.5)',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#424242',
+    minWidth: 70,
+    alignItems: 'center',
+  },
+  filterButtonActive: {
+    backgroundColor: '#ff9f1c',
+    borderColor: '#ff9f1c',
+  },
+  filterButtonText: {
+    color: 'white',
+    fontSize: 12,
+    textAlign: 'center',
   },
 });
