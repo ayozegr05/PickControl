@@ -4,7 +4,7 @@ import RNPickerSelect from 'react-native-picker-select';
 import BottomBar from "../components/bottom-bar"; 
 import { useRouter } from "expo-router";
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
+import TopBar from "../components/top-bar";
 
 const AddPick = () => {
   // Estados para cada campo
@@ -105,10 +105,11 @@ const AddPick = () => {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.text}>Añadir Apuesta</Text>
+      <TopBar />
 
       {/* ScrollView para asegurar que todo el formulario sea accesible en dispositivos más pequeños */}
       <ScrollView style={styles.scrollView}>
+      <Text style={styles.text}>Añade tu apuesta</Text>
         {/* Card que contiene el formulario */}
         <View style={styles.card}>
           {/* Campo Apuesta */}
@@ -195,10 +196,11 @@ const styles = StyleSheet.create({
   },
   text: {
     fontSize: 32,
-    marginTop: 20,
+    marginTop:50,
     fontWeight: 'bold',
     color: 'white',
     marginBottom: 20,
+    textAlign: 'center'
   },
   scrollView: {
     width: '100%',
@@ -206,7 +208,7 @@ const styles = StyleSheet.create({
   },
   card: {
     width: '90%',  // Lo hacemos más pequeño para que se vea más centrado
-    marginTop: 30,
+    marginTop: 0,
     maxWidth: 400,
     padding: 35,  // Aumentamos el padding dentro de la card
     borderRadius: 10,

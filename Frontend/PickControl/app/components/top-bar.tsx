@@ -74,9 +74,6 @@ const TopBar = () => {
     <Animated.View style={[styles.topBar, { opacity: visible ? 1 : 0 }]}>
       <View style={styles.leftSection}>
         <Text style={styles.title}>PickControl</Text>
-        {isAuthenticated && (
-          <Text style={styles.userName}>{userName}</Text>
-        )}
       </View>
       <View style={styles.rightSection}>
         {!isAuthenticated ? (
@@ -95,9 +92,14 @@ const TopBar = () => {
             </TouchableOpacity>
           </>
         ) : (
-          <TouchableOpacity onPress={toggleMenu}>
-            <MaterialCommunityIcons name="menu" size={24} color="#fff" />
-          </TouchableOpacity>
+          <View style={styles.userContainer}>
+            <TouchableOpacity onPress={toggleMenu}>
+              <MaterialCommunityIcons name="account-circle" size={24} color="#fff" />
+            </TouchableOpacity>
+            {isAuthenticated && (
+              <Text style={styles.userName}>{userName}</Text>
+            )}
+          </View>
         )}
       </View>
       {menuOpen && (
@@ -147,21 +149,19 @@ const styles = StyleSheet.create({
   },
   leftSection: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  centerSection: {
-    flex: 2,
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
   },
   rightSection: {
-    flex: 2,
+    flex: 1,
     flexDirection: 'row',
     justifyContent: 'flex-end',
+    alignItems: 'center',
     gap: 8,
   },
-  menuButton: {
-    padding: 5,
+  userContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   title: {
     color: '#ff9f1c',
@@ -170,14 +170,14 @@ const styles = StyleSheet.create({
   },
   userName: {
     color: 'white',
-    fontSize: 14,
-    marginLeft: 10,
+    fontSize: 12,
+    marginTop: 2,
   },
   menuOptions: {
     position: 'absolute',
     top: 60,
-    left: 0,
-    backgroundColor: '#2d2d2d',
+    right: 0,
+    backgroundColor: '#3d3d3d',
     width: 200,
     padding: 10,
     borderRadius: 8,

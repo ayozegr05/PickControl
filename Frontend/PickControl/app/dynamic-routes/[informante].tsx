@@ -5,6 +5,10 @@ import BottomBar from "../components/bottom-bar"; // Importar la BottomBar
 import { PieChart, LineChart } from "react-native-chart-kit";
 import { Dimensions } from "react-native";
 import { useRouter } from "expo-router";
+import TopBar from "../components/top-bar";
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+
+
 
 export default function InformantDetail() {
 
@@ -249,6 +253,7 @@ export default function InformantDetail() {
 
   return (
     <View style={styles.botbarcontainer}>
+      <TopBar />
        <View style={styles.container}>     
       <ScrollView contentContainerStyle={styles.scrollView}>
        <Text style={styles.title}>{informante}</Text>
@@ -284,23 +289,28 @@ export default function InformantDetail() {
                 style={styles.closeButton} 
                 onPress={() => setModalUpdateVisible(false)}
               >
-                <Text style={styles.closeButtonText}>✖</Text>
+                <Text style={styles.closeButtonText}> 
+                  <MaterialCommunityIcons name="close" size={26} color="white" />
+                </Text>
               </TouchableOpacity>
-
               <Text style={styles.modalTitle}>Actualizar Apuesta</Text>
               <Text style={styles.modalText}>¿La apuesta fue correcta?</Text>
               <View style={styles.modalButtons}>
                 <TouchableOpacity
-                  style={[styles.modalButton, { backgroundColor: "green" }]}
+                  style={[styles.modalButton, { backgroundColor: "#4CAF50" }]}
                   onPress={() => actualizarApuesta(selectedApuesta._id, "True")}
                 >
-                  <Text style={styles.modalButtonText}>✔️</Text>
+                  <Text style={styles.modalButtonText}> 
+                    <MaterialCommunityIcons name="check" size={26} color="white" />
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.modalButton, { backgroundColor: "red" }]}
+                  style={[styles.modalButton, { backgroundColor: "#F44336" }]}
                   onPress={() => actualizarApuesta(selectedApuesta._id, "False")}
                 >
-                  <Text style={styles.modalButtonText}>❌</Text>
+                  <Text style={styles.modalButtonText}>
+                    <MaterialCommunityIcons name="close" size={32} color="white" />
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -340,18 +350,38 @@ export default function InformantDetail() {
          Gráfico de Líneas (Evolución de las Ganancias)
         <View style={styles.chartContainer}>
           <Text style={styles.graphicTitle}>Ganancias</Text>
-          <LineChart
-            data={lineChartData}
-            width={screenWidth - 40}
-            height={220}
-            chartConfig={chartConfig}
-            bezier
-            withVerticalLabels={true}
-            withHorizontalLabels={true}
-            yAxisLabel=""
-            yAxisSuffix="€"
-          />
-
+          <ScrollView 
+            horizontal 
+            showsHorizontalScrollIndicator={true}
+            style={styles.chartScrollContainer}
+          >
+            <LineChart
+              data={lineChartData}
+              width={Math.max(screenWidth * 1.5, apuestas.length * 80)} // Ancho dinámico basado en número de apuestas
+              height={220}
+              chartConfig={{
+                ...chartConfig,
+                propsForLabels: {
+                  ...chartConfig.propsForLabels,
+                  fontSize: 12, // Aumentamos el tamaño de la fuente
+                },
+                propsForVerticalLabels: {
+                  fontSize: 12,
+                 // Rotamos las etiquetas para mejor legibilidad
+                },
+                propsForHorizontalLabels: {
+                  fontSize: 12,
+                },
+                spacing: 50, // Aumentamos el espacio entre puntos
+              }}
+              bezier
+              withVerticalLabels={true}
+              withHorizontalLabels={true}
+              yAxisLabel=""
+              yAxisSuffix="€"
+              style={styles.lineChart}
+            />
+          </ScrollView>
         </View>  
 
         <Text style={styles.cardTitle}>Aciertos y Errores</Text>
@@ -433,22 +463,25 @@ export default function InformantDetail() {
               style={styles.closeButton} 
               onPress={() => setModalDeleteVisible(false)}
             >
-              <Text style={styles.closeButtonText}>✖</Text>
+              <Text style={styles.closeButtonText}>
+                <MaterialCommunityIcons name="close" size={26} color="white" />
+              </Text>
             </TouchableOpacity> 
 
-            <Text style={styles.modalTitle}>¿Estás seguro de eliminar esta apuesta?</Text>
+            <Text style={styles.modalTitle}>Eliminar Apuesta</Text>
+            <Text style={styles.modalText}>¿Estás seguro de que deseas eliminar esta apuesta?</Text>
             <View style={styles.modalButtons}>
               <TouchableOpacity
-                style={[styles.modalButton, { backgroundColor: "green" }]}
+                style={[styles.modalButton, { backgroundColor: "#F44336" }]}
                 onPress={() => eliminarApuesta(selectedApuesta._id)}  // Eliminamos la apuesta al hacer clic en "Sí"
               > 
-                <Text style={styles.modalButtonText}>Sí</Text>
+                <Text style={styles.modalButtonText}>Eliminar</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.modalButton, { backgroundColor: "red" }]}
+                style={[styles.modalButton, { backgroundColor: "#9E9E9E" }]}
                 onPress={() => setModalDeleteVisible(false)}  // Cerramos el modal sin eliminar la apuesta
               >
-                <Text style={styles.modalButtonText}>No</Text> 
+                <Text style={styles.modalButtonText}>Cancelar</Text> 
               </TouchableOpacity> 
             </View> 
           </View> 
@@ -487,28 +520,69 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginVertical: 20,
   },
-  modalTitle: {
-    fontSize: 20,
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+  },
+  modalContent: {
+    backgroundColor: '#303030',
+    borderRadius: 15,
+    padding: 20,
+    width: '80%',
+    alignItems: 'center',
+    elevation: 5,
+    position: 'relative',
+  },
+  closeButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#F44336',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  closeButtonText: {
+    color: 'white',
+    fontSize: 16,
     fontWeight: 'bold',
-    color: '#fff',
+  },
+  modalTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: 'white',
+    marginTop: 20,
     marginBottom: 15,
-    textAlign: 'center',
   },
   modalText: {
-    fontSize: 16,
-    color: '#fff',
+    fontSize: 18,
+    color: 'white',
     marginBottom: 20,
     textAlign: 'center',
   },
-  closeButtonText: {
-    fontSize: 20,
-    color: '#fff',
-    textAlign: 'center',
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    width: '100%',
+    marginTop: 10,
+  },
+  modalButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+    minWidth: 100,
+    alignItems: 'center',
+    marginHorizontal: 10,
   },
   modalButtonText: {
-    fontSize: 18,
-    color: '#fff',
-    textAlign: 'center',
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   botbarcontainer: {
     height: '100%'
@@ -516,7 +590,8 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 32,
     fontWeight: "bold",
-    marginVertical: 30,
+    marginBottom: 30,
+    marginTop: 60,
     textAlign: "center",
     color: "#ffba57",
   },
@@ -615,25 +690,19 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffffff",
   },
   chartContainer: {
-    paddingTop: 20,
-    alignItems: "center",
+    backgroundColor: '#303030',
+    borderRadius: 15,
+    padding: 15,
+    marginVertical: 10,
+    width: '100%',
+    alignItems: 'center',
   },
-  modalContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
+  chartScrollContainer: {
+    marginTop: 10,
   },
-  modalContent: {
-    backgroundColor: "white",
-    borderRadius: 10,
-    padding: 20,
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 5,
+  lineChart: {
+    marginVertical: 8,
+    borderRadius: 16,
   },
   graphicTitle: {
     color: 'white',
