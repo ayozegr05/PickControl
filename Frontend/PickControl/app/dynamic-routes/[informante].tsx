@@ -7,6 +7,7 @@ import { Dimensions } from "react-native";
 import { useRouter } from "expo-router";
 import TopBar from "../components/top-bar";
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 export default function InformantDetail() {
 
@@ -17,27 +18,30 @@ export default function InformantDetail() {
   const [modalUpdateVisible, setModalUpdateVisible] = useState(false);
   const [modalDeleteVisible, setModalDeleteVisible] = useState(false);
   const [selectedApuesta, setSelectedApuesta] = useState("");
-  // Estado para el período seleccionado
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [selectedApuestaToUpdate, setSelectedApuestaToUpdate] = useState(null);
   const [periodoSeleccionado, setPeriodoSeleccionado] = useState('todo');
 
   const router = useRouter();
   const screenWidth = Dimensions.get("window").width; // Usado para hacer el gráfico responsivo
 
   // Hacer fetch a la API con los datos del informante
-  useEffect(() => {
-    const fetchInformanteData = async () => {
-      try {
-        const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/informante/${informante}`);
-        const result = await response.json();
-        console.log('INFORMACION INFORMANTE: ', result);
-        setData(result);
-      } catch (error) {
-        console.error("Error al obtener datos del informante:", error);
-      } finally {
-        setLoading(false); // Terminamos de cargar
-      }
-    };
+  const fetchInformanteData = async () => {
+    try {
+      setLoading(true);
+      const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/informante/${informante}`);
+      const result = await response.json();
+      console.log('INFORMACION INFORMANTE ACTUALIZADA: ', result);
+      setData(result);
+      setApuestas(result.apuestas || []);
+    } catch (error) {
+      console.error("Error al obtener datos del informante:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
+  useEffect(() => {
     fetchInformanteData();
   }, [informante]);
 
@@ -53,7 +57,7 @@ export default function InformantDetail() {
       const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas/${id}`, {
         method: "DELETE",
       });
-  
+
       if (response.ok) {
         const result = await response.json();
         
@@ -93,9 +97,6 @@ export default function InformantDetail() {
     }
   };
   
-  
-
-
   // Función para manejar el modal de eliminación
   const handleEliminarPress = (apuesta) => {
     setSelectedApuesta(apuesta);
@@ -166,7 +167,6 @@ export default function InformantDetail() {
     );
   };
   
-
   // Función para calcular las ganancias totales
   const calcularGananciasTotales = () => {
     if (!apuestas || apuestas.length === 0) {
@@ -225,14 +225,10 @@ export default function InformantDetail() {
   // Función para formatear la fecha según el período
   const formatearFecha = (fecha) => {
     const date = new Date(fecha);
-    
-    switch(periodoSeleccionado) {
-      case 'año':
-        const meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
-        return meses[date.getMonth()];
-      default:
-        return `${date.getDate()}/${date.getMonth() + 1}`;
-    }
+    const dia = date.getDate().toString().padStart(2, '0');
+    const mes = (date.getMonth() + 1).toString().padStart(2, '0');
+    const año = date.getFullYear().toString().slice(-2);
+    return `${dia}/${mes}/${año}`;
   };
 
   // Función para agrupar datos por mes si es necesario
@@ -267,36 +263,31 @@ export default function InformantDetail() {
 
   // Función para filtrar las apuestas según el período seleccionado
   const apuestasFiltradas = () => {
-    switch (periodoSeleccionado) {
+    if (!apuestas) return [];
+
+    let apuestasFiltradas = [...apuestas];
+    const ahora = new Date();
+
+    switch(periodoSeleccionado) {
       case 'semana':
-        return apuestas.filter(apuesta => {
-          const fechaApuesta = new Date(apuesta.Fecha);
-          const fechaActual = new Date();
-          const diffTime = Math.abs(fechaActual - fechaApuesta);
-          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-          return diffDays <= 7;
-        });
+        const unaSemanaMenos = new Date(ahora.setDate(ahora.getDate() - 7));
+        apuestasFiltradas = apuestas.filter(apuesta => new Date(apuesta.Fecha) >= unaSemanaMenos);
+        break;
       case 'mes':
-        return apuestas.filter(apuesta => {
-          const fechaApuesta = new Date(apuesta.Fecha);
-          const fechaActual = new Date();
-          const diffTime = Math.abs(fechaActual - fechaApuesta);
-          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-          return diffDays <= 30;
-        });
+        const unMesMenos = new Date(ahora.setMonth(ahora.getMonth() - 1));
+        apuestasFiltradas = apuestas.filter(apuesta => new Date(apuesta.Fecha) >= unMesMenos);
+        break;
       case 'año':
-        return apuestas.filter(apuesta => {
-          const fechaApuesta = new Date(apuesta.Fecha);
-          const fechaActual = new Date();
-          const diffTime = Math.abs(fechaActual - fechaApuesta);
-          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-          return diffDays <= 365;
-        });
-      case 'todo':
-        return apuestas;
+        const unAñoMenos = new Date(ahora.setFullYear(ahora.getFullYear() - 1));
+        apuestasFiltradas = apuestas.filter(apuesta => new Date(apuesta.Fecha) >= unAñoMenos);
+        break;
       default:
-        return apuestas;
+        // 'todo' - no aplicamos filtro
+        break;
     }
+
+    // Ordenar por fecha ascendente
+    return apuestasFiltradas.sort((a, b) => new Date(a.Fecha).getTime() - new Date(b.Fecha).getTime());
   };
 
   // Función para calcular el ancho del gráfico según el período
@@ -363,6 +354,47 @@ export default function InformantDetail() {
       fontSize: 8,
     }
   };
+
+  const handleFechaPress = (apuesta) => {
+    setSelectedApuestaToUpdate(apuesta);
+    setShowDatePicker(true);
+};
+
+const handleDateChange = async (event, selectedDate) => {
+    setShowDatePicker(false);
+    
+    // Si el evento es 'dismissed' o no hay fecha seleccionada, significa que se canceló
+    if (event.type === 'dismissed' || !selectedDate) {
+        return; // No hacemos nada si se canceló
+    }
+
+    if (selectedDate && selectedApuestaToUpdate) {
+        try {
+            const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuesta/${selectedApuestaToUpdate._id}`, {
+                method: "PUT",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ Fecha: selectedDate.toISOString() }),
+            });
+
+            if (response.ok) {
+                console.log('Fecha actualizada en el servidor');
+                // Esperar a que se complete la recarga de datos
+                await fetchInformanteData();
+                console.log('Datos del informante recargados');
+                Alert.alert("Éxito", "Fecha actualizada correctamente");
+            } else {
+                const errorData = await response.json();
+                console.error('Error en la respuesta del servidor:', errorData);
+                Alert.alert("Error", "No se pudo actualizar la fecha");
+            }
+        } catch (error) {
+            console.error("Error en la petición:", error);
+            Alert.alert("Error", "Ocurrió un error al actualizar la fecha");
+        }
+    }
+};
 
   return (
     <View style={styles.botbarcontainer}>
@@ -539,7 +571,10 @@ export default function InformantDetail() {
                 <Text>{renderPronostico(apuesta.Acierto, apuesta)}</Text>
               </View>
               <View style={[styles.tableCell, styles.border]}>
-                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{formatearFecha(apuesta.Fecha)}</Text>
+                  <TouchableOpacity onPress={() => handleFechaPress(apuesta)} style={styles.fechaContainer}>
+                    <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{formatearFecha(apuesta.Fecha)}</Text>
+                    <MaterialCommunityIcons name="calendar-edit" size={16} color="#ff9f1c" style={styles.calendarIcon} />
+                  </TouchableOpacity>
                 </View>
               <View style={[styles.tableCell, styles.border]}>
                 <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.TipoDeApuesta}</Text>
@@ -599,6 +634,20 @@ export default function InformantDetail() {
           </View> 
         </View> 
       </Modal> 
+      {showDatePicker && (
+    <DateTimePicker
+        value={new Date(selectedApuestaToUpdate?.Fecha || new Date())}
+        mode="date"
+        display="spinner" // Cambiamos a spinner para más control sobre el estilo
+        onChange={handleDateChange}
+        themeVariant="light"
+        textColor="#ff9f1c"
+        positiveButtonLabel="Aceptar"
+        negativeButtonLabel="Cancelar"
+        positiveButton={{ label: 'OK', textColor: '#ff9f1c' }}
+        negativeButton={{ label: 'Cancelar', textColor: '#ff9f1c' }}
+    />
+)}
       </View>
       <BottomBar />
     </View>
@@ -858,4 +907,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
   },
+  fechaContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  calendarIcon: {
+    marginLeft: 5,
+  }
 });

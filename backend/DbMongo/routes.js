@@ -145,33 +145,41 @@ router.post("/apuestas", async (req, res) => {
     }
 });
 
-// Endpoint PUT para actualizar el campo Acierto
+// Endpoint PUT para actualizar apuesta
 router.put("/apuesta/:id", async (req, res) => {
     const { id } = req.params;
-    const { Acierto } = req.body;
+    const updateData = {};
+    
+    // Verificar qué campos se están actualizando
+    if (req.body.Acierto !== undefined) {
+        updateData.Acierto = req.body.Acierto;
+    }
+    if (req.body.Fecha !== undefined) {
+        updateData.Fecha = new Date(req.body.Fecha);
+    }
   
     console.log("ID recibido:", id);
-    console.log("Acierto recibido:", Acierto);
+    console.log("Datos a actualizar:", updateData);
   
     try {
-      const apuestaActualizada = await Pick.findByIdAndUpdate(
-        id,
-        { Acierto },
-        { new: true } // Esto devolverá el documento actualizado
-      );
+        const apuestaActualizada = await Pick.findByIdAndUpdate(
+            id,
+            updateData,
+            { new: true } // Esto devolverá el documento actualizado
+        );
   
-      if (!apuestaActualizada) {
-        console.error("Apuesta no encontrada para ID:", id);
-        return res.status(404).json({ error: "Apuesta no encontrada" });
-      }
+        if (!apuestaActualizada) {
+            console.error("Apuesta no encontrada para ID:", id);
+            return res.status(404).json({ error: "Apuesta no encontrada" });
+        }
   
-      res.status(200).json({ message: "Apuesta actualizada", apuestaActualizada });
+        console.log("Apuesta actualizada:", apuestaActualizada);
+        res.json(apuestaActualizada);
     } catch (error) {
-      console.error("Error al actualizar la apuesta:", error);
-      res.status(400).json({ error: "Error al actualizar la apuesta" });
+        console.error("Error al actualizar la apuesta:", error);
+        res.status(500).json({ error: "Error al actualizar la apuesta" });
     }
-  });
-  
+});
 
 // Endpoint para obtener apuestas de un informante específico
 router.get("/informante/:informante", async (req, res) => {
