@@ -36,16 +36,22 @@ const Main = () => {
         if (!isAuthenticated) return;
         try {
             const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas`,{
-            method: 'GET',
-            headers: {
-            'Content-Type': 'application/json',
-        },
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
             });
             const data = await response.json();
             console.log("Datos obtenidos:", data);
 
             const apuestasPorInformante = {};
-            data.picks.forEach((pick) => {
+            // Primero ordenamos todas las apuestas por fecha
+            const apuestasOrdenadas = data.picks.sort((a, b) => 
+                new Date(a.Fecha).getTime() - new Date(b.Fecha).getTime()
+            );
+
+            // Luego las agrupamos por informante manteniendo el orden
+            apuestasOrdenadas.forEach((pick) => {
                 const { Informante, Acierto, Apuesta, _id, Fecha } = pick;
                 if (!apuestasPorInformante[Informante]) {
                     apuestasPorInformante[Informante] = [];
@@ -174,6 +180,42 @@ const Main = () => {
         lastScrollY.current = currentOffset; // Actualizamos la posición del scroll
     };
     
+    const filtrarApuestas = (periodo: 'semana' | 'mes' | 'todo') => {
+        const ahora = new Date();
+        let fechaLimite: Date;
+    
+        if (periodo === 'semana') {
+            fechaLimite = new Date(ahora.setDate(ahora.getDate() - 7));
+        } else if (periodo === 'mes') {
+            fechaLimite = new Date(ahora.setMonth(ahora.getMonth() - 1));
+        } else {
+            fechaLimite = new Date(0); // Mostrar todo
+        }
+    
+        // Filtra las apuestas de cada informante según la fecha límite
+        const apuestasFiltradas = Object.keys(apuestas).reduce((acc, informante) => {
+            const apuestasInformante = apuestas[informante].filter(apuesta => new Date(apuesta.Fecha) >= fechaLimite);
+            if (apuestasInformante.length > 0) {
+                acc[informante] = apuestasInformante;
+            }
+            return acc;
+        }, {});
+    
+        setApuestas(apuestasFiltradas);
+    };
+
+    const handleFechaPress = () => {
+        Alert.alert(
+            "Actualizar Fechas",
+            "Para actualizar la fecha de una apuesta, ve a la sección del informante correspondiente pulsando sobre su nombre en la tabla.",
+            [
+                { 
+                    text: "Entendido",
+                    style: "default"
+                }
+            ]
+        );
+    };
 
     const maxApuestas = getMaxApuestas();
     console.log("maxApuestas:", maxApuestas);
@@ -283,6 +325,7 @@ const Main = () => {
             >
                 {/* Tabla de pronósticos */}
                 <View style={styles.cardContainer}>
+                    <Text style={styles.cardTitle}>Resultados Pronósticos</Text>
                     <ScrollView 
                         horizontal 
                         showsHorizontalScrollIndicator={false}
@@ -291,16 +334,23 @@ const Main = () => {
                     >
                         <View style={styles.tableContainer}>
                             <View style={styles.header}>
-                                <Text style={[styles.headerCell, { width: cellWidth }]}>
-                                    Fecha
-                                </Text>
+                                <View style={[styles.cell, { width: cellWidth }]}>
+                                    <TouchableOpacity
+                                        onPress={handleFechaPress}
+                                        style={styles.informanteButton}
+                                    >
+                                        <Text style={styles.buttonInformantText}>Fecha</Text>
+                                        <View style={styles.shimmerEffect} />
+                                    </TouchableOpacity>
+                                </View>
                                 {informantes.map((informante, index) => (
                                     <View key={index} style={[styles.cell, { width: cellWidth }]}>
                                         <TouchableOpacity
                                             onPress={() => handleInformantePress(informante)}
                                             style={styles.informanteButton}
                                         >
-                                            <Text style={styles.buttonText}>{informante}</Text>
+                                            <Text style={styles.buttonInformantText}>{informante}</Text>
+                                            <View style={styles.shimmerEffect} />
                                         </TouchableOpacity>
                                     </View>
                                 ))}
@@ -349,6 +399,26 @@ const Main = () => {
                             </ScrollView>
                         </View>
                     </ScrollView>
+                    <View style={styles.filterButtonsContainer}>
+                    <TouchableOpacity 
+                        style={styles.filterButton}
+                        onPress={() => filtrarApuestas('semana')}
+                    >
+                        <Text style={styles.filterButtonText}>Semana</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                        style={styles.filterButton}
+                        onPress={() => filtrarApuestas('mes')}
+                    >
+                        <Text style={styles.filterButtonText}>Mes</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                        style={styles.filterButton}
+                        onPress={() => filtrarApuestas('todo')}
+                    >
+                        <Text style={styles.filterButtonText}>Todo</Text>
+                    </TouchableOpacity>
+</View>
                 </View>
 
                 {apuestasPendientes.length > 0 && (
@@ -364,7 +434,7 @@ const Main = () => {
                             nestedScrollEnabled={true}
                         >
                         {apuestasPendientes.map((apuesta, index) => (
-                            <View style={styles.pendingItem}>
+                            <View key={index} style={styles.pendingItem}>
                             {/* Columna de Apuesta */}
                             <View style={styles.column}>
                                 <Text style={styles.pendingText}>Apuesta</Text>
@@ -815,6 +885,44 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         lineHeight: 18,
     },
+    filterButtonsContainer: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        marginTop: 10,
+    },
+    filterButton: {
+        backgroundColor: '#ff9f1c',
+        padding: 10,
+        borderRadius: 5,
+        borderWidth: 1,
+        borderColor: 'gray',
+        marginHorizontal: 10,
+    },
+    filterButtonText: {
+        color: 'white',
+        fontWeight: 'bold',
+    },
+    informanteButton: {
+        padding: 8,
+        borderRadius: 8,
+        backgroundColor: '#f8f9fa',
+        position: 'relative',
+        overflow: 'hidden',
+    },
+    buttonInformantText: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#ff9f1c',  // Mantiene el color naranja de tu app
+    },
+    shimmerEffect: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 2,
+        backgroundColor: '#ff9f1c',
+        opacity: 0.3,
+    }
 });
 
 export default Main;
