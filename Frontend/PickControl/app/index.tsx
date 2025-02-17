@@ -8,7 +8,8 @@ import { Video } from 'expo-av';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 const Main = () => {
-    const [apuestas, setApuestas] = useState([]);
+    const [apuestasOriginales, setApuestasOriginales] = useState([]); // Nuevo estado para datos originales
+    const [apuestasFiltradas, setApuestasFiltradas] = useState([]); // Estado para datos filtrados
     const [informantes, setInformantes] = useState([]);
     const [apuestasPendientes, setApuestasPendientes] = useState([]);
     const [modalVisible, setModalVisible] = useState(false);
@@ -59,7 +60,8 @@ const Main = () => {
                 apuestasPorInformante[Informante].push({ _id, Apuesta, Acierto, Fecha });
             });
 
-            setApuestas(apuestasPorInformante);
+            setApuestasOriginales(apuestasPorInformante); // Guardamos los datos originales
+            setApuestasFiltradas(apuestasPorInformante); // Inicialmente, los datos filtrados son iguales a los originales
             const informantesList = Object.keys(apuestasPorInformante);
             setInformantes(informantesList);
         } catch (error) {
@@ -93,12 +95,12 @@ const Main = () => {
     }, [isAuthenticated]);  
 
     useEffect(() => {
-        if (Object.keys(apuestas).length > 0) {
-            const pendientes = calcularApuestasPendientes(apuestas);
+        if (Object.keys(apuestasFiltradas).length > 0) {
+            const pendientes = calcularApuestasPendientes(apuestasFiltradas);
             setApuestasPendientes(pendientes);
-            calcularRanking(apuestas);
+            calcularRanking(apuestasFiltradas);
         }
-    }, [apuestas]);
+    }, [apuestasFiltradas]);
 
     const handleInformantePress = (informante) => {
         console.log("Navegando hacia:", informante);  
@@ -106,11 +108,11 @@ const Main = () => {
     };
 
     const getMaxApuestas = () => {
-        if (Object.keys(apuestas).length === 0) {
+        if (Object.keys(apuestasFiltradas).length === 0) {
             return 0;
         }
 
-        const apuestasCount = Object.values(apuestas).map((apuestas) => apuestas.length);
+        const apuestasCount = Object.values(apuestasFiltradas).map((apuestas) => apuestas.length);
         const max = Math.max(...apuestasCount);
         console.log("Número máximo de apuestas:", max);
         return max > 0 ? max : 0;
@@ -185,23 +187,30 @@ const Main = () => {
         let fechaLimite: Date;
     
         if (periodo === 'semana') {
-            fechaLimite = new Date(ahora.setDate(ahora.getDate() - 7));
+            fechaLimite = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate() - 7);
         } else if (periodo === 'mes') {
-            fechaLimite = new Date(ahora.setMonth(ahora.getMonth() - 1));
+            fechaLimite = new Date(ahora.getFullYear(), ahora.getMonth() - 1, ahora.getDate());
         } else {
-            fechaLimite = new Date(0); // Mostrar todo
+            // Para 'todo', mostrar los últimos 12 meses
+            fechaLimite = new Date(ahora.getFullYear() - 1, ahora.getMonth(), ahora.getDate());
         }
     
-        // Filtra las apuestas de cada informante según la fecha límite
-        const apuestasFiltradas = Object.keys(apuestas).reduce((acc, informante) => {
-            const apuestasInformante = apuestas[informante].filter(apuesta => new Date(apuesta.Fecha) >= fechaLimite);
+        // Filtra las apuestas usando los datos originales
+        const nuevosFiltrados = Object.keys(apuestasOriginales).reduce((acc, informante) => {
+            const apuestasInformante = apuestasOriginales[informante].filter(apuesta => {
+                const fechaApuesta = new Date(apuesta.Fecha);
+                // Normalizar las fechas para comparar solo días
+                return fechaApuesta.setHours(0,0,0,0) >= fechaLimite.setHours(0,0,0,0);
+            });
             if (apuestasInformante.length > 0) {
                 acc[informante] = apuestasInformante;
             }
             return acc;
         }, {});
     
-        setApuestas(apuestasFiltradas);
+        setApuestasFiltradas(nuevosFiltrados); // Actualizamos solo los datos filtrados
+        const informantesList = Object.keys(nuevosFiltrados);
+        setInformantes(informantesList);
     };
 
     const handleFechaPress = () => {
@@ -364,14 +373,14 @@ const Main = () => {
                                     <View key={index} style={styles.row}>
                                         <Text style={[styles.cell, styles.dateCell, { width: cellWidth }]}>
                                         {informantes.some(inf => {
-                                            const apuestasInformante = apuestas[inf];
+                                            const apuestasInformante = apuestasFiltradas[inf];
                                             return apuestasInformante && apuestasInformante[index] && apuestasInformante[index].Fecha;
                                         })
                                             ? (() => {
                                                 // Obtenemos la primera fecha válida de la fila
                                                 const fechaEncontrada = informantes
                                                     .map(inf => {
-                                                    const apuestasInformante = apuestas[inf];
+                                                    const apuestasInformante = apuestasFiltradas[inf];
                                                     return apuestasInformante ? apuestasInformante[index]?.Fecha : null;
                                                     })
                                                     .find(fecha => fecha !== null);
@@ -386,7 +395,7 @@ const Main = () => {
                                             : '-'}
                                         </Text>
                                         {informantes.map((informante) => {
-                                            const apuestasInformante = apuestas[informante];
+                                            const apuestasInformante = apuestasFiltradas[informante];
                                             const apuestaInformante = apuestasInformante ? apuestasInformante[index] : null;
                                             return (
                                                 <View key={informante} style={[styles.cell, { width: cellWidth }]}>
@@ -452,7 +461,7 @@ const Main = () => {
                                 {apuesta.Acierto !== 'True' && apuesta.Acierto !== 'False' && (
                                     <TouchableOpacity 
                                         style={styles.updateButton} 
-                                        onPress={() => handleActualizarApuesta(apuesta, apuesta.Informante)}
+                                        onPress={() => handleActualizarApuesta(apuesta)}
                                     >
                                         <Text style={styles.updateButtonText}>❓</Text>
                                     </TouchableOpacity>
