@@ -290,22 +290,6 @@ export default function InformantDetail() {
     return apuestasFiltradas.sort((a, b) => new Date(a.Fecha).getTime() - new Date(b.Fecha).getTime());
   };
 
-  // Función para calcular el ancho del gráfico según el período
-  const calcularAnchoGrafico = () => {
-    const datosVisibles = apuestasFiltradas().length;
-    switch(periodoSeleccionado) {
-      case 'semana':
-        return Math.max(screenWidth, datosVisibles * 60); // 60px por punto para semana
-      case 'mes':
-        return Math.max(screenWidth, datosVisibles * 40); // 40px por punto para mes
-      case 'año':
-        return Math.max(screenWidth, datosVisibles * 20); // 20px por punto para año
-      case 'todo':
-        return Math.max(screenWidth * 1.5, datosVisibles * 80); // Mantener el scroll para todos
-      default:
-        return screenWidth;
-    }
-  };
 
   // Función para calcular el espaciado según el período
   const calcularEspaciado = () => {
@@ -323,37 +307,6 @@ export default function InformantDetail() {
     }
   };
 
-  // Datos para el gráfico de líneas (Evolución de las ganancias)
-  const lineChartData = {
-    labels: periodoSeleccionado === 'año' 
-      ? agruparDatos(apuestasFiltradas()).map(dato => formatearFecha(dato.Fecha))
-      : apuestasFiltradas().map(apuesta => formatearFecha(apuesta.Fecha)),
-    datasets: [
-      {
-        data: periodoSeleccionado === 'año'
-          ? agruparDatos(apuestasFiltradas()).map(dato => dato.gananciaMedia)
-          : calcularGananciaAcumulada(apuestasFiltradas()),
-        strokeWidth: 2,
-        color: (opacity = 1) => `rgba(255, 0, 0, ${opacity})`,
-      },
-    ],
-  };
-
-  // Configuración general de los gráficos
-  const chartConfig = {
-    backgroundColor: "#000000",
-    backgroundGradientFrom: "#212121",
-    backgroundGradientTo: "#424242",
-    decimalPlaces: 2,
-    color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-    labelColor: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-    style: {
-      borderRadius: 16,
-    },
-    propsForLabels: {
-      fontSize: 8,
-    }
-  };
 
   const handleFechaPress = (apuesta) => {
     setSelectedApuestaToUpdate(apuesta);
@@ -399,7 +352,7 @@ const handleDateChange = async (event, selectedDate) => {
   return (
     <View style={styles.botbarcontainer}>
       <TopBar />
-       <View style={styles.container}>     
+      <View style={styles.container}>     
       <ScrollView contentContainerStyle={styles.scrollView}>
        <Text style={styles.title}>{informante}</Text>
 
@@ -462,75 +415,6 @@ const handleDateChange = async (event, selectedDate) => {
           </View>
         </Modal>
 
-          {/* Gráfico de Líneas (Evolución de las Ganancias) */}
-        <View style={styles.chartContainer}>
-          <Text style={styles.graphicTitle}>Ganancias</Text>
-          <ScrollView 
-            horizontal 
-            showsHorizontalScrollIndicator={true}
-            style={[
-              styles.chartScrollContainer,
-              periodoSeleccionado !== 'todo' && styles.chartScrollContainerSmall
-            ]}
-            contentContainerStyle={
-              periodoSeleccionado !== 'todo' ? styles.chartContentCentered : null
-            }
-          >
-            <LineChart
-              data={lineChartData}
-              width={calcularAnchoGrafico()}
-              height={220}
-              chartConfig={{
-                ...chartConfig,
-                spacing: calcularEspaciado(),
-                propsForLabels: {
-                  ...chartConfig.propsForLabels,
-                  fontSize: periodoSeleccionado === 'todo' ? 8 : 10,
-                },
-                propsForVerticalLabels: {
-                  fontSize: periodoSeleccionado === 'todo' ? 8 : 10,
-                },
-                propsForHorizontalLabels: {
-                  fontSize: periodoSeleccionado === 'todo' ? 8 : 10,
-                }
-              }}
-              bezier
-              withVerticalLabels={true}
-              withHorizontalLabels={true}
-              yAxisLabel=""
-              yAxisSuffix="€"
-              style={styles.lineChart}
-            />
-          </ScrollView>
-          
-          {/* Botones de filtro */}
-          <View style={styles.filterButtons}>
-            <TouchableOpacity
-              style={[styles.filterButton, periodoSeleccionado === 'semana' && styles.filterButtonActive]}
-              onPress={() => setPeriodoSeleccionado('semana')}
-            >
-              <Text style={styles.filterButtonText}>Semana</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.filterButton, periodoSeleccionado === 'mes' && styles.filterButtonActive]}
-              onPress={() => setPeriodoSeleccionado('mes')}
-            >
-              <Text style={styles.filterButtonText}>Mes</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.filterButton, periodoSeleccionado === 'año' && styles.filterButtonActive]}
-              onPress={() => setPeriodoSeleccionado('año')}
-            >
-              <Text style={styles.filterButtonText}>Año</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.filterButton, periodoSeleccionado === 'todo' && styles.filterButtonActive]}
-              onPress={() => setPeriodoSeleccionado('todo')}
-            >
-              <Text style={styles.filterButtonText}>Todo</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
 
         <Text style={styles.cardTitle}>Aciertos y Errores</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
