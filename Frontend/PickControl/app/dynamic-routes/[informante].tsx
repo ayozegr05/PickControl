@@ -2,7 +2,6 @@ import React, { useEffect, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Modal, TouchableOpacity, Alert } from "react-native";
 import { useLocalSearchParams } from "expo-router"; // Obtener los parámetros de búsqueda
 import BottomBar from "../components/bottom-bar"; // Importar la BottomBar
-import { PieChart, LineChart } from "react-native-chart-kit";
 import { Dimensions } from "react-native";
 import { useRouter } from "expo-router";
 import TopBar from "../components/top-bar";
