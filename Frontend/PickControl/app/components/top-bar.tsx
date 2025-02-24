@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons'; 
-import { Ionicons } from "@expo/vector-icons";
+import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useRouter } from "expo-router";
 import { useAuth } from '../context/AuthContext';
 import { Alert } from 'react-native';
@@ -119,8 +119,8 @@ const TopBar = () => {
         {isAuthenticated && (
           <View style={styles.rightSection}>
             <View style={styles.userContainer}>
-              <View style={[styles.iconContainer, styles.gananciasContainer]}>
-                <Ionicons name="wallet" size={24} color="white" />
+              <View style={ styles.gananciasContainer }>
+                <FontAwesome name="bank" size={20} color="white" />
                 <Text style={[styles.subText, { color: gananciasTotal >= 0 ? '#4CAF50' : '#F44336' }]}>
                   {gananciasTotal.toFixed(2)}€
                 </Text>
@@ -228,11 +228,12 @@ const styles = StyleSheet.create({
   subText: {
     color: '#fff',
     fontSize: 12,
-    marginTop: 2,
+    marginTop: 4,
   },
   gananciasContainer: {
     alignItems: 'center',
     justifyContent: 'center',
+    marginTop: 2
   },
   menuOptions: {
     position: 'absolute',

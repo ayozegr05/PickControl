@@ -2,8 +2,7 @@ import React from "react";
 import { View, TouchableOpacity, StyleSheet } from "react-native";
 import { useRouter, usePathname } from "expo-router";
 import { Ionicons} from "@expo/vector-icons";
-import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
-import { faSackDollar } from '@fortawesome/free-solid-svg-icons';
+import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 
 
 const BottomBar = () => {
@@ -28,7 +27,7 @@ const BottomBar = () => {
 
             {/* Botón de Ganancias */}
             <TouchableOpacity onPress={() => router.push("/screens/earns")}>
-            <FontAwesomeIcon icon={faSackDollar} size={28} color="orange" />
+                <FontAwesome6 name="sack-dollar" size={24} color="orange" />
             </TouchableOpacity>
 
             {/* Botón de Análisis */}
