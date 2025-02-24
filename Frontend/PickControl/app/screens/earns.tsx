@@ -1,8 +1,7 @@
 import React, { useEffect, useState, useRef } from "react";
-import { View, Text, StyleSheet, ScrollView } from "react-native";
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { View, Text, StyleSheet, ScrollView, Animated } from "react-native";
+import { Ionicons} from "@expo/vector-icons";
 import BottomBar from "../components/bottom-bar";
-import Animated, { useSharedValue, withTiming } from "react-native-reanimated";
 import LottieView from 'lottie-react-native';
 import TopBar from "../components/top-bar";
 
@@ -11,7 +10,7 @@ const GananciasPage = () => {
     const [totalGanancias, setTotalGanancias] = useState(0);
     const [gananciasInformante, setGananciasInformante] = useState({});
     const [gananciasBookmaker, setGananciasBookmaker] = useState({});
-    const animatedValue = useSharedValue(0);
+    const animatedValue = useRef(new Animated.Value(0)).current;
     const [animatedGanancias, setAnimatedGanancias] = useState("0.00");
     const rocketRef = useRef(null);
     const loseRef = useRef(null);
@@ -35,7 +34,11 @@ const GananciasPage = () => {
             setGananciasInformante(porInformante);
             setGananciasBookmaker(porBookmaker);
 
-            animatedValue.value = withTiming(ganancias, { duration: 1500 });
+            Animated.timing(animatedValue, {
+                toValue: ganancias,
+                duration: 1500,
+                useNativeDriver: false
+            }).start();
         } catch (error) {
             console.error("Error al obtener las apuestas:", error);
         }
@@ -94,10 +97,10 @@ const GananciasPage = () => {
     }, [totalGanancias]);
 
     useEffect(() => {
-        const interval = setInterval(() => {
-            setAnimatedGanancias(animatedValue.value.toFixed(2));
-        }, 100);
-        return () => clearInterval(interval);
+        const listener = animatedValue.addListener(({ value }) => {
+            setAnimatedGanancias(value.toFixed(2));
+        });
+        return () => animatedValue.removeListener(listener);
     }, [animatedValue]);
 
     return (
