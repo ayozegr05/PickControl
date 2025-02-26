@@ -10,12 +10,17 @@ const GananciasPage = () => {
     const [totalGanancias, setTotalGanancias] = useState(0);
     const [gananciasInformante, setGananciasInformante] = useState({});
     const [gananciasBookmaker, setGananciasBookmaker] = useState({});
+    const [isLoading, setIsLoading] = useState(true);
+    const [dataLoaded, setDataLoaded] = useState(false);
     const animatedValue = useRef(new Animated.Value(0)).current;
     const [animatedGanancias, setAnimatedGanancias] = useState("0.00");
     const rocketRef = useRef(null);
     const loseRef = useRef(null);
+    const loadingRef = useRef(null);
 
     const fetchApuestas = async () => {
+        if (dataLoaded) return; // Evitar múltiples cargas si ya tenemos datos
+        
         try {
             const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas`, {
                 method: "GET",
@@ -23,24 +28,32 @@ const GananciasPage = () => {
             });
 
             const data = await response.json();
-            setApuestas(data.picks);
             
-            // Calcular todas las ganancias
-            const ganancias = calcularTotalGanancias(data.picks);
-            const porInformante = calcularGananciasInformante(data.picks);
-            const porBookmaker = calcularGananciasBookmaker(data.picks);
+            // Procesar todos los datos antes de actualizar estados
+            const picks = data.picks || [];
+            const ganancias = calcularTotalGanancias(picks);
+            const porInformante = calcularGananciasInformante(picks);
+            const porBookmaker = calcularGananciasBookmaker(picks);
             
+            // Actualizar todos los estados juntos
+            setApuestas(picks);
             setTotalGanancias(ganancias);
             setGananciasInformante(porInformante);
             setGananciasBookmaker(porBookmaker);
+            setDataLoaded(true);
 
+            // Iniciar la animación después de que los datos estén listos
             Animated.timing(animatedValue, {
                 toValue: ganancias,
                 duration: 1500,
                 useNativeDriver: false
-            }).start();
+            }).start(() => {
+                setIsLoading(false);
+            });
         } catch (error) {
             console.error("Error al obtener las apuestas:", error);
+            setIsLoading(false);
+            setDataLoaded(true);
         }
     };
 
@@ -88,20 +101,29 @@ const GananciasPage = () => {
 
     useEffect(() => {
         fetchApuestas();
-        // Iniciar la animación correspondiente
-        if (totalGanancias > 0 && rocketRef.current) {
-            rocketRef.current.play();
-        } else if (totalGanancias <= 0 && loseRef.current) {
-            loseRef.current.play();
-        }
-    }, [totalGanancias]);
+    }, []); // Solo se ejecuta una vez al montar el componente
 
     useEffect(() => {
         const listener = animatedValue.addListener(({ value }) => {
             setAnimatedGanancias(value.toFixed(2));
         });
-        return () => animatedValue.removeListener(listener);
+        return () => {
+            animatedValue.removeListener(listener);
+            setIsLoading(true); // Resetear el estado de carga al desmontar
+            setDataLoaded(false);
+        };
     }, [animatedValue]);
+
+    // No iniciar las animaciones hasta que los datos estén completamente cargados
+    useEffect(() => {
+        if (!isLoading && dataLoaded) {
+            if (totalGanancias > 0 && rocketRef.current) {
+                rocketRef.current.play();
+            } else if (totalGanancias <= 0 && loseRef.current) {
+                loseRef.current.play();
+            }
+        }
+    }, [isLoading, dataLoaded, totalGanancias]);
 
     return (
         <View style={styles.container}>
@@ -112,56 +134,71 @@ const GananciasPage = () => {
             </View>
 
             <ScrollView style={styles.scrollView}>
-                <Text style={styles.subtitle}>Tus ganancias totales son:</Text>
-                
-                <View style={styles.iconContainer}> 
-                    <Animated.Text style={[styles.gananciasText, { color: totalGanancias >= 0 ? "green" : "red" }]}>
-                        {animatedGanancias} €
-                    </Animated.Text>
-                    {totalGanancias > 0 ? (
-                        <View style={styles.rocketContainer}>
-                            <LottieView
-                                ref={rocketRef}
-                                source={require('../../assets/animations/rocket.json')}
-                                style={styles.lottieRocket}
-                                autoPlay
-                                loop
-                            />
-                        </View>
-                    ) : (
-                        <View style={styles.loseContainer}>
-                            <LottieView
-                                ref={loseRef}
-                                source={require('../../assets/animations/lose2.json')}
-                                style={styles.lottieLose}
-                                autoPlay
-                                loop
-                            />
-                        </View>
-                    )}
-                </View>
-
-                {/* Ganancias por Informante */}
-                <Text style={styles.sectionTitle}>Por Informante:</Text>
-                {Object.entries(gananciasInformante).map(([informante, ganancia]) => (
-                    <View key={informante} style={styles.itemContainer}>
-                        <Text style={styles.itemName}>{informante}</Text>
-                        <Text style={[styles.itemValue, { color: ganancia >= 0 ? "green" : "red" }]}>
-                            {ganancia.toFixed(2)} €
-                        </Text>
+                {isLoading ? (
+                    <View style={styles.loadingContainer}>
+                        <Text style={styles.loadingText}>Cargando datos...</Text>
+                        <LottieView
+                            ref={loadingRef}
+                            source={require('../../assets/animations/loading.json')}
+                            style={styles.loadingAnimation}
+                            autoPlay
+                            loop
+                        />
                     </View>
-                ))}
+                ) : (
+                    <>
+                        <Text style={styles.subtitle}>Tus ganancias totales son:</Text>
+                        
+                        <View style={styles.iconContainer}> 
+                            <Animated.Text style={[styles.gananciasText, { color: totalGanancias >= 0 ? "green" : "red" }]}>
+                                {animatedGanancias} €
+                            </Animated.Text>
+                            {totalGanancias > 0 ? (
+                                <View style={styles.rocketContainer}>
+                                    <LottieView
+                                        ref={rocketRef}
+                                        source={require('../../assets/animations/rocket.json')}
+                                        style={styles.lottieRocket}
+                                        autoPlay
+                                        loop
+                                    />
+                                </View>
+                            ) : (
+                                <View style={styles.loseContainer}>
+                                    <LottieView
+                                        ref={loseRef}
+                                        source={require('../../assets/animations/lose2.json')}
+                                        style={styles.lottieLose}
+                                        autoPlay
+                                        loop
+                                    />
+                                </View>
+                            )}
+                        </View>
 
-                {/* Ganancias por Casa de Apuestas */}
-                <Text style={styles.sectionTitle}>Por Casa de Apuestas:</Text>
-                {Object.entries(gananciasBookmaker).map(([bookmaker, ganancia]) => (
-                    <View key={bookmaker} style={styles.itemContainer}>
-                        <Text style={styles.itemName}>{bookmaker}</Text>
-                        <Text style={[styles.itemValue, { color: ganancia >= 0 ? "green" : "red" }]}>
-                            {ganancia.toFixed(2)} €
-                        </Text>
-                    </View>
-                ))}
+                        {/* Ganancias por Informante */}
+                        <Text style={styles.sectionTitle}>Por Informante:</Text>
+                        {Object.entries(gananciasInformante).map(([informante, ganancia]) => (
+                            <View key={informante} style={styles.itemContainer}>
+                                <Text style={styles.itemName}>{informante}</Text>
+                                <Text style={[styles.itemValue, { color: ganancia >= 0 ? "green" : "red" }]}>
+                                    {ganancia.toFixed(2)} €
+                                </Text>
+                            </View>
+                        ))}
+
+                        {/* Ganancias por Casa de Apuestas */}
+                        <Text style={styles.sectionTitle}>Por Casa de Apuestas:</Text>
+                        {Object.entries(gananciasBookmaker).map(([bookmaker, ganancia]) => (
+                            <View key={bookmaker} style={styles.itemContainer}>
+                                <Text style={styles.itemName}>{bookmaker}</Text>
+                                <Text style={[styles.itemValue, { color: ganancia >= 0 ? "green" : "red" }]}>
+                                    {ganancia.toFixed(2)} €
+                                </Text>
+                            </View>
+                        ))}
+                    </>
+                )}
             </ScrollView>
 
             <BottomBar />
@@ -261,6 +298,26 @@ const styles = StyleSheet.create({
     lottieLose: {
         width: '100%',
         height: '100%',
+    },
+    loadingContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100%',
+        minHeight: 500,
+        gap: 10,
+        marginTop: 40
+    },
+    loadingText: {
+        color: '#FFFFFF',
+        fontSize: 18,
+        textAlign: 'left',
+        marginBottom: -70,
+        marginStart: 5
+    },
+    loadingAnimation: {
+        width: 150,
+        height: 150,
     },
 });
 

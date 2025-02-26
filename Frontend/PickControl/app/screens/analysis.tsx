@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 'react-native';
 import { useRouter } from 'expo-router';
 import TopBar from '../components/top-bar';
 import BottomBar from '../components/bottom-bar';
 import { MaterialIcons } from '@expo/vector-icons';
-
+import LottieView from 'lottie-react-native';
 
 interface Apuesta {
   Fecha: string;
@@ -21,6 +21,8 @@ export default function Analysis() {
   const [inversionDiaria, setInversionDiaria] = useState('10');
   const [apuestasPorDia, setApuestasPorDia] = useState('1');
   const [loading, setLoading] = useState(true);
+  const [dataLoaded, setDataLoaded] = useState(false);
+  const loadingRef = useRef(null);
 
   const router = useRouter();
 
@@ -29,6 +31,8 @@ export default function Analysis() {
   }, []);
 
   const fetchData = async () => {
+    if (dataLoaded) return;
+    
     try {
       setLoading(true);
       const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas`, {
@@ -74,7 +78,8 @@ export default function Analysis() {
       setApuestas([]);
       setInformantes([]);
     } finally {
-      setLoading(false);
+      setDataLoaded(true);
+      setTimeout(() => setLoading(false), 500); // Pequeño delay para suavizar la transición
     }
   };
 
@@ -205,6 +210,13 @@ export default function Analysis() {
         {loading ? (
           <View style={styles.loadingContainer}>
             <Text style={styles.loadingText}>Cargando datos...</Text>
+            <LottieView
+              ref={loadingRef}
+              source={require('../../assets/animations/loading.json')}
+              style={styles.loadingAnimation}
+              autoPlay
+              loop
+            />
           </View>
         ) : informantes.length === 0 ? (
           <View style={styles.errorContainer}>
@@ -302,7 +314,7 @@ export default function Analysis() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: 'black',
     paddingBottom: 60,
     paddingTop: 60
   },
@@ -440,11 +452,21 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    height: '100%',
+    minHeight: 500,
+    gap: 10,
+    marginTop: -60
   },
   loadingText: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 18,
+    textAlign: 'left',
+    marginBottom: -70,
+    marginStart: 5
+  },
+  loadingAnimation: {
+    width: 150,
+    height: 150,
   },
   errorContainer: {
     flex: 1,
