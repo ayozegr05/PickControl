@@ -51,6 +51,8 @@ const AddPick = () => {
     { label: 'Resultado', value: 'Resultado' },
     { label: 'Gol en ambas mitades', value: 'Gol en ambas mitades' },
     { label: 'Ambos equipos marcan', value: 'Ambos equipos marcan' },
+    { label: 'Apuesta sin empate', value: 'Apuesta sin empate' },
+    { label: 'Doble oportunidad', value: 'Doble oportunidad' },
     { label: '+1,5 goles', value: '+1,5 goles' },
     { label: '+2,5 goles', value: '+2,5 goles' },
     { label: '+3,5 goles', value: '+3,5 goles' },
