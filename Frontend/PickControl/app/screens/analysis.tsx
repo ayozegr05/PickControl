@@ -3,6 +3,8 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 
 import { useRouter } from 'expo-router';
 import TopBar from '../components/top-bar';
 import BottomBar from '../components/bottom-bar';
+import { MaterialIcons } from '@expo/vector-icons';
+
 
 interface Apuesta {
   Fecha: string;
@@ -43,28 +45,27 @@ export default function Analysis() {
         const apuestasPorInformante = {};
         data.picks.forEach((pick) => {
           const { Informante, Acierto, CantidadApostada, Cuota, Fecha } = pick;
-          if (!apuestasPorInformante[Informante]) {
-            apuestasPorInformante[Informante] = [];
+          // Solo incluir apuestas que no estén pendientes
+          if (Acierto !== "Pending") {
+            if (!apuestasPorInformante[Informante]) {
+              apuestasPorInformante[Informante] = [];
+            }
+            apuestasPorInformante[Informante].push({ 
+              Acierto: Acierto === "True", 
+              CantidadApostada, 
+              Cuota, 
+              Fecha,
+              Informante 
+            });
           }
-          apuestasPorInformante[Informante].push({ 
-            Acierto: Acierto === 'True', 
-            CantidadApostada, 
-            Cuota, 
-            Fecha,
-            Informante 
-          });
         });
 
         const informantesList = Object.keys(apuestasPorInformante);
         setInformantes(informantesList);
         
-        // Convertir a array plano para los cálculos
+        // Convertir a array plano para los cálculos, excluyendo apuestas pendientes
         const allApuestas = Object.values(apuestasPorInformante)
-          .flat()
-          .map(apuesta => ({
-            ...apuesta,
-            Acierto: apuesta.Acierto === 'True'
-          }));
+          .flat();
         
         setApuestas(allApuestas);
       }
@@ -82,6 +83,7 @@ export default function Analysis() {
   };
 
   const calcularEstadisticas = (informante: string) => {
+    // Filtrar apuestas del informante y excluir las pendientes
     const apuestasInformante = apuestas.filter(a => a.Informante === informante);
     const apuestasRecientes = apuestasInformante.slice(-30); // Último mes
     
@@ -122,6 +124,7 @@ export default function Analysis() {
   };
 
   const calcularProyeccion = (informante: string) => {
+    // Filtrar apuestas del informante y excluir las pendientes
     const apuestasInformante = apuestas.filter(a => a.Informante === informante);
     const apuestasRecientes = apuestasInformante.slice(-30);
     
@@ -222,12 +225,22 @@ export default function Analysis() {
               if (!stats || !proyeccion) return null;
 
               return (
-                <TouchableOpacity 
+                <View 
                   key={informante}
                   style={styles.informanteCard}
-                  onPress={() => router.push(`/dynamic-routes/${informante}`)}
                 >
-                  <Text style={styles.informanteName}>{informante}</Text>
+                  <View style={styles.headerContainer}>
+                    <Text style={styles.informanteName}>{informante}</Text>
+                    <TouchableOpacity 
+                      onPress={() => router.push(`dynamic-routes/${informante}`)}
+                      style={styles.statsButton}
+                    >
+                      <View style={styles.statsButtonContent}>
+                        <MaterialIcons name="query-stats" size={20} color="#4CAF50" />
+                        <Text style={styles.statsButtonText}>Ver más</Text>
+                      </View>
+                    </TouchableOpacity>
+                  </View>
                   
                   <View style={styles.statsGrid}>
                     <View style={styles.statItem}>
@@ -275,7 +288,7 @@ export default function Analysis() {
                       </Text>
                     </View>
                   </View>
-                </TouchableOpacity>
+                </View>
               );
             })}
           </View>
@@ -342,7 +355,30 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#FFFFFF',
-    marginBottom: 15,
+  },
+  headerContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  statsButton: {
+    backgroundColor: '#2A2A2A',
+    borderRadius: 20,
+    padding: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#4CAF50',
+  },
+  statsButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  statsButtonText: {
+    color: '#4CAF50',
+    fontSize: 14,
+    fontWeight: '500',
   },
   statsGrid: {
     flexDirection: 'row',
