@@ -19,7 +19,7 @@ export default function InformantDetail() {
   const [selectedApuesta, setSelectedApuesta] = useState("");
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedApuestaToUpdate, setSelectedApuestaToUpdate] = useState(null);
-  const [periodoSeleccionado, setPeriodoSeleccionado] = useState('todo');
+  const [periodoSeleccionado, setPeriodoSeleccionado] = useState('semana');
 
   const router = useRouter();
   const screenWidth = Dimensions.get("window").width; // Usado para hacer el gráfico responsivo
@@ -260,52 +260,49 @@ export default function InformantDetail() {
     return apuestas;
   };
 
-  // Función para filtrar las apuestas según el período seleccionado
   const apuestasFiltradas = () => {
     if (!apuestas) return [];
 
     let apuestasFiltradas = [...apuestas];
     const ahora = new Date();
+    ahora.setHours(23, 59, 59, 999); // Final del día actual
 
     switch(periodoSeleccionado) {
       case 'semana':
-        const unaSemanaMenos = new Date(ahora.setDate(ahora.getDate() - 7));
-        apuestasFiltradas = apuestas.filter(apuesta => new Date(apuesta.Fecha) >= unaSemanaMenos);
+        const unaSemanaMenos = new Date(ahora);
+        unaSemanaMenos.setDate(ahora.getDate() - 6); // 7 días incluyendo hoy
+        unaSemanaMenos.setHours(0, 0, 0, 0); // Inicio del día
+        apuestasFiltradas = apuestas.filter(apuesta => {
+          const fechaApuesta = new Date(apuesta.Fecha);
+          return fechaApuesta >= unaSemanaMenos && fechaApuesta <= ahora;
+        });
         break;
       case 'mes':
-        const unMesMenos = new Date(ahora.setMonth(ahora.getMonth() - 1));
-        apuestasFiltradas = apuestas.filter(apuesta => new Date(apuesta.Fecha) >= unMesMenos);
+        const unMesMenos = new Date(ahora);
+        unMesMenos.setMonth(ahora.getMonth() - 1);
+        unMesMenos.setHours(0, 0, 0, 0);
+        apuestasFiltradas = apuestas.filter(apuesta => {
+          const fechaApuesta = new Date(apuesta.Fecha);
+          return fechaApuesta >= unMesMenos && fechaApuesta <= ahora;
+        });
         break;
       case 'año':
-        const unAñoMenos = new Date(ahora.setFullYear(ahora.getFullYear() - 1));
-        apuestasFiltradas = apuestas.filter(apuesta => new Date(apuesta.Fecha) >= unAñoMenos);
+        const unAñoMenos = new Date(ahora);
+        unAñoMenos.setFullYear(ahora.getFullYear() - 1);
+        unAñoMenos.setHours(0, 0, 0, 0);
+        apuestasFiltradas = apuestas.filter(apuesta => {
+          const fechaApuesta = new Date(apuesta.Fecha);
+          return fechaApuesta >= unAñoMenos && fechaApuesta <= ahora;
+        });
         break;
       default:
-        // 'todo' - no aplicamos filtro
         break;
     }
 
-    // Ordenar por fecha ascendente
-    return apuestasFiltradas.sort((a, b) => new Date(a.Fecha).getTime() - new Date(b.Fecha).getTime());
+    return apuestasFiltradas.sort((a, b) => 
+      new Date(a.Fecha).getTime() - new Date(b.Fecha).getTime()
+    );
   };
-
-
-  // Función para calcular el espaciado según el período
-  const calcularEspaciado = () => {
-    switch(periodoSeleccionado) {
-      case 'semana':
-        return 40; // Más espacio entre puntos para semana
-      case 'mes':
-        return 30; // Espacio medio para mes
-      case 'año':
-        return 20; // Menos espacio para año
-      case 'todo':
-        return 50; // El espaciado original para todos
-      default:
-        return 30;
-    }
-  };
-
 
   const handleFechaPress = (apuesta) => {
     setSelectedApuestaToUpdate(apuesta);
@@ -414,75 +411,116 @@ const handleDateChange = async (event, selectedDate) => {
           </View>
         </Modal>
 
-
-        <Text style={styles.cardTitle}>Aciertos y Errores</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <View style={styles.table}>
-            <View style={styles.tableRow}>
-              <View style={[styles.tableHeaderCell, styles.border]}>
-                <Text style={styles.tableHeaderText}>Apuesta</Text>
-              </View>
-              <View style={[styles.tableHeaderCell, styles.border]}>
-                <Text style={styles.tableHeaderText}>Acierto</Text>
-              </View>
-              <View style={[styles.tableHeaderCell, styles.border]}>
-                <Text style={styles.tableHeaderText}>Fecha</Text> 
-              </View>
-              <View style={[styles.tableHeaderCell, styles.border]}>
-                <Text style={styles.tableHeaderText}>Tipo de Apuesta</Text>
-              </View>
-              <View style={[styles.tableHeaderCell, styles.border]}>
-                <Text style={styles.tableHeaderText}>Cuota</Text>
-              </View>
-              <View style={[styles.tableHeaderCell, styles.border]}>
-                <Text style={styles.tableHeaderText}>Cant. Apostada</Text>
-              </View>
-              <View style={[styles.tableHeaderCell, styles.border]}>
-                <Text style={styles.tableHeaderText}>Ganancia</Text>
-              </View>
-            </View>
-
-            Filas de datos
-          {apuestasFiltradas().map((apuesta, index) => (
-            <View key={index} style={[styles.tableRow, index % 2 === 0 ? styles.evenRow : styles.oddRow]}>
-              <View style={[styles.tableCell, styles.border]}>
-                <TouchableOpacity onPress={() => handleEliminarPress(apuesta)}>
-                  <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.Apuesta}</Text>
-                </TouchableOpacity>
-              </View>
-              <View style={[styles.tableCell, styles.border]}>
-                <Text>{renderPronostico(apuesta.Acierto, apuesta)}</Text>
-              </View>
-              <View style={[styles.tableCell, styles.border]}>
-                  <TouchableOpacity onPress={() => handleFechaPress(apuesta)} style={styles.fechaContainer}>
-                    <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{formatearFecha(apuesta.Fecha)}</Text>
-                    <MaterialCommunityIcons name="calendar-edit" size={16} color="#ff9f1c" style={styles.calendarIcon} />
-                  </TouchableOpacity>
-                </View>
-              <View style={[styles.tableCell, styles.border]}>
-                <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.TipoDeApuesta}</Text>
-              </View>
-              <View style={[styles.tableCell, styles.border]}>
-                <Text style={[styles.cellText, { fontWeight: 'bold' }]}>
-                  {Number(apuesta.Cuota).toFixed(2)}
-                </Text>
-              </View>
-              <View style={[styles.tableCell, styles.border]}>
-                <Text style={[styles.cellText, { fontWeight: 'bold' }]}>
-                  {Number(apuesta.CantidadApostada).toFixed(2)}<Text>€</Text>
-                </Text>
-              </View>
-              <View style={[styles.tableCell, styles.border]}>
-                <Text style={[styles.cellText, { fontWeight: 'bold' }]}>
-                  {Number(calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto)).toFixed(2)}<Text>€</Text>
-                </Text>
-              </View>
-            </View>
-          ))}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Pronósticos</Text>
+          <View style={styles.filterButtons}>
+            <TouchableOpacity
+              style={[
+                styles.filterButton,
+                periodoSeleccionado === 'semana' && styles.filterButtonActive
+              ]}
+              onPress={() => setPeriodoSeleccionado('semana')}
+            >
+              <Text style={[
+                styles.filterButtonText,
+                periodoSeleccionado === 'semana' && styles.filterButtonTextActive
+              ]}>Semana</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[
+                styles.filterButton,
+                periodoSeleccionado === 'mes' && styles.filterButtonActive
+              ]}
+              onPress={() => setPeriodoSeleccionado('mes')}
+            >
+              <Text style={[
+                styles.filterButtonText,
+                periodoSeleccionado === 'mes' && styles.filterButtonTextActive
+              ]}>Mes</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[
+                styles.filterButton,
+                periodoSeleccionado === 'año' && styles.filterButtonActive
+              ]}
+              onPress={() => setPeriodoSeleccionado('año')}
+            >
+              <Text style={[
+                styles.filterButtonText,
+                periodoSeleccionado === 'año' && styles.filterButtonTextActive
+              ]}>Año</Text>
+            </TouchableOpacity>
+    
           </View>
-        </ScrollView>
-      </ScrollView>
 
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View style={styles.table}>
+              <View style={styles.tableRow}>
+                <View style={[styles.tableHeaderCell, styles.border]}>
+                  <Text style={styles.tableHeaderText}>Apuesta</Text>
+                </View>
+                <View style={[styles.tableHeaderCell, styles.border]}>
+                  <Text style={styles.tableHeaderText}>Acierto</Text>
+                </View>
+                <View style={[styles.tableHeaderCell, styles.border]}>
+                  <Text style={styles.tableHeaderText}>Fecha</Text> 
+                </View>
+                <View style={[styles.tableHeaderCell, styles.border]}>
+                  <Text style={styles.tableHeaderText}>Tipo de Apuesta</Text>
+                </View>
+                <View style={[styles.tableHeaderCell, styles.border]}>
+                  <Text style={styles.tableHeaderText}>Cuota</Text>
+                </View>
+                <View style={[styles.tableHeaderCell, styles.border]}>
+                  <Text style={styles.tableHeaderText}>Cant. Apostada</Text>
+                </View>
+                <View style={[styles.tableHeaderCell, styles.border]}>
+                  <Text style={styles.tableHeaderText}>Ganancia</Text>
+                </View>
+              </View>
+
+              {apuestasFiltradas().map((apuesta, index) => (
+                <View key={index} style={[styles.tableRow, index % 2 === 0 ? styles.evenRow : styles.oddRow]}>
+                  <View style={[styles.tableCell, styles.border]}>
+                    <TouchableOpacity onPress={() => handleEliminarPress(apuesta)}>
+                      <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.Apuesta}</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <View style={[styles.tableCell, styles.border]}>
+                    <Text>{renderPronostico(apuesta.Acierto, apuesta)}</Text>
+                  </View>
+                  <View style={[styles.tableCell, styles.border]}>
+                      <TouchableOpacity onPress={() => handleFechaPress(apuesta)} style={styles.fechaContainer}>
+                        <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{formatearFecha(apuesta.Fecha)}</Text>
+                        <MaterialCommunityIcons name="calendar-edit" size={16} color="#ff9f1c" style={styles.calendarIcon} />
+                      </TouchableOpacity>
+                    </View>
+                  <View style={[styles.tableCell, styles.border]}>
+                    <Text style={[styles.cellText, { fontWeight: 'bold' }]}>{apuesta.TipoDeApuesta}</Text>
+                  </View>
+                  <View style={[styles.tableCell, styles.border]}>
+                    <Text style={[styles.cellText, { fontWeight: 'bold' }]}>
+                      {Number(apuesta.Cuota).toFixed(2)}
+                    </Text>
+                  </View>
+                  <View style={[styles.tableCell, styles.border]}>
+                    <Text style={[styles.cellText, { fontWeight: 'bold' }]}>
+                      {Number(apuesta.CantidadApostada).toFixed(2)}<Text>€</Text>
+                    </Text>
+                  </View>
+                  <View style={[styles.tableCell, styles.border]}>
+                    <Text style={[styles.cellText, { fontWeight: 'bold' }]}>
+                      {Number(calcularGanancia(apuesta.CantidadApostada, apuesta.Cuota, apuesta.Acierto)).toFixed(2)}<Text>€</Text>
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </View>
+      </ScrollView>
 
       <Modal
         animationType="slide"
@@ -637,10 +675,10 @@ const styles = StyleSheet.create({
     marginBottom: 30,
     marginTop: 60,
     textAlign: "center",
-    color: "#ffba57",
+    color: "orange",
   },
   card: {
-    backgroundColor: "white",
+    backgroundColor: "rgba(33, 33, 33, 0.5)",
     padding: 20,
     borderRadius: 10,
     shadowColor: "#000",
@@ -655,7 +693,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     marginBottom: 30,
     textAlign: "center",
-    color: "black",
+    color: "#ffba57",
   },
   row: {
     flexDirection: "row",
@@ -664,13 +702,13 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 18,
-    color: "#777",
+    color: "white",
 
   },
   value: {
     fontSize: 16,
     fontWeight: "bold",
-    color: "#333",
+    color: "white",
   },
   table: {
     backgroundColor: "#2e2e2e",
@@ -766,13 +804,13 @@ const styles = StyleSheet.create({
   filterButtons: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    marginTop: 10,
+    marginBottom: 30,
     paddingHorizontal: 10,
     flexWrap: 'wrap',
     gap: 10,
   },
   filterButton: {
-    backgroundColor: 'rgba(33, 33, 33, 0.5)',
+    backgroundColor: '#2e2e2e',
     paddingHorizontal: 15,
     paddingVertical: 8,
     borderRadius: 20,
@@ -789,6 +827,10 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 12,
     textAlign: 'center',
+  },
+  filterButtonTextActive: {
+    color: 'white',
+    fontWeight: 'bold',
   },
   fechaContainer: {
     flexDirection: 'row',

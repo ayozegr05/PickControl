@@ -117,13 +117,23 @@ const GananciasPage = () => {
     // No iniciar las animaciones hasta que los datos estén completamente cargados
     useEffect(() => {
         if (!isLoading && dataLoaded) {
-            if (totalGanancias > 0 && rocketRef.current) {
-                rocketRef.current.play();
-            } else if (totalGanancias <= 0 && loseRef.current) {
-                loseRef.current.play();
-            }
+            // Iniciar la animación de las ganancias
+            animatedValue.setValue(0);
+            Animated.timing(animatedValue, {
+                toValue: totalGanancias,
+                duration: 1500,
+                useNativeDriver: false,
+            }).start(() => {
+                // Una vez terminada la animación, reproducir la animación de rocket o lose
+                if (totalGanancias > 0 && rocketRef.current) {
+                    rocketRef.current.play();
+                } else if (totalGanancias <= 0 && loseRef.current) {
+                    loseRef.current.play();
+                }
+            });
         }
     }, [isLoading, dataLoaded, totalGanancias]);
+    
 
     return (
         <View style={styles.container}>
