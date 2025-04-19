@@ -41,6 +41,19 @@ const apuestaSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Users',
         required: true
+    },
+    source: {
+        type: String,
+        enum: ['manual', 'telegram'],
+        default: 'manual'
+    },
+    channelId: {
+        type: String,
+        sparse: true
+    },
+    messageId: {
+        type: String,
+        sparse: true
     }
 }, {
     timestamps: true // Añade createdAt y updatedAt
@@ -88,6 +101,39 @@ const userSchema = new mongoose.Schema({
     toObject: { virtuals: true } // Incluye virtuals cuando conviertes a objeto
 });
 
+// Definir el esquema del canal de Telegram
+const telegramChannelSchema = new mongoose.Schema({
+    channelId: {
+        type: String,
+        required: true,
+        unique: true
+    },
+    name: {
+        type: String,
+        required: true
+    },
+    username: {
+        type: String
+    },
+    type: {
+        type: String
+    },
+    sport: {
+        type: String
+    },
+    active: {
+        type: Boolean,
+        default: true
+    },
+    lastChecked: {
+        type: Date,
+        default: Date.now
+    },
+    inviteLink: {
+        type: String
+    }
+});
+
 // Middleware para hashear la contraseña antes de guardar
 userSchema.pre('save', async function(next) {
     if (!this.isModified('password')) return next();
@@ -120,5 +166,6 @@ userSchema.virtual('apuestas', {
 // Crear los modelos
 const Pick = mongoose.model('Picks', apuestaSchema, 'Picks');
 const User = mongoose.model('Users', userSchema);
+const TelegramChannel = mongoose.model('TelegramChannel', telegramChannelSchema);
 
-export { Pick, User };
+export { Pick, User, TelegramChannel };
