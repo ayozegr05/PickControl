@@ -1,6 +1,37 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
+// Esquema para resultados de partidos
+const matchResultSchema = new mongoose.Schema({
+    teams: {
+        home: {
+            name: { type: String, required: true },
+            score: { type: Number, default: 0 }
+        },
+        away: {
+            name: { type: String, required: true },
+            score: { type: Number, default: 0 }
+        }
+    },
+    date: { type: Date, required: true },
+    competition: { type: String, required: true },
+    status: { type: String, enum: ['pending', 'completed', 'cancelled'], default: 'pending' },
+    sources: [{
+        name: { type: String, required: true },
+        url: String,
+        lastChecked: Date,
+        verified: { type: Boolean, default: false }
+    }],
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
+}, {
+    timestamps: true
+});
+
+// Índices para búsqueda rápida
+matchResultSchema.index({ 'teams.home.name': 1, 'teams.away.name': 1, date: 1 }, { unique: true });
+matchResultSchema.index({ date: 1 });
+
 // Definir el esquema de la apuesta
 const apuestaSchema = new mongoose.Schema({
     Apuesta: { 
@@ -167,5 +198,6 @@ userSchema.virtual('apuestas', {
 const Pick = mongoose.model('Picks', apuestaSchema, 'Picks');
 const User = mongoose.model('Users', userSchema);
 const TelegramChannel = mongoose.model('TelegramChannel', telegramChannelSchema);
+const MatchResult = mongoose.model('MatchResults', matchResultSchema);
 
-export { Pick, User, TelegramChannel };
+export { Pick, User, TelegramChannel, MatchResult };
