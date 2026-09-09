@@ -30,6 +30,7 @@ venv/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.pgdata_dev/
 
 # ============================
 # Telegram (Telethon) sesiones

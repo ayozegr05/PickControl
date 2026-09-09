@@ -12,11 +12,13 @@ class InformanteRead(InformanteBase):
 
 
 class InformanteStats(SQLModel):
-    """Equivalente a la respuesta de GET /informante/:informante en Node."""
+    """Equivalente a la respuesta de GET /informante/:informante en Node,
+    con el campo `yield_pct` añadido (métrica nueva, no existía en Node)."""
 
     informante: str
     total_apuestas: int
     total_aciertos: int
     ganancias: float
     porcentaje_aciertos: float
+    yield_pct: float
     apuestas: list[PickRead] = []

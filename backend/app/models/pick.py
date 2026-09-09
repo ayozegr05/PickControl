@@ -3,7 +3,11 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+from sqlalchemy import Column
+from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, SQLModel
+
+from app.models._enum_utils import enum_values
 
 
 class Acierto(str, Enum):
@@ -20,12 +24,18 @@ class PickSource(str, Enum):
 class PickBase(SQLModel):
     apuesta: str
     tipo_de_apuesta: str = Field(max_length=50)
-    acierto: Acierto = Field(default=Acierto.PENDING)
+    acierto: Acierto = Field(
+        default=Acierto.PENDING,
+        sa_column=Column(SAEnum(Acierto, name="acierto", values_callable=enum_values), nullable=False),
+    )
     casa: str = Field(max_length=100)
     cantidad_apostada: float = Field(default=0)
     cuota: float = Field(default=1)
     fecha: datetime = Field(default_factory=datetime.utcnow)
-    source: PickSource = Field(default=PickSource.MANUAL)
+    source: PickSource = Field(
+        default=PickSource.MANUAL,
+        sa_column=Column(SAEnum(PickSource, name="picksource", values_callable=enum_values), nullable=False),
+    )
     channel_id: Optional[str] = None
     message_id: Optional[str] = None
 
