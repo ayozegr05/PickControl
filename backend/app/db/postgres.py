@@ -4,9 +4,10 @@ Sustituye a `DbMongo/db.js` (Mongoose) del backend Node original.
 """
 from collections.abc import AsyncGenerator
 
-from sqlmodel import SQLModel
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import sessionmaker
+from sqlmodel import SQLModel
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import get_settings
 
@@ -22,7 +23,12 @@ AsyncSessionLocal = sessionmaker(
 
 
 async def init_db() -> None:
-    """Crea las tablas si no existen (equivalente a connectDB() + mongoose.connect)."""
+    """Crea las tablas a partir de los modelos, sin pasar por Alembic.
+
+    Solo se usa en tests (contra SQLite en memoria). El esquema real en
+    desarrollo/producción se gestiona con `alembic upgrade head`
+    (ver `app/db/migrations/`), nunca con esta función.
+    """
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
 
