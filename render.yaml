@@ -4,9 +4,13 @@ services:
     env: node
     plan: free
     buildCommand: cd backend && npm install
-    startCommand: cd backend && npm run dev 
+    startCommand: cd backend && npm run dev
     branch: main
     envVars:
-      - key: DB_CONNECTION
-        value: "mongodb+srv://asertete:jilberto@cluster0.sazyt.mongodb.net/PickControl?retryWrites=true&w=majority&appName=Cluster0"
-        
+      # El valor real se configura manualmente en el dashboard de Render
+      # (Environment > Secret), nunca en este archivo versionado.
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+

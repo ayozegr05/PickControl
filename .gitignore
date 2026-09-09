@@ -1,0 +1,59 @@
+# ============================
+# Variables de entorno / secretos
+# ============================
+.env
+.env.*
+!.env.example
+.ENV
+.ENV.*
+!.ENV.example
+*.pem
+*.key
+
+# ============================
+# Node.js
+# ============================
+node_modules/
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+package-lock.json.bak
+
+# ============================
+# Python
+# ============================
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# ============================
+# Telegram (Telethon) sesiones
+# ============================
+*.session
+*.session-journal
+
+# ============================
+# Expo / React Native
+# ============================
+.expo/
+dist/
+web-build/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+android/app/build/
+android/.gradle/
+.metro-health-check*
+
+# ============================
+# Sistema / IDE
+# ============================
+.DS_Store
+*.tsbuildinfo
