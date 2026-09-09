@@ -1,0 +1,35 @@
+// Equivalente TS de backend/app/schemas/pick.py
+// Nota: la entidad se llama `PickItem` (y no `Pick`) para no chocar con el
+// tipo utilitario `Pick<T, K>` de TypeScript.
+
+export type Acierto = "Pending" | "True" | "False";
+export type PickSource = "manual" | "telegram";
+
+export interface PickItem {
+  id: number;
+  apuesta: string;
+  informante: string;
+  tipoDeApuesta: string;
+  acierto: Acierto;
+  casa: string;
+  cantidadApostada: number;
+  cuota: number;
+  fecha: string; // ISO 8601
+  source: PickSource;
+  ganancia?: number;
+}
+
+export interface PickCreatePayload {
+  apuesta: string;
+  informante: string;
+  tipoDeApuesta: string;
+  casa: string;
+  acierto?: Acierto;
+  cantidadApostada?: number;
+  cuota?: number;
+}
+
+export interface PickUpdatePayload {
+  acierto?: Acierto;
+  fecha?: string;
+}

@@ -1,0 +1,3 @@
+- Explica siempre de forma breve en español qué vas a hacer antes de modificar o crear archivos.
+- Al terminar cada tarea, entrega un resumen claro archivo por archivo.
+- Prioriza la tipificación estricta (TypeScript/Pydantic) y una arquitectura modular sin romper el código legacy.
