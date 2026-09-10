@@ -7,6 +7,7 @@ from sqlalchemy import Column
 from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, SQLModel
 
+from app.core.dates import utc_now
 from app.models._enum_utils import enum_values
 
 
@@ -31,5 +32,5 @@ class User(UserBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     password_hash: str
     last_login: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
