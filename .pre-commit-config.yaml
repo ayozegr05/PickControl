@@ -1,0 +1,18 @@
+repos:
+  - repo: local
+    hooks:
+      - id: black-backend
+        name: black backend
+        entry: black
+        language: system
+        types: [python]
+        files: ^backend/.*\.py$
+        pass_filenames: true
+
+      - id: ruff-backend
+        name: ruff backend
+        entry: ruff check --fix
+        language: system
+        types: [python]
+        files: ^backend/.*\.py$
+        pass_filenames: true
