@@ -20,7 +20,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
+from app.core.config import get_settings
 from app.core.lifecycle import lifespan
+
+
+def _parse_cors_origins(origins: str) -> list[str]:
+    """Convierte una lista separada por comas en una lista de strings.
+
+    El valor "*" (como string único) se deja tal cual para CORS.
+    """
+    stripped = [o.strip() for o in origins.split(",") if o.strip()]
+    return stripped if stripped else ["*"]
+
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -66,11 +77,13 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
-# CORS abierto para desarrollo, igual que `app.use(cors())` en app.js.
-# En producción, restringir `allow_origins` al dominio del frontend.
+settings = get_settings()
+
+# CORS configurable por entorno. Ver la variable CORS_ORIGINS en .env.
+# En desarrollo suele ser "*"; en producción, lista de dominios autorizados.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_parse_cors_origins(settings.cors_origins),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

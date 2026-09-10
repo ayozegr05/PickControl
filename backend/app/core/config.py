@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # Servidor
     node_env: str = "development"
     server_url: str = "http://localhost:3000"
+    # Orígenes permitidos para CORS. En desarrollo suele ser "*"; en
+    # producción, una lista separada por comas, p. ej.:
+    # CORS_ORIGINS=https://app.tudominio.com,https://admin.tudominio.com
+    cors_origins: str = "*"
 
     # Base de datos (PostgreSQL)
     database_url: str = (
