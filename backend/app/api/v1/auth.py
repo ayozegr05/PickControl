@@ -4,12 +4,11 @@ Migrado de `backend/DbMongo/routes.js`:
 - POST /register  (líneas 8-47 de routes.js)
 - POST /login      (líneas 50-92 de routes.js)
 """
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.core.dates import utc_now
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.postgres import get_session
 from app.models.user import User
@@ -54,7 +53,7 @@ async def login(payload: UserLogin, session: AsyncSession = Depends(get_session)
 
     # Naive UTC, igual que created_at/updated_at (la columna es
     # TIMESTAMP WITHOUT TIME ZONE; asyncpg rechaza datetimes tz-aware ahí).
-    user.last_login = datetime.utcnow()
+    user.last_login = utc_now()
     session.add(user)
     await session.commit()
     await session.refresh(user)

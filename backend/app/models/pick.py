@@ -7,6 +7,7 @@ from sqlalchemy import Column
 from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, SQLModel
 
+from app.core.dates import utc_now
 from app.models._enum_utils import enum_values
 
 
@@ -31,7 +32,7 @@ class PickBase(SQLModel):
     casa: str = Field(max_length=100)
     cantidad_apostada: float = Field(default=0)
     cuota: float = Field(default=1)
-    fecha: datetime = Field(default_factory=datetime.utcnow)
+    fecha: datetime = Field(default_factory=utc_now)
     source: PickSource = Field(
         default=PickSource.MANUAL,
         sa_column=Column(SAEnum(PickSource, name="picksource", values_callable=enum_values), nullable=False),
@@ -46,5 +47,5 @@ class Pick(PickBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     usuario_id: int = Field(foreign_key="users.id")
     informante_id: int = Field(foreign_key="informantes.id")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)

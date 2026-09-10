@@ -29,6 +29,7 @@ __pycache__/
 venv/
 .mypy_cache/
 .pytest_cache/
+.coverage
 .ruff_cache/
 .pgdata_dev/
 
