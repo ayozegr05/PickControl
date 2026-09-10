@@ -6,15 +6,16 @@ porque `DATABASE_URL` usa el driver `postgresql+asyncpg://`, que no es
 compatible con el `engine_from_config` síncrono que genera `alembic init`
 por defecto.
 """
+
 import asyncio
 from logging.config import fileConfig
 
+from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlmodel import SQLModel
 
-from alembic import context
 from app.core.config import get_settings
 
 # Importa los modelos para que queden registrados en SQLModel.metadata

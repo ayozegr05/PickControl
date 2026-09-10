@@ -4,6 +4,7 @@ Equivalente a lo que en el backend Node se hacía con:
 - `bcryptjs` (hash/compare de password en `model.js`, middleware `pre('save')`)
 - `jsonwebtoken` (`jwt.sign` / `jwt.verify` en `DbMongo/routes.js`)
 """
+
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -35,7 +36,9 @@ def create_access_token(data: dict[str, Any]) -> str:
     `data` debe incluir los claims que queramos exponer, por ejemplo
     `{"sub": str(user.id), "email": user.email, "role": user.role}`.
     """
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_expires_minutes)
+    expire = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.jwt_expires_minutes
+    )
     to_encode = {**data, "exp": expire}
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
@@ -44,6 +47,8 @@ def decode_access_token(token: str) -> dict[str, Any]:
     """Decodifica y valida un JWT. Lanza `JWTError` si el token es
     inválido o expiró (equivalente a `jwt.verify(...)`)."""
     try:
-        return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        return jwt.decode(
+            token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+        )
     except JWTError as exc:
         raise exc

@@ -11,6 +11,7 @@ servidor hay que aplicar las migraciones de Alembic:
 Ver `app/db/migrations/` y `app/db/postgres.py` (`init_db` se conserva
 solo para los tests, que usan una base de datos SQLite efímera).
 """
+
 import logging
 
 from fastapi import FastAPI
@@ -19,7 +20,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_router
 from app.core.lifecycle import lifespan
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+)
 
 app = FastAPI(
     title="Tipster Auditor API",

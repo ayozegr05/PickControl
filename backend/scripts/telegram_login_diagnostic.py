@@ -12,6 +12,7 @@ haber pedido demasiados códigos seguidos).
 Este script es solo una herramienta de diagnóstico puntual; no forma
 parte del arranque normal de la app (ver `app/services/telegram/`).
 """
+
 import asyncio
 import os
 import sys
@@ -49,14 +50,18 @@ async def main() -> None:
         print(f"  Tipo de envío: {type(sent.type).__name__}")
         print(f"  phone_code_hash: {sent.phone_code_hash}")
         print(f"  timeout: {sent.timeout}s")
-        print("\nRevisa el chat 'Telegram' en tu app/Telegram Web (o el SMS) "
-              "y entra el código en los próximos segundos si quieres "
-              "completar el login manualmente con otro script.")
+        print(
+            "\nRevisa el chat 'Telegram' en tu app/Telegram Web (o el SMS) "
+            "y entra el código en los próximos segundos si quieres "
+            "completar el login manualmente con otro script."
+        )
     except FloodWaitError as e:
-        print(f"FLOOD WAIT: Telegram está bloqueando el envío de códigos "
-              f"durante {e.seconds} segundos (~{e.seconds / 60:.1f} min) "
-              f"por exceso de solicitudes recientes. Espera ese tiempo antes "
-              f"de reintentar.")
+        print(
+            f"FLOOD WAIT: Telegram está bloqueando el envío de códigos "
+            f"durante {e.seconds} segundos (~{e.seconds / 60:.1f} min) "
+            f"por exceso de solicitudes recientes. Espera ese tiempo antes "
+            f"de reintentar."
+        )
     except Exception as e:  # noqa: BLE001
         print(f"Error inesperado al pedir el código: {type(e).__name__}: {e}")
     finally:

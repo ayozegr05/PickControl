@@ -3,6 +3,7 @@
 Migrado de `backend/DbMongo/routes.js`:
 - GET /informante/:informante (líneas 185-235)
 """
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession

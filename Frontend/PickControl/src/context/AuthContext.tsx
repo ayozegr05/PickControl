@@ -1,8 +1,8 @@
 // Movido desde app/context/AuthContext.tsx (Fase 3: reorganizacion hacia
 // src/ junto con la nueva capa de API). La logica es la misma, solo cambia
 // la ubicacion del archivo.
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import React, { createContext, useContext, useState, useEffect } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 type AuthContextType = {
   isAuthenticated: boolean;
@@ -24,34 +24,34 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const checkAuth = async () => {
     try {
-      const token = await AsyncStorage.getItem('userToken');
-      const storedUserName = await AsyncStorage.getItem('userName');
+      const token = await AsyncStorage.getItem("userToken");
+      const storedUserName = await AsyncStorage.getItem("userName");
       setIsAuthenticated(!!token);
       setUserName(storedUserName);
     } catch (error) {
-      console.error('Error checking auth:', error);
+      console.error("Error checking auth:", error);
     }
   };
 
   const login = async (token: string, name: string) => {
     try {
-      await AsyncStorage.setItem('userToken', token);
-      await AsyncStorage.setItem('userName', name);
+      await AsyncStorage.setItem("userToken", token);
+      await AsyncStorage.setItem("userName", name);
       setIsAuthenticated(true);
       setUserName(name);
     } catch (error) {
-      console.error('Error storing token:', error);
+      console.error("Error storing token:", error);
     }
   };
 
   const logout = async () => {
     try {
-      await AsyncStorage.removeItem('userToken');
-      await AsyncStorage.removeItem('userName');
+      await AsyncStorage.removeItem("userToken");
+      await AsyncStorage.removeItem("userName");
       setIsAuthenticated(false);
       setUserName(null);
     } catch (error) {
-      console.error('Error removing token:', error);
+      console.error("Error removing token:", error);
     }
   };
 
@@ -67,7 +67,7 @@ export default AuthContext;
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
+    throw new Error("useAuth must be used within an AuthProvider");
   }
   return context;
 };

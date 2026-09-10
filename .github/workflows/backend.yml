@@ -37,5 +37,11 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
+      - name: Check formatting with Black
+        run: black --check --diff .
+
+      - name: Lint with Ruff
+        run: ruff check .
+
       - name: Run tests
         run: python -m pytest -v

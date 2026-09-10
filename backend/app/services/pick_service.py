@@ -11,6 +11,7 @@ del beneficio neto. Aquí se corrige para que coincida con la fórmula
 correcta que ya usaba el frontend: `stake * (cuota - 1)` si acierta,
 `-stake` si falla, `0` si está pendiente.
 """
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -34,7 +35,9 @@ def to_naive_utc(dt: datetime) -> datetime:
     return dt
 
 
-def calcular_ganancia(cantidad_apostada: float, cuota: float, acierto: Acierto) -> float:
+def calcular_ganancia(
+    cantidad_apostada: float, cuota: float, acierto: Acierto
+) -> float:
     """Beneficio neto de una apuesta individual."""
     if acierto == Acierto.TRUE:
         return round(cantidad_apostada * (cuota - 1), 2)
@@ -75,10 +78,16 @@ def calcular_stats(picks: list[Pick]) -> InformanteStatsResult:
     finalizadas = [p for p in picks if p.acierto != Acierto.PENDING]
     total_aciertos = sum(1 for p in finalizadas if p.acierto == Acierto.TRUE)
     total_apostado = sum(p.cantidad_apostada for p in finalizadas)
-    ganancias = round(sum(ganancias_por_pick[p.id] for p in finalizadas if p.id is not None), 2)
+    ganancias = round(
+        sum(ganancias_por_pick[p.id] for p in finalizadas if p.id is not None), 2
+    )
 
-    porcentaje_aciertos = round((total_aciertos / len(finalizadas)) * 100, 2) if finalizadas else 0.0
-    yield_pct = round((ganancias / total_apostado) * 100, 2) if total_apostado > 0 else 0.0
+    porcentaje_aciertos = (
+        round((total_aciertos / len(finalizadas)) * 100, 2) if finalizadas else 0.0
+    )
+    yield_pct = (
+        round((ganancias / total_apostado) * 100, 2) if total_apostado > 0 else 0.0
+    )
 
     return InformanteStatsResult(
         total_apuestas=total_apuestas,

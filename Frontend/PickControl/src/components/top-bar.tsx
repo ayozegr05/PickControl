@@ -1,14 +1,20 @@
 // TopBar.tsx
-import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { MaterialCommunityIcons } from '@expo/vector-icons'; 
-import FontAwesome from '@expo/vector-icons/FontAwesome';
+import React, { useState, useEffect } from "react";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Animated,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { useRouter } from "expo-router";
-import { useAuth } from '@/src/context/AuthContext';
-import { Alert } from 'react-native';
-import { listPicks } from '@/src/api/picks.api';
-import { PickItem } from '@/src/types/pick.types';
+import { useAuth } from "@/src/context/AuthContext";
+import { Alert } from "react-native";
+import { listPicks } from "@/src/api/picks.api";
+import { PickItem } from "@/src/types/pick.types";
 
 const BAR_HEIGHT = 60;
 
@@ -22,7 +28,10 @@ const TopBar = () => {
   const insets = useSafeAreaInsets();
 
   const calcularTotalGanancias = (apuestas: PickItem[]) => {
-    return apuestas.reduce((total, apuesta) => total + (apuesta.ganancia ?? 0), 0);
+    return apuestas.reduce(
+      (total, apuesta) => total + (apuesta.ganancia ?? 0),
+      0
+    );
   };
 
   // Cargar ganancias totales
@@ -33,7 +42,7 @@ const TopBar = () => {
         const total = calcularTotalGanancias(picks);
         setGananciasTotal(total);
       } catch (error) {
-        console.error('Error al cargar ganancias:', error);
+        console.error("Error al cargar ganancias:", error);
       }
     };
 
@@ -69,27 +78,20 @@ const TopBar = () => {
       // token guardado localmente.
       await logout();
       setMenuOpen(false);
-      
+
       // Mostrar mensaje de éxito
-      Alert.alert(
-        "Sesión Cerrada",
-        "Has cerrado sesión correctamente",
-        [
-          { 
-            text: "OK", 
-            onPress: () => router.replace('/')
-          }
-        ]
-      );
+      Alert.alert("Sesión Cerrada", "Has cerrado sesión correctamente", [
+        {
+          text: "OK",
+          onPress: () => router.replace("/"),
+        },
+      ]);
     } catch (error) {
-      console.error('Error al cerrar sesión:', error);
-      Alert.alert(
-        "Error",
-        "Hubo un problema al cerrar la sesión"
-      );
+      console.error("Error al cerrar sesión:", error);
+      Alert.alert("Error", "Hubo un problema al cerrar la sesión");
     }
   };
-  
+
   return (
     <Animated.View
       style={[
@@ -101,21 +103,30 @@ const TopBar = () => {
       ]}
     >
       <View style={styles.content}>
-        <TouchableOpacity onPress={() => router.push('/')}>
+        <TouchableOpacity onPress={() => router.push("/")}>
           <Text style={styles.title}>PickControl</Text>
         </TouchableOpacity>
         {isAuthenticated && (
           <View style={styles.rightSection}>
             <View style={styles.userContainer}>
-              <View style={ styles.gananciasContainer }>
+              <View style={styles.gananciasContainer}>
                 <FontAwesome name="bank" size={20} color="white" />
-                <Text style={[styles.subText, { color: gananciasTotal >= 0 ? '#4CAF50' : '#F44336' }]}>
+                <Text
+                  style={[
+                    styles.subText,
+                    { color: gananciasTotal >= 0 ? "#4CAF50" : "#F44336" },
+                  ]}
+                >
                   {gananciasTotal.toFixed(2)}€
                 </Text>
               </View>
               <View style={styles.iconContainer}>
                 <TouchableOpacity onPress={toggleMenu}>
-                  <MaterialCommunityIcons name="account-circle" size={24} color="white" />
+                  <MaterialCommunityIcons
+                    name="account-circle"
+                    size={24}
+                    color="white"
+                  />
                 </TouchableOpacity>
                 {isAuthenticated && (
                   <Text style={styles.userTitle}>{userName}</Text>
@@ -126,13 +137,13 @@ const TopBar = () => {
         )}
         {!isAuthenticated ? (
           <View style={styles.rightSection}>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.authButton}
               onPress={() => router.push("/screens/login")}
             >
               <Text style={styles.authButtonText}>Login</Text>
             </TouchableOpacity>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.authButton}
               onPress={() => router.push("/screens/register")}
             >
@@ -147,7 +158,7 @@ const TopBar = () => {
             <>
               <TouchableOpacity>
                 <Text style={styles.menuText}>Mi Perfil</Text>
-              </TouchableOpacity>               
+              </TouchableOpacity>
               <TouchableOpacity onPress={() => router.push("/screens/earns")}>
                 <Text style={styles.menuText}>Mis Ganancias</Text>
               </TouchableOpacity>
@@ -164,18 +175,18 @@ const TopBar = () => {
 
 const styles = StyleSheet.create({
   topBar: {
-    position: 'absolute',
+    position: "absolute",
     top: 0,
     left: 0,
     right: 0,
-    backgroundColor: '#2d2d2d',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    backgroundColor: "#2d2d2d",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 15,
     zIndex: 1000,
     elevation: 5,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: {
       width: 0,
       height: 2,
@@ -183,57 +194,57 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     borderBottomWidth: 1,
-    borderBottomColor: '#3d3d3d',
+    borderBottomColor: "#3d3d3d",
   },
   content: {
     flex: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
   },
   leftSection: {
     flex: 1,
-    alignItems: 'flex-start',
-    justifyContent: 'center',
+    alignItems: "flex-start",
+    justifyContent: "center",
   },
   rightSection: {
     flex: 1,
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    alignItems: 'center',
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
     gap: 8,
   },
   userContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
     gap: 16,
   },
   iconContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   subText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 12,
     marginTop: 4,
   },
   gananciasContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 2
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 2,
   },
   menuOptions: {
-    position: 'absolute',
+    position: "absolute",
     top: 60,
     right: 0,
-    alignItems: 'flex-end',
-    backgroundColor: '#3d3d3d',
+    alignItems: "flex-end",
+    backgroundColor: "#3d3d3d",
     width: 150,
     padding: 10,
     borderRadius: 8,
     elevation: 5,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: {
       width: 0,
       height: 2,
@@ -241,23 +252,23 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     borderWidth: 1,
-    borderColor: '#3d3d3d',
+    borderColor: "#3d3d3d",
   },
   menuText: {
-    color: '#fff',
+    color: "#fff",
     padding: 10,
     fontSize: 16,
   },
   authButton: {
-    backgroundColor: 'transparent',
+    backgroundColor: "transparent",
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#ff9f1c',
+    borderColor: "#ff9f1c",
     marginLeft: 1,
     elevation: 2,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: {
       width: 0,
       height: 1,
@@ -266,21 +277,21 @@ const styles = StyleSheet.create({
     shadowRadius: 1.41,
   },
   authButtonText: {
-    color: '#ff9f1c',
+    color: "#ff9f1c",
     fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
+    fontWeight: "600",
+    textAlign: "center",
   },
   title: {
-    color: '#ff9f1c',
+    color: "#ff9f1c",
     fontSize: 20,
-    fontWeight: 'bold',
+    fontWeight: "bold",
   },
   userTitle: {
-    color: 'white',
+    color: "white",
     fontSize: 12,
-    fontWeight: 'bold',
-  }
+    fontWeight: "bold",
+  },
 });
 
 export default TopBar;

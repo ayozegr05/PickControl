@@ -4,6 +4,7 @@ A diferencia de test_pick_service.py, estos SÍ pasan por la app FastAPI
 real (vía el fixture `client` de conftest.py) y por una base de datos,
 aunque sea la SQLite en memoria de test, nunca la de desarrollo/producción.
 """
+
 from httpx import AsyncClient
 
 REGISTER_PAYLOAD = {
@@ -34,7 +35,9 @@ class TestRegister:
         assert second.status_code == 400
         assert "ya está registrado" in second.json()["detail"]
 
-    async def test_register_password_demasiado_corta_falla_validacion(self, client: AsyncClient):
+    async def test_register_password_demasiado_corta_falla_validacion(
+        self, client: AsyncClient
+    ):
         response = await client.post(
             "/api/v1/auth/register",
             json={"name": "Ana", "email": "ana@example.com", "password": "123"},
@@ -48,7 +51,10 @@ class TestLogin:
 
         response = await client.post(
             "/api/v1/auth/login",
-            json={"email": REGISTER_PAYLOAD["email"], "password": REGISTER_PAYLOAD["password"]},
+            json={
+                "email": REGISTER_PAYLOAD["email"],
+                "password": REGISTER_PAYLOAD["password"],
+            },
         )
         assert response.status_code == 200
         assert response.json()["token"]

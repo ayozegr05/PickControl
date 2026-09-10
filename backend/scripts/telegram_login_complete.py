@@ -9,6 +9,7 @@ la misma que usará luego `app/services/telegram/client.py` al arrancar
 el backend. Script de diagnóstico puntual, no forma parte del arranque
 normal de la app.
 """
+
 import asyncio
 import os
 import sys
@@ -41,7 +42,9 @@ async def main() -> None:
         me = await client.get_me()
         print(f"Login completado correctamente como: {me.first_name} (@{me.username})")
     except SessionPasswordNeededError:
-        password = input("Verificación en dos pasos activada. Introduce tu contraseña de Telegram: ")
+        password = input(
+            "Verificación en dos pasos activada. Introduce tu contraseña de Telegram: "
+        )
         await client.sign_in(password=password)
         me = await client.get_me()
         print(f"Login completado correctamente como: {me.first_name} (@{me.username})")

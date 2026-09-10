@@ -5,6 +5,7 @@ datetimes tz-aware ahí), así que el estándar interno es "UTC naive":
 hora UTC sin `tzinfo`. `datetime.utcnow()` está deprecado desde Python
 3.12; `utc_now()` es su reemplazo equivalente.
 """
+
 from datetime import datetime, timezone
 
 

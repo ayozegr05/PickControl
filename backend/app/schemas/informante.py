@@ -1,4 +1,5 @@
 """DTOs de entrada/salida para el recurso `Informante`."""
+
 from sqlmodel import SQLModel
 
 from app.models.informante import InformanteBase

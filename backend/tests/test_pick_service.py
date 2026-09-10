@@ -6,6 +6,7 @@ fórmula de ganancia neta, que en el backend Node original tenía un bug
 (ver docstring de `pick_service.py`): calculaba `stake * cuota` (retorno
 bruto) en vez de `stake * (cuota - 1)` (beneficio neto).
 """
+
 from app.models.pick import Acierto, Pick, PickSource
 from app.services.pick_service import calcular_ganancia, calcular_stats
 
@@ -59,9 +60,9 @@ class TestCalcularStats:
 
     def test_mezcla_de_aciertos_y_fallos(self):
         picks = [
-            _make_pick(1, 10, 2.0, Acierto.TRUE),   # +10
+            _make_pick(1, 10, 2.0, Acierto.TRUE),  # +10
             _make_pick(2, 10, 3.0, Acierto.FALSE),  # -10
-            _make_pick(3, 20, 1.5, Acierto.TRUE),   # +10
+            _make_pick(3, 20, 1.5, Acierto.TRUE),  # +10
         ]
         stats = calcular_stats(picks)
         assert stats.total_apuestas == 3

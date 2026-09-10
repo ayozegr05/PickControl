@@ -4,6 +4,7 @@ Arranca y detiene el listener de Telegram (Telethon) de forma
 concurrente con el servidor FastAPI, usando el patrón `lifespan`
 (ver `app/main.py`) en vez de los eventos `on_event` (deprecados).
 """
+
 import asyncio
 import logging
 from contextlib import asynccontextmanager

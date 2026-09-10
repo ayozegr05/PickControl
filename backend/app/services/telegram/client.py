@@ -12,6 +12,7 @@ login, la sesión queda guardada en un archivo
 `<TELEGRAM_SESSION_NAME>.session` y los siguientes arranques son
 automáticos.
 """
+
 from telethon import TelegramClient
 
 from app.core.config import get_settings

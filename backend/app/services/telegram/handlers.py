@@ -5,6 +5,7 @@ configurado (`TELEGRAM_TARGET_CHANNEL`) y los reenvía al stub de
 procesamiento de `processor.py`. La lógica de interpretación (LLM) se
 añadirá en una fase posterior.
 """
+
 import logging
 
 from telethon import TelegramClient, events
