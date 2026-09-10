@@ -1,8 +1,8 @@
-"""Completa el login de Telethon iniciado por `telegram_login_diagnostic.py`.
+r"""Completa el login de Telethon iniciado por `telegram_login_diagnostic.py`.
 
 Uso:
 
-    .\\.venv\\Scripts\\python.exe scripts\\telegram_login_complete.py <CODIGO> <PHONE_CODE_HASH>
+    .\.venv\Scripts\python.exe scripts/telegram_login_complete.py <CODIGO> <PHONE_CODE_HASH>
 
 Guarda la sesión autenticada en `<TELEGRAM_SESSION_NAME>.session`, que es
 la misma que usará luego `app/services/telegram/client.py` al arrancar
@@ -11,12 +11,18 @@ normal de la app.
 """
 
 import asyncio
+import logging
 import os
 import sys
 
 from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+)
+logger = logging.getLogger("scripts.telegram_login_complete")
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
@@ -28,7 +34,7 @@ session_name = os.getenv("TELEGRAM_SESSION_NAME", "controlpick_telegram")
 
 async def main() -> None:
     if len(sys.argv) < 3:
-        print("Uso: telegram_login_complete.py <CODIGO> <PHONE_CODE_HASH>")
+        logger.error("Uso: telegram_login_complete.py <CODIGO> <PHONE_CODE_HASH>")
         sys.exit(1)
 
     code = sys.argv[1]
@@ -40,16 +46,24 @@ async def main() -> None:
     try:
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
         me = await client.get_me()
-        print(f"Login completado correctamente como: {me.first_name} (@{me.username})")
+        logger.info(
+            "Login completado correctamente como: %s (@%s)",
+            me.first_name,
+            me.username,
+        )
     except SessionPasswordNeededError:
         password = input(
             "Verificación en dos pasos activada. Introduce tu contraseña de Telegram: "
         )
         await client.sign_in(password=password)
         me = await client.get_me()
-        print(f"Login completado correctamente como: {me.first_name} (@{me.username})")
+        logger.info(
+            "Login completado correctamente como: %s (@%s)",
+            me.first_name,
+            me.username,
+        )
     except Exception as e:  # noqa: BLE001
-        print(f"Error al iniciar sesión: {type(e).__name__}: {e}")
+        logger.error("Error al iniciar sesión: %s: %s", type(e).__name__, e)
     finally:
         await client.disconnect()
 
