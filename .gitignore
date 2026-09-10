@@ -39,6 +39,12 @@ venv/
 *.session-journal
 
 # ============================
+# Backend: bases de datos locales y logs de desarrollo
+# ============================
+*.db
+*.log
+
+# ============================
 # Expo / React Native
 # ============================
 .expo/
