@@ -9,10 +9,11 @@ posterior; este módulo existe para fijar ya el contrato de datos
 `handlers.py` a los detalles de esa futura implementación.
 """
 
-import logging
 from dataclasses import dataclass
 
-logger = logging.getLogger("app.telegram")
+from app.core.logging import get_logger
+
+logger = get_logger("app.telegram")
 
 
 @dataclass

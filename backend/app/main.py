@@ -12,8 +12,6 @@ Ver `app/db/migrations/` y `app/db/postgres.py` (`init_db` se conserva
 solo para los tests, que usan una base de datos SQLite efímera).
 """
 
-import logging
-
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +20,7 @@ from fastapi.responses import JSONResponse
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.lifecycle import lifespan
+from app.core.logging import configure_logging, get_logger
 
 
 def _parse_cors_origins(origins: str) -> list[str]:
@@ -33,11 +32,10 @@ def _parse_cors_origins(origins: str) -> list[str]:
     return stripped if stripped else ["*"]
 
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-)
+settings = get_settings()
+configure_logging(settings.node_env)
 
-logger = logging.getLogger("app.main")
+logger = get_logger("app.main")
 
 app = FastAPI(
     title="Tipster Auditor API",
@@ -76,8 +74,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         content={"error": "Internal server error"},
     )
 
-
-settings = get_settings()
 
 # CORS configurable por entorno. Ver la variable CORS_ORIGINS en .env.
 # En desarrollo suele ser "*"; en producción, lista de dominios autorizados.

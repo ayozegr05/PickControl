@@ -11,6 +11,9 @@ from time import monotonic
 from fastapi import HTTPException, Request, status
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
+
+logger = get_logger("app.rate_limit")
 
 _WINDOW_SECONDS = 60
 _DEFAULT_LIMIT = 5
@@ -40,6 +43,7 @@ def check_rate_limit(request: Request, limit: int = _DEFAULT_LIMIT) -> None:
         queue.popleft()
 
     if len(queue) >= limit:
+        logger.warning("Rate limit exceeded for IP %s", ip)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Demasiadas peticiones. Inténtalo de nuevo en un minuto.",
