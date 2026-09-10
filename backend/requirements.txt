@@ -12,3 +12,7 @@ passlib[bcrypt]>=1.7,<2.0
 # "password cannot be longer than 72 bytes" al autodetectar el backend).
 bcrypt>=4.0.1,<4.1
 python-multipart>=0.0.9,<1.0
+
+# Telegram: cliente de usuario (Telethon) para escuchar canales, sustituye
+# a `node-telegram-bot-api` del backend Node retirado.
+telethon>=1.44,<2.0
