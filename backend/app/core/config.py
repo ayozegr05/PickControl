@@ -24,12 +24,13 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expires_minutes: int = 1440
 
-    # Telegram
-    telegram_bot_token: str | None = None
-    telegram_bot2_token: str | None = None
+    # Telegram (cliente de usuario vía Telethon, ver app/services/telegram/)
     telegram_api_id: str | None = None
     telegram_api_hash: str | None = None
     telegram_phone: str | None = None
+    telegram_session_name: str = "controlpick_telegram"
+    # Canal a escuchar: username (sin @) o id numérico (con prefijo -100).
+    telegram_target_channel: str | None = None
 
 
 @lru_cache
