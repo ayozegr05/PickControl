@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import TopBar from '../components/top-bar';
-import BottomBar from '../components/bottom-bar';
+import TopBar from '@/src/components/top-bar';
+import BottomBar from '@/src/components/bottom-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import LottieView from 'lottie-react-native';
+import { listPicks } from '@/src/api/picks.api';
 
 interface Apuesta {
   Fecha: string;
@@ -25,6 +27,7 @@ export default function Analysis() {
   const loadingRef = useRef(null);
 
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     fetchData();
@@ -35,44 +38,34 @@ export default function Analysis() {
     
     try {
       setLoading(true);
-      const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-      const data = await response.json();
-      console.log("Datos obtenidos:", data);
+      const picks = await listPicks();
+      console.log("Datos obtenidos:", picks);
 
-      if (data.picks) {
-        // Organizar apuestas por informante
-        const apuestasPorInformante = {};
-        data.picks.forEach((pick) => {
-          const { Informante, Acierto, CantidadApostada, Cuota, Fecha } = pick;
-          // Solo incluir apuestas que no estén pendientes
-          if (Acierto !== "Pending") {
-            if (!apuestasPorInformante[Informante]) {
-              apuestasPorInformante[Informante] = [];
-            }
-            apuestasPorInformante[Informante].push({ 
-              Acierto: Acierto === "True", 
-              CantidadApostada, 
-              Cuota, 
-              Fecha,
-              Informante 
-            });
+      // Organizar apuestas por informante
+      const apuestasPorInformante: Record<string, Apuesta[]> = {};
+      picks.forEach((pick) => {
+        // Solo incluir apuestas que no estén pendientes
+        if (pick.acierto !== "Pending") {
+          if (!apuestasPorInformante[pick.informante]) {
+            apuestasPorInformante[pick.informante] = [];
           }
-        });
+          apuestasPorInformante[pick.informante].push({
+            Acierto: pick.acierto === "True",
+            CantidadApostada: pick.cantidadApostada,
+            Cuota: pick.cuota,
+            Fecha: pick.fecha,
+            Informante: pick.informante,
+          });
+        }
+      });
 
-        const informantesList = Object.keys(apuestasPorInformante);
-        setInformantes(informantesList);
-        
-        // Convertir a array plano para los cálculos, excluyendo apuestas pendientes
-        const allApuestas = Object.values(apuestasPorInformante)
-          .flat();
-        
-        setApuestas(allApuestas);
-      }
+      const informantesList = Object.keys(apuestasPorInformante);
+      setInformantes(informantesList);
+
+      // Convertir a array plano para los cálculos, excluyendo apuestas pendientes
+      const allApuestas = Object.values(apuestasPorInformante).flat();
+
+      setApuestas(allApuestas);
     } catch (error) {
       console.error("Error al obtener las apuestas:", error);
       setApuestas([]);
@@ -176,7 +169,7 @@ export default function Analysis() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: 60 + insets.top, paddingBottom: 60 + insets.bottom }]}>
       <TopBar />
       <ScrollView style={styles.scrollView}>
         <Text style={styles.title}>Análisis de Rentabilidad</Text>
@@ -244,7 +237,7 @@ export default function Analysis() {
                   <View style={styles.headerContainer}>
                     <Text style={styles.informanteName}>{informante}</Text>
                     <TouchableOpacity 
-                      onPress={() => router.push(`dynamic-routes/${informante}`)}
+                      onPress={() => router.push(`/dynamic-routes/${informante}` as any)}
                       style={styles.statsButton}
                     >
                       <View style={styles.statsButtonContent}>

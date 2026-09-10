@@ -1,3 +1,6 @@
+// Movido desde app/context/AuthContext.tsx (Fase 3: reorganizacion hacia
+// src/ junto con la nueva capa de API). La logica es la misma, solo cambia
+// la ubicacion del archivo.
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 

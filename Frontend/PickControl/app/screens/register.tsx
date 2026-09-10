@@ -1,11 +1,14 @@
 import React from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Formik } from 'formik';
 import * as Yup from 'yup';
-import BottomBar from '../components/bottom-bar';
-import TopBar from '../components/top-bar';
+import BottomBar from '@/src/components/bottom-bar';
+import TopBar from '@/src/components/top-bar';
 import { useRouter } from 'expo-router';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '@/src/context/AuthContext';
+import { register } from '@/src/api/auth.api';
+import { ApiError } from '@/src/api/client';
 
 const RegisterSchema = Yup.object().shape({
   name: Yup.string()
@@ -24,30 +27,19 @@ const RegisterSchema = Yup.object().shape({
 const RegisterScreen = () => {
   const router = useRouter();
   const { login } = useAuth();
+  const insets = useSafeAreaInsets();
 
   const handleRegister = async (values: any) => {
     try {
-      const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/register`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: values.name,
-          email: values.email,
-          password: values.password,
-        }),
+      const data = await register({
+        name: values.name,
+        email: values.email,
+        password: values.password,
       });
 
-      const data = await response.json();
+      // Guardar el token y el nombre recibidos
+      await login(data.token, data.user.name);
 
-      if (!response.ok) {
-        throw new Error(data.message || 'Error en el registro');
-      }
-
-      // Guardar el token recibido
-      await login(data.token);
-      
       // Mostrar mensaje de éxito
       Alert.alert(
         "Registro Exitoso",
@@ -63,7 +55,7 @@ const RegisterScreen = () => {
     } catch (error: any) {
       Alert.alert(
         "Error",
-        error.message || "Hubo un problema al registrar tu cuenta"
+        error instanceof ApiError ? error.message : "Hubo un problema al registrar tu cuenta"
       );
       console.error('Error:', error);
     }
@@ -72,8 +64,8 @@ const RegisterScreen = () => {
   return (
     <View style={styles.container}>
       <TopBar />
-      <ScrollView>
-        <View style={styles.formContainer}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 80 + insets.bottom }}>
+        <View style={[styles.formContainer, { marginTop: 80 + insets.top }]}>
           <View style={styles.headerContainer}>
             <Text style={styles.title}>Crear Cuenta</Text>
             <Text style={styles.subtitle}>Únete a nuestra comunidad</Text>

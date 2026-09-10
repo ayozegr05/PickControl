@@ -12,5 +12,6 @@ export interface InformanteStats {
   totalAciertos: number;
   ganancias: number;
   porcentajeAciertos: number;
+  yieldPct: number;
   apuestas: PickItem[];
 }

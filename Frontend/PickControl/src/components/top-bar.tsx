@@ -1,12 +1,16 @@
 // TopBar.tsx
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons'; 
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useRouter } from "expo-router";
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '@/src/context/AuthContext';
 import { Alert } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { listPicks } from '@/src/api/picks.api';
+import { PickItem } from '@/src/types/pick.types';
+
+const BAR_HEIGHT = 60;
 
 const TopBar = () => {
   const [scrollY] = useState(new Animated.Value(0));
@@ -15,33 +19,18 @@ const TopBar = () => {
   const [gananciasTotal, setGananciasTotal] = useState(0);
   const router = useRouter();
   const { isAuthenticated, userName, logout } = useAuth();
+  const insets = useSafeAreaInsets();
 
-  const calcularTotalGanancias = (apuestas) => {
-    let total = 0;
-    apuestas.forEach((apuesta) => {
-      if (apuesta.Acierto === "True") {
-        total += (apuesta.CantidadApostada * apuesta.Cuota) - apuesta.CantidadApostada;
-      } else if (apuesta.Acierto === "False") {
-        total -= apuesta.CantidadApostada;
-      }
-    });
-    return total;
+  const calcularTotalGanancias = (apuestas: PickItem[]) => {
+    return apuestas.reduce((total, apuesta) => total + (apuesta.ganancia ?? 0), 0);
   };
 
   // Cargar ganancias totales
   useEffect(() => {
     const fetchGanancias = async () => {
       try {
-        const token = await AsyncStorage.getItem('userToken');
-        if (!token) return;
-
-        const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas`, {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
-        const data = await response.json();
-        const total = calcularTotalGanancias(data.picks);
+        const picks = await listPicks();
+        const total = calcularTotalGanancias(picks);
         setGananciasTotal(total);
       } catch (error) {
         console.error('Error al cargar ganancias:', error);
@@ -74,19 +63,10 @@ const TopBar = () => {
 
   const handleLogout = async () => {
     try {
-      // Llamar al endpoint de logout
-      const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/logout`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Error al cerrar sesión');
-      }
-
-      // Eliminar el token y actualizar el estado
+      // El logout de un JWT es puramente del lado del cliente (no hay
+      // endpoint /logout en el backend: invalidar un JWT stateless no
+      // aporta nada sin una lista negra de tokens). Solo borramos el
+      // token guardado localmente.
       await logout();
       setMenuOpen(false);
       
@@ -111,7 +91,15 @@ const TopBar = () => {
   };
   
   return (
-    <Animated.View style={[styles.topBar, { height: visible ? 60 : 0 }]}>
+    <Animated.View
+      style={[
+        styles.topBar,
+        {
+          paddingTop: insets.top,
+          height: (visible ? BAR_HEIGHT : 0) + insets.top,
+        },
+      ]}
+    >
       <View style={styles.content}>
         <TouchableOpacity onPress={() => router.push('/')}>
           <Text style={styles.title}>PickControl</Text>
@@ -154,7 +142,7 @@ const TopBar = () => {
         ) : null}
       </View>
       {menuOpen && (
-        <View style={styles.menuOptions}>
+        <View style={[styles.menuOptions, { top: BAR_HEIGHT + insets.top }]}>
           {isAuthenticated ? (
             <>
               <TouchableOpacity>
