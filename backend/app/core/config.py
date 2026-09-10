@@ -1,17 +1,26 @@
 """Configuración central de la aplicación.
 
-Lee las variables de entorno (ver `.env.example`) de forma tipada usando
-pydantic-settings, evitando el acceso disperso a `os.environ` que había
-en el backend Node original.
+Lee las variables de entorno de forma tipada usando pydantic-settings.
+Puedes elegir el fichero de entorno con la variable `ENV_FILE`:
+
+    ENV_FILE=.env.development uvicorn app.main:app --reload
+
+Esto permite tener `.env.development`, `.env.production`, etc., sin
+mezclar secretos reales en el repositorio.
 """
 
+import os
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_ENV_FILE = os.getenv("ENV_FILE", ".env")
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILE, env_file_encoding="utf-8", extra="ignore"
+    )
 
     # Servidor
     node_env: str = "development"
