@@ -1,0 +1,30 @@
+# Ficheros de entorno y secretos
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Python / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Telegram sesiones
+*.session
+*.session-journal
+
+# Bases de datos locales y logs
+*.db
+*.log
+
+# Git
+.git
+.gitignore
+
+# Alembic y tests no necesarios en la imagen final
+# (descomenta si quieres una imagen de solo producción)
+# tests/
