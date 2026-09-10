@@ -13,6 +13,9 @@ passlib[bcrypt]>=1.7,<2.0
 bcrypt>=4.0.1,<4.1
 python-multipart>=0.0.9,<1.0
 
+# Logging estructurado: salida en consola (dev) o JSON (prod)
+structlog>=24.1,<25.0
+
 # Telegram: cliente de usuario (Telethon) para escuchar canales, sustituye
 # a `node-telegram-bot-api` del backend Node retirado.
 telethon>=1.44,<2.0

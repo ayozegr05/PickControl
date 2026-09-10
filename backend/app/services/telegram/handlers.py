@@ -6,14 +6,13 @@ procesamiento de `processor.py`. La lógica de interpretación (LLM) se
 añadirá en una fase posterior.
 """
 
-import logging
-
 from telethon import TelegramClient, events
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.services.telegram.processor import process_incoming_message
 
-logger = logging.getLogger("app.telegram")
+logger = get_logger("app.telegram")
 
 
 def register_handlers(client: TelegramClient) -> None:

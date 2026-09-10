@@ -6,16 +6,16 @@ concurrente con el servidor FastAPI, usando el patrón `lifespan`
 """
 
 import asyncio
-import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.services.telegram.client import get_telegram_client, reset_telegram_client
 from app.services.telegram.handlers import register_handlers
 
-logger = logging.getLogger("app.lifecycle")
+logger = get_logger("app.lifecycle")
 
 
 async def _run_telegram_listener() -> None:
