@@ -1,14 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Formik } from 'formik';
 import * as Yup from 'yup';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import BottomBar from '../components/bottom-bar';
-import TopBar from '../components/top-bar';
+import BottomBar from '@/src/components/bottom-bar';
+import TopBar from '@/src/components/top-bar';
 import { useRouter } from 'expo-router';
-import { useAuth } from '../context/AuthContext'; // Corregir la ruta de importación
+import { useAuth } from '@/src/context/AuthContext';
+import { login as loginApi } from '@/src/api/auth.api';
+import { ApiError } from '@/src/api/client';
 
 const LoginSchema = Yup.object().shape({
   email: Yup.string()
@@ -21,6 +24,7 @@ const LoginSchema = Yup.object().shape({
 const LoginScreen = () => {
   const router = useRouter();
   const { login } = useAuth(); // Obtener la función de login del contexto de autenticación
+  const insets = useSafeAreaInsets();
   const [isBiometricSupported, setIsBiometricSupported] = useState(false);
   const [savedCredentials, setSavedCredentials] = useState(null);
 
@@ -63,21 +67,8 @@ const LoginScreen = () => {
 
       if (result.success) {
         // Usar las credenciales guardadas para hacer login
-        const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/login`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(savedCredentials),
-        });
-
-        const data = await response.json();
+        const data = await loginApi(savedCredentials);
         console.log("Usuario logueado: ", data.user.name);
-        console.log("Datos del login: ", data);
-
-        if (!response.ok) {
-          throw new Error(data.message || 'Error al iniciar sesión');
-        }
 
         await login(data.token, data.user.name);
         router.replace('/');
@@ -93,37 +84,22 @@ const LoginScreen = () => {
 
   const handleLogin = async (values: any) => {
     try {
-      const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          email: values.email,
-          password: values.password,
-        }),
-      });
-
-      const data = await response.json();
+      const data = await loginApi({ email: values.email, password: values.password });
       console.log("Usuario logueado: ", data.user.name);
 
-      if (response.ok) {
-        // Guardar credenciales
-        await AsyncStorage.setItem('userCredentials', JSON.stringify({
-          email: values.email,
-          password: values.password
-        }));
+      // Guardar credenciales para el login biométrico
+      await AsyncStorage.setItem('userCredentials', JSON.stringify({
+        email: values.email,
+        password: values.password
+      }));
 
-        // Hacer login con token y nombre
-        await login(data.token, data.user.name);
-        router.replace('/');
-      } else {
-        throw new Error(data.message || 'Error al iniciar sesión');
-      }
+      // Hacer login con token y nombre
+      await login(data.token, data.user.name);
+      router.replace('/');
     } catch (error: any) {
       Alert.alert(
         "Error",
-        error.message || "Credenciales inválidas"
+        error instanceof ApiError ? error.message : "Credenciales inválidas"
       );
       console.error('Error:', error);
     }
@@ -132,8 +108,8 @@ const LoginScreen = () => {
   return (
     <View style={styles.container}>
       <TopBar />
-      <ScrollView>
-        <View style={styles.formContainer}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 80 + insets.bottom }}>
+        <View style={[styles.formContainer, { marginTop: 80 + insets.top }]}>
           <View style={styles.headerContainer}>
             <Text style={styles.title}>Bienvenido</Text>
             <Text style={styles.subtitle}>Inicia sesión para continuar</Text>

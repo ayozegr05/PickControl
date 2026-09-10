@@ -1,23 +1,25 @@
 import React from "react";
 import { View, TouchableOpacity, StyleSheet } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, usePathname } from "expo-router";
 import { Ionicons} from "@expo/vector-icons";
 import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 
+const BAR_HEIGHT = 60;
 
 const BottomBar = () => {
     const router = useRouter();
     const pathname = usePathname(); // Obtiene la ruta actual
+    const insets = useSafeAreaInsets();
 
     return (
-        <View style={styles.container}>
-            {/* Botón de Atrás (se oculta en la pantalla de inicio) */}
-            {pathname !== "/" && (
-                <TouchableOpacity onPress={() => router.back()}>
-                    <Ionicons name="arrow-back" size={32} color="orange" />
-                </TouchableOpacity>
-            )}
-
+        <View
+            style={[
+                styles.container,
+                { height: BAR_HEIGHT + insets.bottom, paddingBottom: insets.bottom },
+            ]}
+            pointerEvents="box-none"
+        >
             {/* Botón de Inicio (se oculta en la pantalla de inicio) */}
             {pathname !== "/" && (
                 <TouchableOpacity onPress={() => router.push("/")}>

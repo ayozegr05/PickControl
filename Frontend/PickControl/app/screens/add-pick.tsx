@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, StyleSheet, ScrollView, Alert, TouchableOpacity } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import RNPickerSelect from 'react-native-picker-select'; 
-import BottomBar from "../components/bottom-bar"; 
+import BottomBar from "@/src/components/bottom-bar"; 
 import { useRouter } from "expo-router";
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import TopBar from "../components/top-bar";
+import TopBar from "@/src/components/top-bar";
+import { createPick } from '@/src/api/picks.api';
+import { ApiError } from '@/src/api/client';
+import { Acierto } from '@/src/types/pick.types';
 
 const AddPick = () => {
   // Estados para cada campo
@@ -22,6 +25,7 @@ const AddPick = () => {
   const [cuota, setCuota] = useState(''); 
 
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   // Listas de opciones para los dropdowns
   const informantes = [
@@ -79,75 +83,57 @@ const AddPick = () => {
       finalTipoDeApuesta = `Doble: ${primera} + ${segunda}`;
     }
 
-    const datos = {
-      Apuesta: apuesta,
-      Informante: selectedInformante,
-      TipoDeApuesta: finalTipoDeApuesta,
-      Casa: selectedCasa,
-      Acierto: acierto,
-      CantidadApostada: cantidadApostada,
-      Cuota: cuota 
-    };
-
     try {
-      // Obtener el token del almacenamiento local
-      const token = await AsyncStorage.getItem('userToken');
-      
-      if (!token) {
-        Alert.alert('Error', 'No has iniciado sesión');
-        router.push("/login");
-        return;
-      }
-
-      // Enviar el POST request a la API
-      const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(datos)
+      await createPick({
+        apuesta,
+        informante: selectedInformante,
+        tipoDeApuesta: finalTipoDeApuesta,
+        casa: selectedCasa,
+        acierto: acierto as Acierto,
+        cantidadApostada: Number(cantidadApostada) || 0,
+        cuota: Number(cuota) || 1,
       });
 
-      const responseData = await response.json();
-
-      if (response.status === 201) {
-        console.log("Datos enviados: ", responseData);
-        Alert.alert(
-          'Apuesta enviada con éxito',
-          responseData.message,
-          [
-              { text: "OK", onPress: () => router.push("/") } 
-          ]
-        );
-         // Restablecer los estados al valor inicial
-        setSelectedInformante('');
-        setSelectedCasa('');
-        setAcierto('');
-        setCantidadApostada('');
-        setApuesta('');
-        setTipoDeApuesta('');
-        setPrimeraApuestaDoble('');
-        setSegundaApuestaDoble('');
-        setCustomPrimeraApuesta('');
-        setCustomSegundaApuesta('');
-        setIsDobleSelected(false);
-        setCuota(''); 
-      } else {
-        throw new Error(responseData.error || 'Hubo un error al enviar la apuesta');
+      Alert.alert(
+        'Apuesta enviada con éxito',
+        'Tu apuesta se ha guardado correctamente',
+        [
+            { text: "OK", onPress: () => router.push("/") } 
+        ]
+      );
+       // Restablecer los estados al valor inicial
+      setSelectedInformante('');
+      setSelectedCasa('');
+      setAcierto('');
+      setCantidadApostada('');
+      setApuesta('');
+      setTipoDeApuesta('');
+      setPrimeraApuestaDoble('');
+      setSegundaApuestaDoble('');
+      setCustomPrimeraApuesta('');
+      setCustomSegundaApuesta('');
+      setIsDobleSelected(false);
+      setCuota('');
+    } catch (error: any) {
+      console.error('Error al crear la apuesta:', error);
+      if (error instanceof ApiError && error.status === 401) {
+        Alert.alert('Error', 'No has iniciado sesión');
+        router.push("/screens/login");
+        return;
       }
-    } catch (error) {
-      console.error('Error al hacer el POST:', error);
-      Alert.alert('Error', error.message || 'Hubo un error al enviar la apuesta');
+      Alert.alert('Error', error instanceof ApiError ? error.message : 'Hubo un error al enviar la apuesta');
     }
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: 20 + insets.top }]}>
       <TopBar />
 
       {/* ScrollView para asegurar que todo el formulario sea accesible en dispositivos más pequeños */}
-      <ScrollView style={styles.scrollView}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={{ paddingBottom: 80 + insets.bottom }}
+      >
       <Text style={styles.text}>Añade tu apuesta</Text>
         {/* Card que contiene el formulario */}
         <View style={styles.card}>

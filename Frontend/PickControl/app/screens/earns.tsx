@@ -1,36 +1,34 @@
 import React, { useEffect, useState, useRef } from "react";
 import { View, Text, StyleSheet, ScrollView, Animated } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons} from "@expo/vector-icons";
-import BottomBar from "../components/bottom-bar";
+import BottomBar from "@/src/components/bottom-bar";
 import LottieView from 'lottie-react-native';
-import TopBar from "../components/top-bar";
+import TopBar from "@/src/components/top-bar";
+import { listPicks } from "@/src/api/picks.api";
+import { PickItem } from "@/src/types/pick.types";
 
 const GananciasPage = () => {
-    const [apuestas, setApuestas] = useState([]);
+    const [apuestas, setApuestas] = useState<PickItem[]>([]);
     const [totalGanancias, setTotalGanancias] = useState(0);
-    const [gananciasInformante, setGananciasInformante] = useState({});
-    const [gananciasBookmaker, setGananciasBookmaker] = useState({});
+    const [gananciasInformante, setGananciasInformante] = useState<Record<string, number>>({});
+    const [gananciasBookmaker, setGananciasBookmaker] = useState<Record<string, number>>({});
     const [isLoading, setIsLoading] = useState(true);
     const [dataLoaded, setDataLoaded] = useState(false);
     const animatedValue = useRef(new Animated.Value(0)).current;
     const [animatedGanancias, setAnimatedGanancias] = useState("0.00");
-    const rocketRef = useRef(null);
-    const loseRef = useRef(null);
-    const loadingRef = useRef(null);
+    const rocketRef = useRef<LottieView>(null);
+    const loseRef = useRef<LottieView>(null);
+    const loadingRef = useRef<LottieView>(null);
+    const insets = useSafeAreaInsets();
 
     const fetchApuestas = async () => {
         if (dataLoaded) return; // Evitar múltiples cargas si ya tenemos datos
         
         try {
-            const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas`, {
-                method: "GET",
-                headers: { "Content-Type": "application/json" },
-            });
+            const picks = await listPicks();
 
-            const data = await response.json();
-            
             // Procesar todos los datos antes de actualizar estados
-            const picks = data.picks || [];
             const ganancias = calcularTotalGanancias(picks);
             const porInformante = calcularGananciasInformante(picks);
             const porBookmaker = calcularGananciasBookmaker(picks);
@@ -57,46 +55,30 @@ const GananciasPage = () => {
         }
     };
 
-    const calcularGananciasInformante = (apuestas) => {
-        const ganancias = {};
+    const calcularGananciasInformante = (apuestas: PickItem[]) => {
+        const ganancias: Record<string, number> = {};
         apuestas.forEach((apuesta) => {
-            if (!ganancias[apuesta.Informante]) {
-                ganancias[apuesta.Informante] = 0;
+            if (!ganancias[apuesta.informante]) {
+                ganancias[apuesta.informante] = 0;
             }
-            if (apuesta.Acierto === "True") {
-                ganancias[apuesta.Informante] += (apuesta.CantidadApostada * apuesta.Cuota) - apuesta.CantidadApostada;
-            } else if (apuesta.Acierto === "False") {
-                ganancias[apuesta.Informante] -= apuesta.CantidadApostada;
-            }
+            ganancias[apuesta.informante] += apuesta.ganancia ?? 0;
         });
         return ganancias;
     };
 
-    const calcularGananciasBookmaker = (apuestas) => {
-        const ganancias = {};
+    const calcularGananciasBookmaker = (apuestas: PickItem[]) => {
+        const ganancias: Record<string, number> = {};
         apuestas.forEach((apuesta) => {
-            if (!ganancias[apuesta.Casa]) {
-                ganancias[apuesta.Casa] = 0;
+            if (!ganancias[apuesta.casa]) {
+                ganancias[apuesta.casa] = 0;
             }
-            if (apuesta.Acierto === "True") {
-                ganancias[apuesta.Casa] += (apuesta.CantidadApostada * apuesta.Cuota) - apuesta.CantidadApostada;
-            } else if (apuesta.Acierto === "False") {
-                ganancias[apuesta.Casa] -= apuesta.CantidadApostada;
-            }
+            ganancias[apuesta.casa] += apuesta.ganancia ?? 0;
         });
         return ganancias;
     };
 
-    const calcularTotalGanancias = (apuestas) => {
-        let total = 0;
-        apuestas.forEach((apuesta) => {
-            if (apuesta.Acierto === "True") {
-                total += (apuesta.CantidadApostada * apuesta.Cuota) - apuesta.CantidadApostada;
-            } else if (apuesta.Acierto === "False") {
-                total -= apuesta.CantidadApostada;
-            }
-        });
-        return total;
+    const calcularTotalGanancias = (apuestas: PickItem[]) => {
+        return apuestas.reduce((total, apuesta) => total + (apuesta.ganancia ?? 0), 0);
     };
 
     useEffect(() => {
@@ -138,12 +120,15 @@ const GananciasPage = () => {
     return (
         <View style={styles.container}>
             <TopBar />  
-            <View style={styles.titleContainer}>
+            <View style={[styles.titleContainer, { marginTop: 80 + insets.top }]}>
                 <Text style={styles.title}>Mis Ganancias</Text>
                 <Ionicons name="wallet" size={35} color="brown" style={styles.titleIcon} />
             </View>
 
-            <ScrollView style={styles.scrollView}>
+            <ScrollView
+                style={styles.scrollView}
+                contentContainerStyle={{ paddingBottom: 80 + insets.bottom }}
+            >
                 {isLoading ? (
                     <View style={styles.loadingContainer}>
                         <Text style={styles.loadingText}>Cargando datos...</Text>

@@ -1,30 +1,42 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Text, View, StyleSheet, ScrollView, TouchableOpacity, Modal, Alert } from "react-native";
-import BottomBar from "./components/bottom-bar";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import BottomBar from "@/src/components/bottom-bar";
 import { useRouter } from "expo-router";
-import TopBar from "./components/top-bar";
-import { useAuth } from "./context/AuthContext";
-import { Video } from 'expo-av';
+import TopBar from "@/src/components/top-bar";
+import { useAuth } from "@/src/context/AuthContext";
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { listPicks, updatePick } from "@/src/api/picks.api";
+import { PickItem, Acierto } from "@/src/types/pick.types";
+
+type RankingItem = { informante: string; porcentajeAcierto: number };
 
 const Main = () => {
-    const [apuestasOriginales, setApuestasOriginales] = useState([]); // Nuevo estado para datos originales
-    const [apuestasFiltradas, setApuestasFiltradas] = useState([]); // Estado para datos filtrados
-    const [informantes, setInformantes] = useState([]);
-    const [apuestasPendientes, setApuestasPendientes] = useState([]);
+    const [apuestasOriginales, setApuestasOriginales] = useState<Record<string, PickItem[]>>({}); // Nuevo estado para datos originales
+    const [apuestasFiltradas, setApuestasFiltradas] = useState<Record<string, PickItem[]>>({}); // Estado para datos filtrados
+    const [informantes, setInformantes] = useState<string[]>([]);
+    const [apuestasPendientes, setApuestasPendientes] = useState<PickItem[]>([]);
     const [modalVisible, setModalVisible] = useState(false);
-    const [selectedApuesta, setSelectedApuesta] = useState(null);
-    const [ranking, setRanking] = useState([]); // Estado para el ranking
+    const [selectedApuesta, setSelectedApuesta] = useState<PickItem | null>(null);
+    const [ranking, setRanking] = useState<RankingItem[]>([]); // Estado para el ranking
     const [showTopBar, setShowTopBar] = useState(true); // Estado para controlar la visibilidad de TopBar
     const lastScrollY = useRef(0); // Para guardar la última posición de scroll
     const scrollViewRef = useRef<ScrollView>(null); // Referencia para el ScrollView
 
     const router = useRouter();
     const { isAuthenticated } = useAuth();
+    const insets = useSafeAreaInsets();
+
+    const introVideoPlayer = useVideoPlayer(require('../assets/video/intro.mp4'), (player) => {
+        player.loop = true;
+        player.muted = true;
+        player.play();
+    });
 
     const cellWidth = 105;
 
-    const renderPronostico = (acierto) => {
+    const renderPronostico = (acierto: Acierto) => {
         if (acierto === 'True') {
             return <Text style={[styles.icon, { color: 'green', fontSize: 21 }]}>✅ </Text>;
         } else if (acierto === 'False') {
@@ -36,28 +48,21 @@ const Main = () => {
     const fetchApuestas = async () => {
         if (!isAuthenticated) return;
         try {
-            const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuestas`,{
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-            });
-            const data = await response.json();
-            console.log("Datos obtenidos:", data);
+            const picks = await listPicks();
+            console.log("Datos obtenidos:", picks);
 
-            const apuestasPorInformante = {};
+            const apuestasPorInformante: Record<string, PickItem[]> = {};
             // Primero ordenamos todas las apuestas por fecha
-            const apuestasOrdenadas = data.picks.sort((a, b) => 
-                new Date(a.Fecha).getTime() - new Date(b.Fecha).getTime()
+            const apuestasOrdenadas = [...picks].sort((a, b) =>
+                new Date(a.fecha).getTime() - new Date(b.fecha).getTime()
             );
 
             // Luego las agrupamos por informante manteniendo el orden
             apuestasOrdenadas.forEach((pick) => {
-                const { Informante, Acierto, Apuesta, _id, Fecha } = pick;
-                if (!apuestasPorInformante[Informante]) {
-                    apuestasPorInformante[Informante] = [];
+                if (!apuestasPorInformante[pick.informante]) {
+                    apuestasPorInformante[pick.informante] = [];
                 }
-                apuestasPorInformante[Informante].push({ _id, Apuesta, Acierto, Fecha });
+                apuestasPorInformante[pick.informante].push(pick);
             });
 
             setApuestasOriginales(apuestasPorInformante); // Guardamos los datos originales
@@ -69,18 +74,15 @@ const Main = () => {
         }
     };
 
-    const calcularRanking = (apuestasPorInformante) => {
-        const rankingArray = Object.entries(apuestasPorInformante).map(([informante, apuestas]) => {
+    const calcularRanking = (apuestasPorInformante: Record<string, PickItem[]>) => {
+        const rankingArray: RankingItem[] = Object.entries(apuestasPorInformante).map(([informante, apuestas]) => {
             // Filtrar apuestas que no estén en estado "Pending"
-            const apuestasFinalizadas = apuestas.filter(apuesta => apuesta.Acierto !== "Pending");
+            const apuestasFinalizadas = apuestas.filter(apuesta => apuesta.acierto !== "Pending");
             const totalApuestasFinalizadas = apuestasFinalizadas.length;
-            const totalAciertos = apuestasFinalizadas.filter(apuesta => apuesta.Acierto === 'True').length;
+            const totalAciertos = apuestasFinalizadas.filter(apuesta => apuesta.acierto === 'True').length;
             const porcentajeAcierto = totalApuestasFinalizadas > 0 ? (totalAciertos / totalApuestasFinalizadas) * 100 : 0;
     
-            return {
-                informante,
-                porcentajeAcierto: porcentajeAcierto.toFixed(2), // 2 decimales
-            };
+            return { informante, porcentajeAcierto };
         });
     
         // Ordenar por porcentaje de aciertos descendente y tomar los 5 primeros
@@ -102,9 +104,9 @@ const Main = () => {
         }
     }, [apuestasFiltradas]);
 
-    const handleInformantePress = (informante) => {
+    const handleInformantePress = (informante: string) => {
         console.log("Navegando hacia:", informante);  
-        router.push(`/dynamic-routes/${informante}`);
+        router.push(`/dynamic-routes/${informante}` as any);
     };
 
     const getMaxApuestas = () => {
@@ -118,47 +120,34 @@ const Main = () => {
         return max > 0 ? max : 0;
     };
 
-    const handleActualizarApuesta = (apuesta) => {
+    const handleActualizarApuesta = (apuesta: PickItem) => {
         console.log("Apuesta seleccionada:", apuesta);
         setSelectedApuesta(apuesta); // Guardamos la apuesta seleccionada
         setModalVisible(true); // Mostramos el modal
     };
 
-    const actualizarApuesta = async (acierto) => {
+    const actualizarApuesta = async (acierto: Acierto) => {
         if (!selectedApuesta) return;
 
         try {
-            const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/apuesta/${selectedApuesta._id}`, {
-                method: "PUT",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({ Acierto: acierto }),
-            });
-
-            const data = await response.json();
-            if (response.ok) {
-                console.log("Apuesta actualizada:", data);
-                // Alert.alert('Apuesta actualizada con éxito');
-                fetchApuestas(); // Volvemos a cargar las apuestas
-                setModalVisible(false); // Cerramos el modal
-            } else {
-                console.error("Error al actualizar la apuesta:", data);
-            }
+            await updatePick(selectedApuesta.id, { acierto });
+            console.log("Apuesta actualizada");
+            fetchApuestas(); // Volvemos a cargar las apuestas
+            setModalVisible(false); // Cerramos el modal
         } catch (error) {
-            console.error("Error en la solicitud de actualización:", error);
+            console.error("Error al actualizar la apuesta:", error);
         }
     };
 
-    const calcularApuestasPendientes = (apuestasPorInformante) => {
-        const pendientes = [];
+    const calcularApuestasPendientes = (apuestasPorInformante: Record<string, PickItem[]>) => {
+        const pendientes: PickItem[] = [];
     
         // Recorremos cada informante y sus apuestas
         Object.entries(apuestasPorInformante).forEach(([informante, apuestas]) => {
             apuestas.forEach((apuesta) => {
-                // Solo añadimos las apuestas con 'Acierto' no definido
-                if (apuesta.Acierto == 'Pending') {
-                    pendientes.push({ ...apuesta, Informante: informante });
+                // Solo añadimos las apuestas con 'acierto' pendiente
+                if (apuesta.acierto === 'Pending') {
+                    pendientes.push({ ...apuesta, informante });
                 }
             });
         });
@@ -168,7 +157,7 @@ const Main = () => {
     }; 
     
     // Manejo de scroll para mostrar/ocultar el TopBar
-    const handleScroll = (event) => {
+    const handleScroll = (event: any) => {
         const currentOffset = event.nativeEvent.contentOffset.y;
 
         if (currentOffset > lastScrollY.current) {
@@ -196,9 +185,9 @@ const Main = () => {
         }
     
         // Filtra las apuestas usando los datos originales
-        const nuevosFiltrados = Object.keys(apuestasOriginales).reduce((acc, informante) => {
+        const nuevosFiltrados = Object.keys(apuestasOriginales).reduce<Record<string, PickItem[]>>((acc, informante) => {
             const apuestasInformante = apuestasOriginales[informante].filter(apuesta => {
-                const fechaApuesta = new Date(apuesta.Fecha);
+                const fechaApuesta = new Date(apuesta.fecha);
                 // Normalizar las fechas para comparar solo días
                 return fechaApuesta.setHours(0,0,0,0) >= fechaLimite.setHours(0,0,0,0);
             });
@@ -232,20 +221,14 @@ const Main = () => {
     if (!isAuthenticated) {
         console.log('Renderizando vista no autenticada');
         try {
-            const videoSource = require('../assets/video/intro.mp4');
             return (
                 <View style={[styles.container, { paddingHorizontal: 0 }]}>
                     <TopBar />
-                    <Video
-                        source={videoSource}
+                    <VideoView
+                        player={introVideoPlayer}
                         style={styles.video}
-                        resizeMode="cover"
-                        shouldPlay={true}
-                        isLooping={true}
-                        useNativeControls={false}
-                        isMuted={true}
-                        onLoad={() => console.log('Video cargado correctamente')}
-                        onError={(error) => console.error('Error al cargar el video:', error)}
+                        contentFit="cover"
+                        nativeControls={false}
                     />
                     <View style={styles.overlay} />
                     
@@ -326,14 +309,14 @@ const Main = () => {
                     styles.scrollContainer,
                     isAuthenticated ? { 
                         paddingHorizontal: 15,
-                        paddingBottom: 80  // Espacio extra para el BottomBar
+                        paddingBottom: 80 + insets.bottom  // Espacio extra para el BottomBar
                     } : null
                 ]}
                 onScroll={handleScroll}
                 scrollEventThrottle={16}
             >
                 {/* Tabla de pronósticos */}
-                <View style={styles.cardContainer}>
+                <View style={[styles.cardContainer, { marginTop: 80 + insets.top }]}>
                     <Text style={styles.cardTitle}>Resultados Pronósticos</Text>
                     <ScrollView 
                         horizontal 
@@ -374,19 +357,19 @@ const Main = () => {
                                         <Text style={[styles.cell, styles.dateCell, { width: cellWidth }]}>
                                         {informantes.some(inf => {
                                             const apuestasInformante = apuestasFiltradas[inf];
-                                            return apuestasInformante && apuestasInformante[index] && apuestasInformante[index].Fecha;
+                                            return apuestasInformante && apuestasInformante[index] && apuestasInformante[index].fecha;
                                         })
                                             ? (() => {
                                                 // Obtenemos la primera fecha válida de la fila
                                                 const fechaEncontrada = informantes
                                                     .map(inf => {
                                                     const apuestasInformante = apuestasFiltradas[inf];
-                                                    return apuestasInformante ? apuestasInformante[index]?.Fecha : null;
+                                                    return apuestasInformante ? apuestasInformante[index]?.fecha : null;
                                                     })
                                                     .find(fecha => fecha !== null);
-                                                const fechaObj = new Date(fechaEncontrada);
+                                                const fechaObj = new Date(fechaEncontrada ?? Date.now());
                                                 // Si la fecha no es válida, usamos la fecha de hoy
-                                                if (isNaN(fechaObj)) {
+                                                if (isNaN(fechaObj.getTime())) {
                                                     return new Date().toLocaleDateString();
                                                 } else {
                                                     return fechaObj.toLocaleDateString();
@@ -399,7 +382,7 @@ const Main = () => {
                                             const apuestaInformante = apuestasInformante ? apuestasInformante[index] : null;
                                             return (
                                                 <View key={informante} style={[styles.cell, { width: cellWidth }]}>
-                                                    {apuestaInformante ? renderPronostico(apuestaInformante.Acierto) : <Text>-</Text>}
+                                                    {apuestaInformante ? renderPronostico(apuestaInformante.acierto) : <Text>-</Text>}
                                                 </View>
                                             );
                                         })}
@@ -447,18 +430,18 @@ const Main = () => {
                             {/* Columna de Apuesta */}
                             <View style={styles.column}>
                                 <Text style={styles.pendingText}>Apuesta</Text>
-                                <Text style={styles.pendingTextValue}>{apuesta.Apuesta}</Text>
+                                <Text style={styles.pendingTextValue}>{apuesta.apuesta}</Text>
                             </View>
                         
                             {/* Columna de Informante */}
                             <View style={styles.column}>
                                 <Text style={styles.pendingText}>Informante</Text>
-                                <Text style={styles.pendingTextValue}>{apuesta.Informante}</Text>
+                                <Text style={styles.pendingTextValue}>{apuesta.informante}</Text>
                             </View>
                         
                             {/* Columna del botón de actualización */}
                             <View style={styles.columnButton}>
-                                {apuesta.Acierto !== 'True' && apuesta.Acierto !== 'False' && (
+                                {apuesta.acierto !== 'True' && apuesta.acierto !== 'False' && (
                                     <TouchableOpacity 
                                         style={styles.updateButton} 
                                         onPress={() => handleActualizarApuesta(apuesta)}
@@ -487,7 +470,7 @@ const Main = () => {
                                 {index + 1}. {rank.informante}
                             </Text>
                             <Text style={styles.rankingPercentage}>
-                                {rank.porcentajeAcierto}% de aciertos
+                                {rank.porcentajeAcierto.toFixed(2)}% de aciertos
                             </Text>
                         </View>
                     ))}
@@ -568,9 +551,6 @@ const styles = StyleSheet.create({
         width: '100%',
         maxHeight: 300, // Añadido maxHeight
     },
-    pendingList: {
-        maxHeight: 200, // Limitar altura del ScrollView de apuestas pendientes
-    },
     rankingContainer: {
         backgroundColor: '#303030',
         borderRadius: 10,
@@ -611,6 +591,13 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: 'dark',
     },
+    dateCell: {
+        backgroundColor: '#ffdaa4',
+    },
+    icon: {
+        fontSize: 17,
+        textAlign: 'center',
+    },
     headerCell: {
         fontSize: 20,
         fontWeight: 'bold',
@@ -619,22 +606,6 @@ const styles = StyleSheet.create({
         verticalAlign: 'middle',
         color: 'white',
         borderTopLeftRadius: 8,
-    },
-    informanteButton: {
-        backgroundColor: '#186720',
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        borderRadius: 10,
-        justifyContent: 'center',
-        alignItems: 'center',
-        width: '100%',
-        height: 70,  
-    },
-    buttonText: {
-        color: 'white',
-        fontWeight: 'bold',
-        fontSize: 20,
-        textAlign: 'center',
     },
     cardTitle: {
         fontSize: 24,
@@ -657,6 +628,7 @@ const styles = StyleSheet.create({
         marginBottom: 10
     },
     pendingList: {
+        maxHeight: 200, // Limitar altura del ScrollView de apuestas pendientes
         marginBottom: 20,
     },
     pendingItem: {
@@ -722,7 +694,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#1a1a1a',
     },
     overlay: {
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         backgroundColor: 'rgba(0, 0, 0, 0.7)',
     },
     joinButton: {

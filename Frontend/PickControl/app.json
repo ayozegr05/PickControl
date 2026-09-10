@@ -8,7 +8,6 @@
     "icon": "./assets/images/icon.png",
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.ayozegr.PickControl"
@@ -22,7 +21,7 @@
     },
     "web": {
       "bundler": "metro",
-      "output": "static",
+      "output": "single",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
@@ -35,7 +34,13 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
-      ]
+      ],
+      "expo-asset",
+      "@react-native-community/datetimepicker",
+      "expo-font",
+      "expo-status-bar",
+      "expo-web-browser",
+      "expo-video"
     ],
     "experiments": {
       "typedRoutes": true
@@ -50,9 +55,6 @@
     },
     "updates": {
       "url": "https://u.expo.dev/27afa42a-960f-455c-941f-74571d3ab24b",
-      "enabled": true
-    },
-    "developmentClient": {
       "enabled": true
     }
   }
