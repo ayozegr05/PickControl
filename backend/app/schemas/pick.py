@@ -1,4 +1,5 @@
 """DTOs de entrada/salida para el recurso `Pick` (apuesta)."""
+
 from datetime import datetime
 from typing import Optional
 
@@ -11,7 +12,9 @@ class PickCreate(SQLModel):
     """Payload de creación (equivalente al body de POST /apuestas)."""
 
     apuesta: str
-    informante: str = Field(description="Nombre del informante; se resuelve/crea internamente")
+    informante: str = Field(
+        description="Nombre del informante; se resuelve/crea internamente"
+    )
     tipo_de_apuesta: str
     casa: str
     acierto: Acierto = Acierto.PENDING

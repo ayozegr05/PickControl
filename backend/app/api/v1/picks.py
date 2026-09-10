@@ -14,6 +14,7 @@ que sea `admin`). Esto es un cambio de contrato deliberado: el frontend
 deberá enviar `Authorization: Bearer <token>` también en PUT/DELETE
 cuando se conecte a esta API (pendiente en la Fase 3).
 """
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -24,7 +25,11 @@ from app.models.informante import Informante
 from app.models.pick import Pick
 from app.models.user import User, UserRole
 from app.schemas.pick import PickCreate, PickRead, PickUpdate
-from app.services.pick_service import calcular_ganancia, get_or_create_informante, to_naive_utc
+from app.services.pick_service import (
+    calcular_ganancia,
+    get_or_create_informante,
+    to_naive_utc,
+)
 
 router = APIRouter(tags=["picks"])
 
@@ -56,7 +61,9 @@ async def _to_pick_read(session: AsyncSession, pick: Pick) -> PickRead:
 
 
 @router.get("/apuestas", response_model=list[PickRead])
-async def listar_apuestas(session: AsyncSession = Depends(get_session)) -> list[PickRead]:
+async def listar_apuestas(
+    session: AsyncSession = Depends(get_session),
+) -> list[PickRead]:
     """Equivalente a `router.get("/apuestas", ...)`: devuelve todas las apuestas."""
     picks = (await session.exec(select(Pick))).all()
     return [await _to_pick_read(session, pick) for pick in picks]
@@ -100,7 +107,9 @@ async def actualizar_apuesta(
     dueño de la apuesta o admin (ver nota de hardening arriba)."""
     pick = await session.get(Pick, pick_id)
     if pick is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Apuesta no encontrada")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Apuesta no encontrada"
+        )
     _ensure_owner_or_admin(pick, current_user)
 
     if payload.acierto is not None:
@@ -125,7 +134,9 @@ async def eliminar_apuesta(
     dueño de la apuesta o admin (ver nota de hardening arriba)."""
     pick = await session.get(Pick, pick_id)
     if pick is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Apuesta no encontrada")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Apuesta no encontrada"
+        )
     _ensure_owner_or_admin(pick, current_user)
 
     await session.delete(pick)

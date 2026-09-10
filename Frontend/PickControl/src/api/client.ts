@@ -7,7 +7,8 @@
 // prefijo `/api/v1`.
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
+const BASE_URL =
+  process.env.EXPO_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 export class ApiError extends Error {
   status: number;
@@ -44,10 +45,15 @@ function extractErrorMessage(data: unknown, fallback: string): string {
   return fallback;
 }
 
-export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+export async function apiRequest<T>(
+  path: string,
+  options: RequestOptions = {}
+): Promise<T> {
   const { method = "GET", body, auth = false } = options;
 
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
 
   if (auth) {
     const token = await AsyncStorage.getItem("userToken");
@@ -71,7 +77,10 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new ApiError(extractErrorMessage(data, "Error en la solicitud"), response.status);
+    throw new ApiError(
+      extractErrorMessage(data, "Error en la solicitud"),
+      response.status
+    );
   }
 
   return data as T;

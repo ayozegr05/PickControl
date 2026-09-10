@@ -17,8 +17,12 @@ type RawInformanteStats = {
   apuestas: RawPick[];
 };
 
-export async function getInformanteStats(nombre: string): Promise<InformanteStats> {
-  const raw = await apiRequest<RawInformanteStats>(`/informante/${encodeURIComponent(nombre)}`);
+export async function getInformanteStats(
+  nombre: string
+): Promise<InformanteStats> {
+  const raw = await apiRequest<RawInformanteStats>(
+    `/informante/${encodeURIComponent(nombre)}`
+  );
   return {
     informante: raw.informante,
     totalApuestas: raw.total_apuestas,

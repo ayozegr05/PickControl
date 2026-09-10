@@ -2,6 +2,7 @@
 
 Sustituye a `DbMongo/db.js` (Mongoose) del backend Node original.
 """
+
 from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -13,7 +14,9 @@ from app.core.config import get_settings
 
 settings = get_settings()
 
-engine = create_async_engine(settings.database_url, echo=settings.node_env == "development")
+engine = create_async_engine(
+    settings.database_url, echo=settings.node_env == "development"
+)
 
 AsyncSessionLocal = sessionmaker(
     bind=engine,

@@ -4,6 +4,7 @@ Importante: los tests NUNCA tocan la base de datos de desarrollo/producción
 configurada en `.env`. Usan una base SQLite en memoria, creada y destruida
 en cada test, sobreescribiendo la dependencia `get_session` de FastAPI.
 """
+
 import os
 
 # JWT_SECRET es obligatorio en Settings (app/core/config.py) y no tiene
@@ -11,7 +12,6 @@ import os
 # porque `app.core.security` llama a `get_settings()` al importarse.
 os.environ.setdefault("JWT_SECRET", "test-secret-key-solo-para-pytest")
 
-import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -30,7 +30,9 @@ async def session() -> AsyncSession:
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
 
-    async_session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async_session_factory = sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
     async with async_session_factory() as db_session:
         yield db_session
 
@@ -58,7 +60,11 @@ async def auth_headers(client: AsyncClient) -> dict[str, str]:
     Cada test que lo use arranca con una BD limpia, así que el email no
     colisiona nunca con el de otro test.
     """
-    payload = {"name": "Tester", "email": "tester@example.com", "password": "password123"}
+    payload = {
+        "name": "Tester",
+        "email": "tester@example.com",
+        "password": "password123",
+    }
     response = await client.post("/api/v1/auth/register", json=payload)
     assert response.status_code == 201
     token = response.json()["token"]

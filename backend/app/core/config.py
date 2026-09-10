@@ -4,6 +4,7 @@ Lee las variables de entorno (ver `.env.example`) de forma tipada usando
 pydantic-settings, evitando el acceso disperso a `os.environ` que había
 en el backend Node original.
 """
+
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,7 +18,9 @@ class Settings(BaseSettings):
     server_url: str = "http://localhost:3000"
 
     # Base de datos (PostgreSQL)
-    database_url: str = "postgresql+asyncpg://usuario:password@localhost:5432/tipster_auditor"
+    database_url: str = (
+        "postgresql+asyncpg://usuario:password@localhost:5432/tipster_auditor"
+    )
 
     # Autenticación
     jwt_secret: str

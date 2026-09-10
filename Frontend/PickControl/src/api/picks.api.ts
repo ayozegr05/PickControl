@@ -8,7 +8,13 @@
 // `src/types/pick.types.ts` para que el resto de la app no tenga que
 // conocer la forma exacta de la respuesta del backend.
 import { apiRequest } from "./client";
-import { Acierto, PickCreatePayload, PickItem, PickSource, PickUpdatePayload } from "../types/pick.types";
+import {
+  Acierto,
+  PickCreatePayload,
+  PickItem,
+  PickSource,
+  PickUpdatePayload,
+} from "../types/pick.types";
 
 export type RawPick = {
   id: number;
@@ -45,7 +51,9 @@ export async function listPicks(): Promise<PickItem[]> {
   return raw.map(toPickItem);
 }
 
-export async function createPick(payload: PickCreatePayload): Promise<PickItem> {
+export async function createPick(
+  payload: PickCreatePayload
+): Promise<PickItem> {
   const raw = await apiRequest<RawPick>("/apuestas", {
     method: "POST",
     auth: true,
@@ -62,7 +70,10 @@ export async function createPick(payload: PickCreatePayload): Promise<PickItem> 
   return toPickItem(raw);
 }
 
-export async function updatePick(id: number, payload: PickUpdatePayload): Promise<PickItem> {
+export async function updatePick(
+  id: number,
+  payload: PickUpdatePayload
+): Promise<PickItem> {
   const raw = await apiRequest<RawPick>(`/apuesta/${id}`, {
     method: "PUT",
     auth: true,

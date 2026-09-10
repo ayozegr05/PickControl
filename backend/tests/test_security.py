@@ -2,6 +2,7 @@
 
 Aíslan funciones puras de hashing y JWT sin tocar la app FastAPI ni BD.
 """
+
 from datetime import datetime, timedelta, timezone
 
 import pytest

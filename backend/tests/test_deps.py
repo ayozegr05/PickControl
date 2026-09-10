@@ -1,4 +1,5 @@
 """Tests de integración de `app/api/deps.py` (`get_current_user`)."""
+
 from httpx import AsyncClient
 from sqlmodel import select
 
@@ -40,11 +41,17 @@ class TestAuthDependency:
 
     async def test_usuario_inactivo_no_puede_crear(self, client: AsyncClient, session):
         # Registramos un usuario.
-        payload = {"name": "Inactivo", "email": "inactivo@test.com", "password": "pass123"}
+        payload = {
+            "name": "Inactivo",
+            "email": "inactivo@test.com",
+            "password": "pass123",
+        }
         await client.post("/api/v1/auth/register", json=payload)
 
         # Lo localizamos en la BD de test y lo desactivamos.
-        user = (await session.exec(select(User).where(User.email == payload["email"]))).first()
+        user = (
+            await session.exec(select(User).where(User.email == payload["email"]))
+        ).first()
         user.is_active = False
         session.add(user)
         await session.commit()

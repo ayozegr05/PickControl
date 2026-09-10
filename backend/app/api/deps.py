@@ -4,6 +4,7 @@
 `req.headers.authorization?.split(' ')[1]` + `jwt.verify(...)` que se
 repetía en cada ruta protegida de `DbMongo/routes.js`.
 """
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError

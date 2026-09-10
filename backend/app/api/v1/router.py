@@ -1,4 +1,5 @@
 """Router agregador de la API v1."""
+
 from fastapi import APIRouter
 
 from app.api.v1 import auth, informantes, picks

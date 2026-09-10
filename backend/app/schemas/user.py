@@ -1,11 +1,12 @@
 """DTOs de entrada/salida para el recurso `User` (capa API, no de tabla)."""
+
 from datetime import datetime
 from typing import Optional
 
 from pydantic import EmailStr
 from sqlmodel import Field, SQLModel
 
-from app.models.user import UserBase, UserRole
+from app.models.user import UserBase
 
 
 class UserCreate(SQLModel):

@@ -1,4 +1,5 @@
 """Tests de integración del CRUD de apuestas (`app/api/v1/picks.py`)."""
+
 from httpx import AsyncClient
 
 PICK_CREATE = {
@@ -18,7 +19,9 @@ class TestListarPicks:
         assert response.json() == []
 
     async def test_listar_despues_de_crear(self, client: AsyncClient, auth_headers):
-        create = await client.post("/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers)
+        create = await client.post(
+            "/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers
+        )
         assert create.status_code == 201
 
         response = await client.get("/api/v1/apuestas")
@@ -31,7 +34,9 @@ class TestListarPicks:
 
 class TestCrearPick:
     async def test_crear_con_token_valido(self, client: AsyncClient, auth_headers):
-        response = await client.post("/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers)
+        response = await client.post(
+            "/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers
+        )
         assert response.status_code == 201
         data = response.json()
         assert data["id"] is not None
@@ -47,7 +52,9 @@ class TestCrearPick:
 
 class TestActualizarPick:
     async def test_actualizar_propia_apuesta(self, client: AsyncClient, auth_headers):
-        create = await client.post("/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers)
+        create = await client.post(
+            "/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers
+        )
         pick_id = create.json()["id"]
 
         update = await client.put(
@@ -61,18 +68,25 @@ class TestActualizarPick:
         # stake 10, cuota 2.5 -> ganancia neta 15.0
         assert data["ganancia"] == 15.0
 
-    async def test_actualizar_apuesta_ajena_prohibido(self, client: AsyncClient, auth_headers):
+    async def test_actualizar_apuesta_ajena_prohibido(
+        self, client: AsyncClient, auth_headers
+    ):
         # Usuario A crea una apuesta.
-        create = await client.post("/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers)
+        create = await client.post(
+            "/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers
+        )
         pick_id = create.json()["id"]
 
         # Usuario B se registra y autentica.
         payload_b = {"name": "Otro", "email": "otro@example.com", "password": "otra123"}
         await client.post("/api/v1/auth/register", json=payload_b)
-        login_b = await client.post("/api/v1/auth/login", json={
-            "email": payload_b["email"],
-            "password": payload_b["password"],
-        })
+        login_b = await client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": payload_b["email"],
+                "password": payload_b["password"],
+            },
+        )
         headers_b = {"Authorization": f"Bearer {login_b.json()['token']}"}
 
         update = await client.put(
@@ -93,10 +107,14 @@ class TestActualizarPick:
 
 class TestEliminarPick:
     async def test_eliminar_propia_apuesta(self, client: AsyncClient, auth_headers):
-        create = await client.post("/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers)
+        create = await client.post(
+            "/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers
+        )
         pick_id = create.json()["id"]
 
-        delete = await client.delete(f"/api/v1/apuestas/{pick_id}", headers=auth_headers)
+        delete = await client.delete(
+            f"/api/v1/apuestas/{pick_id}", headers=auth_headers
+        )
         assert delete.status_code == 204
 
         listar = await client.get("/api/v1/apuestas")

@@ -8,6 +8,7 @@ posterior; este módulo existe para fijar ya el contrato de datos
 (`process_incoming_message`) que usará esa fase, sin acoplar
 `handlers.py` a los detalles de esa futura implementación.
 """
+
 import logging
 from dataclasses import dataclass
 

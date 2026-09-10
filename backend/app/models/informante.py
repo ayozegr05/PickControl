@@ -5,6 +5,7 @@ de cada `Pick`. Al normalizar para PostgreSQL, se convierte en su propia
 tabla para evitar datos duplicados/inconsistentes y permitir relaciones
 (FK) desde `picks`.
 """
+
 from datetime import datetime
 from typing import Optional
 
