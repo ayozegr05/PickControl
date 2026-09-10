@@ -10,6 +10,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.dates import utc_now
+from app.core.rate_limit import check_rate_limit
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.postgres import get_session
 from app.models.user import User
@@ -22,7 +23,9 @@ router = APIRouter(tags=["auth"])
     "/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED
 )
 async def register(
-    payload: UserCreate, session: AsyncSession = Depends(get_session)
+    payload: UserCreate,
+    session: AsyncSession = Depends(get_session),
+    _rate_limit: None = Depends(check_rate_limit),
 ) -> AuthResponse:
     """Crea un nuevo usuario. Equivalente a `router.post("/register", ...)`."""
     existing_user = (
@@ -52,7 +55,9 @@ async def register(
 
 @router.post("/login", response_model=AuthResponse)
 async def login(
-    payload: UserLogin, session: AsyncSession = Depends(get_session)
+    payload: UserLogin,
+    session: AsyncSession = Depends(get_session),
+    _rate_limit: None = Depends(check_rate_limit),
 ) -> AuthResponse:
     """Autentica un usuario existente. Equivalente a `router.post("/login", ...)`."""
     credentials_error = HTTPException(

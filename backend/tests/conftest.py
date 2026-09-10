@@ -11,6 +11,8 @@ import os
 # valor por defecto. Hay que fijarlo ANTES de importar nada de `app`,
 # porque `app.core.security` llama a `get_settings()` al importarse.
 os.environ.setdefault("JWT_SECRET", "test-secret-key-solo-para-pytest")
+# Desactiva el rate limiting durante los tests.
+os.environ.setdefault("NODE_ENV", "test")
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
