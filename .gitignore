@@ -36,10 +36,11 @@ venv/
 .pgdata_dev/
 
 # ============================
-# Telegram (Telethon) sesiones
+# Telegram (Telethon) sesiones e imágenes descargadas
 # ============================
 *.session
 *.session-journal
+media/
 
 # ============================
 # Backend: bases de datos locales y logs de desarrollo

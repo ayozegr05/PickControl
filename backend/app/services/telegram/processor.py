@@ -25,7 +25,13 @@ class IncomingTelegramMessage:
 
 
 async def process_incoming_message(
-    *, channel: str, channel_id: int, message_id: int, text: str
+    *,
+    channel: str,
+    channel_id: int,
+    message_id: int,
+    text: str,
+    media_path: str | None = None,
+    extracted_text: str | None = None,
 ) -> None:
     """Punto de entrada único para procesar un mensaje entrante de Telegram.
 
@@ -43,6 +49,8 @@ async def process_incoming_message(
             message_id=message_id,
             channel_name=channel,
             text=text or "",
+            media_path=media_path,
+            extracted_text=extracted_text,
         )
         session.add(raw)
         await session.commit()
