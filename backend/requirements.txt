@@ -16,6 +16,9 @@ python-multipart>=0.0.9,<1.0
 # Logging estructurado: salida en consola (dev) o JSON (prod)
 structlog>=24.1,<25.0
 
+# OCR/LLM (solo se carga si OPENAI_API_KEY está configurado)
+openai>=1.0,<2.0
+
 # Telegram: cliente de usuario (Telethon) para escuchar canales, sustituye
 # a `node-telegram-bot-api` del backend Node retirado.
 telethon>=1.44,<2.0

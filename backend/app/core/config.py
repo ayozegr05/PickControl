@@ -46,7 +46,13 @@ class Settings(BaseSettings):
     telegram_phone: str | None = None
     telegram_session_name: str = "controlpick_telegram"
     # Canal a escuchar: username (sin @) o id numérico (con prefijo -100).
+    # Puedes poner varios separados por comas.
     telegram_target_channel: str | None = None
+    # Carpeta donde se descargan imágenes de Telegram.
+    telegram_media_path: str = "media/telegram"
+
+    # OpenAI (opcional, para OCR de imágenes de Telegram).
+    openai_api_key: str | None = None
 
 
 @lru_cache
