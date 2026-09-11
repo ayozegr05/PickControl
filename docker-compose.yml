@@ -22,8 +22,7 @@ services:
       dockerfile: Dockerfile
     container_name: controlpick-backend
     env_file:
-      # Copia .env.development.example a .env.development y ajusta secretos.
-      - ./backend/.env.development
+      - ./backend/.env
     environment:
       # Sobreescribe la URL del .env para apuntar al contenedor de PostgreSQL.
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/controlpick
@@ -32,6 +31,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      # Persistir sesión de Telegram y las imágenes descargadas entre reinicios.
+      - ./backend/controlpick_telegram.session:/app/controlpick_telegram.session
+      - ./backend/media:/app/media
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
 

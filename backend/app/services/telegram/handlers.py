@@ -89,9 +89,9 @@ def register_handlers(client: TelegramClient) -> None:
         return
 
     for target in targets:
-        # Telethon acepta tanto usernames ("mi_canal") como ids numéricos
-        # ("-1001125596067"); si parece un entero, lo convertimos.
-        chat = int(target) if _looks_like_id(target) else target
+        # Telethon acepta usernames ("mi_canal") o ids numéricos.
+        # Normalizamos posibles formatos: 123, -123, -100123...
+        chat = _to_telegram_chat_id(target) if _looks_like_id(target) else target
 
         client.on(events.NewMessage(chats=[chat]))(_make_new_message_handler(target))
         logger.info("[TELEGRAM_LISTENER] Escuchando canal objetivo: %s", target)
@@ -99,3 +99,19 @@ def register_handlers(client: TelegramClient) -> None:
 
 def _looks_like_id(value: str) -> bool:
     return value.lstrip("-").isdigit()
+
+
+def _to_telegram_chat_id(value: str) -> int:
+    """Convierte un string de id de Telegram en el entero que espera Telethon.
+
+    Telegram representa los canales como `-100<id_canal>`. Aceptamos:
+    - `1914772235` (id positivo)
+    - `-1914772235` (con signo negativo, lo convertimos a positivo)
+    - `-1001914772235` (formato completo, lo dejamos tal cual)
+    """
+    cleaned = value.lstrip("-")
+    if cleaned.startswith("100") and len(cleaned) >= 13:
+        # Formato completo -1001914772235 -> lo dejamos como entero negativo.
+        return int(value)
+    # -1914772235 o 1914772235 -> usamos el id positivo del canal.
+    return int(cleaned)
