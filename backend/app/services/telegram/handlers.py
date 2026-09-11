@@ -1,9 +1,8 @@
 """Registro de handlers de eventos de Telegram (Telethon).
 
-Por ahora solo escucha los mensajes nuevos del canal objetivo
-configurado (`TELEGRAM_TARGET_CHANNEL`) y los reenvía al stub de
-procesamiento de `processor.py`. La lógica de interpretación (LLM) se
-añadirá en una fase posterior.
+Escucha los mensajes nuevos de los canales configurados en
+`TELEGRAM_TARGET_CHANNEL` (lista separada por comas) y los reenvía al
+procesador de `processor.py` para guardarlos en base de datos.
 """
 
 from telethon import TelegramClient, events
@@ -15,37 +14,28 @@ from app.services.telegram.processor import process_incoming_message
 logger = get_logger("app.telegram")
 
 
-def register_handlers(client: TelegramClient) -> None:
-    """Registra el listener de mensajes nuevos sobre `client`.
+def _parse_target_channels(targets: str) -> list[str]:
+    """Convierte la variable de entorno en una lista de canales limpios."""
+    return [t.strip() for t in targets.split(",") if t.strip()]
 
-    Si `TELEGRAM_TARGET_CHANNEL` no está configurado, no registra nada
-    (y lo avisa por log) para no lanzar el cliente a escuchar "todo".
-    """
-    settings = get_settings()
-    target_channel = settings.telegram_target_channel
 
-    if not target_channel:
-        logger.warning(
-            "[TELEGRAM_LISTENER] TELEGRAM_TARGET_CHANNEL no está configurado; "
-            "no se registrará ningún listener."
-        )
-        return
+def _make_new_message_handler(target_label: str):
+    """Fabrica un handler con el nombre del canal cerrado en el closure."""
 
-    # Telethon acepta tanto usernames ("mi_canal") como ids numéricos
-    # ("-1001125596067"); si parece un entero, lo convertimos.
-    chat = int(target_channel) if _looks_like_id(target_channel) else target_channel
-
-    @client.on(events.NewMessage(chats=[chat]))
     async def _on_new_message(event: events.NewMessage.Event) -> None:
         chat_entity = await event.get_chat()
         chat_name = (
             getattr(chat_entity, "title", None)
             or getattr(chat_entity, "username", None)
-            or str(target_channel)
+            or str(target_label)
         )
         text = event.message.text or ""
 
-        logger.info("[TELEGRAM_LISTENER] Mensaje recibido de @%s: %s", chat_name, text)
+        logger.info(
+            "[TELEGRAM_LISTENER] Mensaje recibido de @%s: %s",
+            chat_name,
+            text,
+        )
 
         await process_incoming_message(
             channel=chat_name,
@@ -54,7 +44,32 @@ def register_handlers(client: TelegramClient) -> None:
             text=text,
         )
 
-    logger.info("[TELEGRAM_LISTENER] Escuchando canal objetivo: %s", target_channel)
+    return _on_new_message
+
+
+def register_handlers(client: TelegramClient) -> None:
+    """Registra un listener de mensajes nuevos por cada canal configurado.
+
+    Si `TELEGRAM_TARGET_CHANNEL` no está configurado, no registra nada
+    para no lanzar el cliente a escuchar "todo".
+    """
+    settings = get_settings()
+    targets = _parse_target_channels(settings.telegram_target_channel or "")
+
+    if not targets:
+        logger.warning(
+            "[TELEGRAM_LISTENER] TELEGRAM_TARGET_CHANNEL no está configurado; "
+            "no se registrará ningún listener."
+        )
+        return
+
+    for target in targets:
+        # Telethon acepta tanto usernames ("mi_canal") como ids numéricos
+        # ("-1001125596067"); si parece un entero, lo convertimos.
+        chat = int(target) if _looks_like_id(target) else target
+
+        client.on(events.NewMessage(chats=[chat]))(_make_new_message_handler(target))
+        logger.info("[TELEGRAM_LISTENER] Escuchando canal objetivo: %s", target)
 
 
 def _looks_like_id(value: str) -> bool:
