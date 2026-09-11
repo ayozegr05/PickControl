@@ -12,14 +12,17 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .coverage
+.venv/
+venv/
 
 # Telegram sesiones
 *.session
 *.session-journal
 
-# Bases de datos locales y logs
+# Bases de datos locales, logs e imágenes descargadas
 *.db
 *.log
+media/
 
 # Git
 .git
