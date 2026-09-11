@@ -146,6 +146,67 @@ npx expo start
 
 Escanea el QR con la app **Expo Go** desde tu dispositivo Android/iOS (misma red local que el backend), o pulsa `a` para abrir un emulador Android / `w` para la versión web.
 
-## 6. Documentación relacionada
+## 6. Uso con Docker (opcional)
+
+Docker permite levantar PostgreSQL + backend con un solo comando. Es útil para demostraciones, portfolio y despliegue.
+
+### 6.1. Requisitos
+
+- **Docker Desktop** instalado y corriendo.
+- PostgreSQL local corriendo en el puerto `5432` *puede seguir abierto*; el contenedor de Docker usa el `5433` en tu PC para evitar conflictos.
+- El backend local **no** debe estar en el puerto `8000`.
+
+### 6.2. Generar `.env.docker`
+
+Docker es más estricto que Python con los `.env`. Si tu `.env` tiene un `JWT_SECRET` multilínea, genera uno compatible:
+
+```powershell
+cd backend
+.venv\Scripts\python.exe scripts\generate_env_docker.py
+```
+
+Esto crea `backend/.env.docker` a partir de tus secretos locales.
+
+### 6.3. Comandos de Docker
+
+Añadir Docker al `PATH` de la terminal (si no lo tienes):
+
+```powershell
+$env:PATH += ";C:\Program Files\Docker\Docker\resources\bin"
+```
+
+Levantar PostgreSQL + backend:
+
+```powershell
+docker compose up --build -d
+```
+
+Ver contenedores activos:
+
+```powershell
+docker ps
+```
+
+Ver últimos logs:
+
+```powershell
+docker logs controlpick-backend --tail 40
+```
+
+Ver logs en tiempo real:
+
+```powershell
+docker logs -f controlpick-backend
+```
+
+Parar todo:
+
+```powershell
+docker compose down
+```
+
+La API de Docker quedará en `http://localhost:8000`. La base de datos de Docker es independiente de la PostgreSQL local.
+
+## 7. Documentación relacionada
 
 - [`ROADMAP_MIGRACION.md`](./ROADMAP_MIGRACION.md) — estado detallado fase a fase de la migración, comandos de referencia y notas de troubleshooting (incluye el throttling de Telegram al solicitar códigos de login repetidamente).
