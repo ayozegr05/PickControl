@@ -2,9 +2,10 @@
 
 from fastapi import APIRouter
 
-from app.api.v1 import auth, informantes, picks
+from app.api.v1 import auth, informantes, picks, telegram
 
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth")
 api_router.include_router(picks.router)
 api_router.include_router(informantes.router)
+api_router.include_router(telegram.router)

@@ -22,6 +22,7 @@ from app.core.config import get_settings
 # y Alembic pueda detectarlos al autogenerar migraciones.
 from app.models.informante import Informante  # noqa: F401
 from app.models.pick import Pick  # noqa: F401
+from app.models.telegram_raw_message import TelegramRawMessage  # noqa: F401
 from app.models.user import User  # noqa: F401
 
 config = context.config
