@@ -9,7 +9,7 @@ services:
     volumes:
       - db_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d controlpick"]
       interval: 5s
@@ -22,7 +22,8 @@ services:
       dockerfile: Dockerfile
     container_name: controlpick-backend
     env_file:
-      - ./backend/.env
+      # Generado a partir de .env sin valores multilinea para Docker.
+      - ./backend/.env.docker
     environment:
       # Sobreescribe la URL del .env para apuntar al contenedor de PostgreSQL.
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/controlpick
