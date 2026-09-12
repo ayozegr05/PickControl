@@ -8,6 +8,7 @@ procesador de `processor.py` para guardarlos en base de datos.
 import os
 
 from telethon import TelegramClient, events
+from telethon.tl.types import MessageMediaPhoto
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -40,19 +41,24 @@ def _make_new_message_handler(target_label: str):
         extracted_text: str | None = None
 
         if message.media:
-            os.makedirs(settings.telegram_media_path, exist_ok=True)
-            filename = f"{message.chat_id}_{message.id}.jpg"
-            media_path = os.path.join(settings.telegram_media_path, filename)
-            try:
-                await event.client.download_media(message.media, file=media_path)
-                logger.info("Imagen descargada: %s", media_path)
-                if not text:
-                    extracted_text = await extract_text_from_image(
-                        media_path, settings.openai_api_key
-                    )
-            except Exception as exc:  # noqa: BLE001
-                logger.error("Error descargando imagen: %s", exc)
-                media_path = None
+            if isinstance(message.media, MessageMediaPhoto):
+                os.makedirs(settings.telegram_media_path, exist_ok=True)
+                filename = f"{message.chat_id}_{message.id}.jpg"
+                media_path = os.path.join(settings.telegram_media_path, filename)
+                try:
+                    await event.client.download_media(message.media, file=media_path)
+                    logger.info("Imagen descargada: %s", media_path)
+                    if not text:
+                        extracted_text = await extract_text_from_image(
+                            media_path, settings.openai_api_key
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("Error descargando imagen: %s", exc)
+                    media_path = None
+            else:
+                logger.info(
+                    "Media no soportada para OCR: %s", type(message.media).__name__
+                )
 
         logger.info(
             "[TELEGRAM_LISTENER] Mensaje recibido de @%s: %s",

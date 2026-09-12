@@ -1,15 +1,16 @@
 """Procesamiento de mensajes de Telegram recibidos por Telethon.
 
-Por ahora la "procesión" es mínima: normaliza el mensaje y lo guarda en
-la tabla `telegram_raw_messages`. Más adelante este mismo punto de entrada
-se extenderá con un LLM para extraer picks y almacenarlos en `picks`.
+Guarda el mensaje crudo y, si hay clave de OpenAI, intenta extraer un pick
+mediante el extractor híbrido (reglas + LLM).
 """
 
 from dataclasses import dataclass
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
 from app.models.telegram_raw_message import TelegramRawMessage
+from app.services.telegram.pick_extractor import extract_pick
 
 logger = get_logger("app.telegram")
 
@@ -43,6 +44,22 @@ async def process_incoming_message(
     )
     logger.info("[TELEGRAM_PROCESSOR] Mensaje listo para procesar: %s", message)
 
+    source_text = (extracted_text or text or "").strip()
+
+    settings = get_settings()
+    pick = None
+    if settings.openai_api_key and source_text:
+        pick = await extract_pick(
+            source_text, settings.openai_api_key, informante=channel
+        )
+        if pick:
+            logger.info(
+                "[TELEGRAM_PROCESSOR] Pick extraído (método=%s, confianza=%s): %s",
+                pick.metodo,
+                pick.confianza,
+                pick.model_dump(exclude_none=True),
+            )
+
     async with AsyncSessionLocal() as session:
         raw = TelegramRawMessage(
             channel_id=channel_id,
@@ -51,6 +68,7 @@ async def process_incoming_message(
             text=text or "",
             media_path=media_path,
             extracted_text=extracted_text,
+            processed=True if pick else False,
         )
         session.add(raw)
         await session.commit()

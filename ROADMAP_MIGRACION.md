@@ -70,3 +70,13 @@ Aplicar el esquema a la nueva base PostgreSQL:
 ```powershell
 .\.venv\Scripts\python.exe -m alembic upgrade head
 ```
+
+## Optimizaciones futuras de costes (OCR y LLM)
+
+- **Filtrar media**: solo aplicar OCR a fotos (`MessageMediaPhoto`). Descartar GIFs, vídeos y documentos para no gastar créditos de OpenAI en contenido que no es procesable.
+- **Extractor híbrido ya implementado**: pre-filtro de alta confianza, regex para patrones claros y LLM (`gpt-4o-mini`) solo como fallback, reduciendo llamadas innecesarias.
+- **Pre-filtro anti-spam**: no llamar al extractor cuando el mensaje es un saludo, promo, enlace o sorteo.
+- **OCR local**: evaluar `pytesseract` o `easyocr` para imágenes simples y reservar OpenAI solo cuando el local falle.
+- **LLM local**: considerar `ollama` o modelos cuantizados una vez el volumen justifique la infraestructura.
+- **Batching**: agrupar varios mensajes en una sola llamada al LLM para reducir overhead.
+- **Caché por canal**: no reprocesar mensajes duplicados o plantillas de promoción repetidas.
