@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
+from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.services.telegram.pick_extractor import extract_pick
 
@@ -71,6 +72,27 @@ async def process_incoming_message(
             processed=True if pick else False,
         )
         session.add(raw)
+        await session.flush()
+
+        if pick:
+            parsed = ParsedPick(
+                raw_message_id=raw.id,
+                es_apuesta=pick.es_apuesta,
+                apuesta=pick.seleccion,
+                deporte=pick.deporte,
+                evento=pick.evento,
+                mercado=pick.mercado,
+                seleccion=pick.seleccion,
+                cuota=pick.cuota,
+                stake=pick.stake,
+                casa=pick.casa,
+                informante=pick.informante or channel,
+                explicacion=pick.explicacion,
+                metodo=pick.metodo,
+                confianza=pick.confianza,
+            )
+            session.add(parsed)
+
         await session.commit()
 
     logger.info(
