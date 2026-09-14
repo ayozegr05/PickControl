@@ -25,6 +25,7 @@ from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.models.user import User  # noqa: F401
 from app.services.telegram.pick_extractor import extract_pick
+from app.services.telegram.processor import _find_duplicate_pick
 
 
 async def main() -> None:
@@ -62,23 +63,35 @@ async def main() -> None:
             if not pick:
                 continue
 
-            parsed = ParsedPick(
-                raw_message_id=raw.id,
-                es_apuesta=pick.es_apuesta,
-                apuesta=pick.seleccion,
-                deporte=pick.deporte,
-                evento=pick.evento,
-                mercado=pick.mercado,
-                seleccion=pick.seleccion,
-                cuota=pick.cuota,
-                stake=pick.stake,
-                casa=pick.casa,
-                informante=pick.informante or raw.channel_name,
-                explicacion=pick.explicacion,
-                metodo=pick.metodo,
-                confianza=pick.confianza,
-            )
-            session.add(parsed)
+            duplicate = None
+            if pick.es_apuesta:
+                duplicate = await _find_duplicate_pick(session, raw.channel_name, pick)
+
+            if duplicate:
+                print(
+                    f"  [{raw.id}] duplicado de ParsedPick id={duplicate.id}, "
+                    f"'{pick.seleccion}' ~ '{duplicate.seleccion}', no se crea."
+                )
+            else:
+                parsed = ParsedPick(
+                    raw_message_id=raw.id,
+                    es_apuesta=pick.es_apuesta,
+                    apuesta=pick.seleccion,
+                    deporte=pick.deporte,
+                    evento=pick.evento,
+                    mercado=pick.mercado,
+                    seleccion=pick.seleccion,
+                    cuota=pick.cuota,
+                    stake=pick.stake,
+                    casa=pick.casa,
+                    informante=raw.channel_name,
+                    explicacion=pick.explicacion,
+                    metodo=pick.metodo,
+                    confianza=pick.confianza,
+                )
+                session.add(parsed)
+                await session.flush()
+
             raw.processed = True
             session.add(raw)
 

@@ -151,7 +151,10 @@ Reglas:
 - "seleccion" es lo recomendado (ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5").
 - "evento" es el partido/competición (ej. "Tenis - Challenger Francia - Cassis").
 - "mercado" es el tipo de apuesta (ej. "ganador", "hándicap asiático").
-- Extrae cuota y stake como números. Si no están, null.
+- Extrae "cuota" solo si aparece un número claramente asociado a la cuota/odds de la selección.
+- Extrae "stake" ÚNICAMENTE si el texto menciona explícitamente la palabra "stake" o "unidades" seguida de un número (normalmente entre 1 y 10).
+- NUNCA uses como "stake" importes en euros/dólares que aparezcan en capturas de pantalla del boleto de una casa de apuestas (p. ej. "Importe", "Imp:", "Ganancias", "Cerrar apuesta", saldo, importe apostado, importe a pagar). Esos son cantidades de dinero del boleto del tipster, no el sistema de unidades de stake. Si no hay mención explícita de "stake" o "unidades", deja "stake" = null.
+- No inventes ni deduzcas valores (cuota, stake, casa, etc.) que no estén explícitamente en el texto. Ante la duda, usa null.
 - No añadas markdown, solo el JSON.
 """
 

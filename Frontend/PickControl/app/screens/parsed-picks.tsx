@@ -12,6 +12,15 @@ import TopBar from "@/src/components/top-bar";
 import BottomBar from "@/src/components/bottom-bar";
 import { getParsedPicks, ParsedPick } from "@/src/api/parsed-picks.api";
 
+function cleanChannel(name: string | null): string {
+  if (!name) return "desconocido";
+  return name
+    .replace(/[^\p{L}\p{N}\s|]/gu, " ")
+    .replace(/\s+/g, " ")
+    .split("|")[0]
+    .trim();
+}
+
 export default function ParsedPicksScreen() {
   const [picks, setPicks] = useState<ParsedPick[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,13 +36,16 @@ export default function ParsedPicksScreen() {
   }, []);
 
   const channels = useMemo(
-    () => Array.from(new Set(picks.map((p) => p.informante).filter(Boolean))),
+    () =>
+      Array.from(
+        new Set(picks.map((p) => cleanChannel(p.informante)).filter(Boolean))
+      ).sort(),
     [picks]
   );
 
   const filteredPicks = useMemo(() => {
     if (!selectedChannel) return picks;
-    return picks.filter((p) => p.informante === selectedChannel);
+    return picks.filter((p) => cleanChannel(p.informante) === selectedChannel);
   }, [picks, selectedChannel]);
 
   return (
@@ -104,7 +116,7 @@ export default function ParsedPicksScreen() {
               {pick.apuesta || "Sin apuesta"}
             </Text>
             <Text style={styles.cardMeta}>
-              Canal: {pick.informante || "desconocido"}
+              Canal: {cleanChannel(pick.informante)}
             </Text>
             <Text style={styles.cardMeta}>
               Cuota: {pick.cuota ?? "-"} | Stake: {pick.stake ?? "-"}

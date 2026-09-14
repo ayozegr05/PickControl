@@ -5,15 +5,73 @@ mediante el extractor híbrido (reglas + LLM).
 """
 
 from dataclasses import dataclass
+from datetime import timedelta
+from difflib import SequenceMatcher
+
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import get_settings
+from app.core.dates import utc_now
 from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
-from app.services.telegram.pick_extractor import extract_pick
+from app.services.telegram.pick_extractor import ExtractedPick, extract_pick
 
 logger = get_logger("app.telegram")
+
+# Ventana de tiempo en la que consideramos que dos picks del mismo canal
+# pueden ser el mismo pronóstico repetido (p. ej. foto + texto explicativo
+# enviados por separado por el tipster).
+_DUPLICATE_WINDOW = timedelta(hours=6)
+_DUPLICATE_TEXT_SIMILARITY = 0.8
+_DUPLICATE_TEXT_SIMILARITY_WITH_MATCHING_CUOTA = 0.6
+
+
+def _text_similarity(a: str, b: str) -> float:
+    return SequenceMatcher(None, a.strip().lower(), b.strip().lower()).ratio()
+
+
+async def _find_duplicate_pick(
+    session: AsyncSession, channel: str, pick: ExtractedPick
+) -> ParsedPick | None:
+    """Busca un ParsedPick muy similar ya guardado para el mismo canal.
+
+    Sirve para evitar duplicar el mismo pronóstico cuando el tipster lo
+    envía primero como imagen (OCR) y luego lo repite como texto (o al
+    revés).
+    """
+    if not pick.seleccion:
+        return None
+
+    cutoff = utc_now() - _DUPLICATE_WINDOW
+    result = await session.exec(
+        select(ParsedPick)
+        .where(ParsedPick.informante == channel)
+        .where(ParsedPick.es_apuesta == True)  # noqa: E712
+        .where(ParsedPick.created_at >= cutoff)
+    )
+    for candidate in result.all():
+        if not candidate.seleccion:
+            continue
+
+        similarity = _text_similarity(candidate.seleccion, pick.seleccion)
+        if similarity >= _DUPLICATE_TEXT_SIMILARITY:
+            return candidate
+
+        cuotas_coinciden = (
+            pick.cuota is not None
+            and candidate.cuota is not None
+            and abs(candidate.cuota - pick.cuota) < 0.01
+        )
+        if (
+            cuotas_coinciden
+            and similarity >= _DUPLICATE_TEXT_SIMILARITY_WITH_MATCHING_CUOTA
+        ):
+            return candidate
+
+    return None
 
 
 @dataclass
@@ -75,23 +133,37 @@ async def process_incoming_message(
         await session.flush()
 
         if pick:
-            parsed = ParsedPick(
-                raw_message_id=raw.id,
-                es_apuesta=pick.es_apuesta,
-                apuesta=pick.seleccion,
-                deporte=pick.deporte,
-                evento=pick.evento,
-                mercado=pick.mercado,
-                seleccion=pick.seleccion,
-                cuota=pick.cuota,
-                stake=pick.stake,
-                casa=pick.casa,
-                informante=pick.informante or channel,
-                explicacion=pick.explicacion,
-                metodo=pick.metodo,
-                confianza=pick.confianza,
-            )
-            session.add(parsed)
+            duplicate = None
+            if pick.es_apuesta:
+                duplicate = await _find_duplicate_pick(session, channel, pick)
+
+            if duplicate:
+                logger.info(
+                    "[TELEGRAM_PROCESSOR] Pick duplicado en canal %s (ya existe "
+                    "ParsedPick id=%s): '%s' ~ '%s'. No se crea de nuevo.",
+                    channel,
+                    duplicate.id,
+                    pick.seleccion,
+                    duplicate.seleccion,
+                )
+            else:
+                parsed = ParsedPick(
+                    raw_message_id=raw.id,
+                    es_apuesta=pick.es_apuesta,
+                    apuesta=pick.seleccion,
+                    deporte=pick.deporte,
+                    evento=pick.evento,
+                    mercado=pick.mercado,
+                    seleccion=pick.seleccion,
+                    cuota=pick.cuota,
+                    stake=pick.stake,
+                    casa=pick.casa,
+                    informante=channel,
+                    explicacion=pick.explicacion,
+                    metodo=pick.metodo,
+                    confianza=pick.confianza,
+                )
+                session.add(parsed)
 
         await session.commit()
 
