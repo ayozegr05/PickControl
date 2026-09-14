@@ -1,8 +1,15 @@
-"""Proveedor de resultados usando API-Football (vía RapidAPI).
+"""Proveedor de resultados usando API-Football.
 
 Cubre muchas más ligas (incluidas menores) que football-data.org, pero
 con un límite gratuito más bajo (100 peticiones/día). Se usa como
 fallback cuando football-data.org no encuentra el partido.
+
+Soporta dos formas de acceso, según cómo te hayas registrado:
+- Directo en api-football.com (recomendado, más simple): host
+  "v3.football.api-sports.io", autenticación con el header
+  "x-apisports-key".
+- Vía RapidAPI (marketplace): host "api-football-v1.p.rapidapi.com",
+  autenticación con "X-RapidAPI-Key" / "X-RapidAPI-Host".
 """
 
 from __future__ import annotations
@@ -26,11 +33,20 @@ def _similar(a: str, b: str) -> float:
 
 
 class ApiFootballProvider:
-    """Consulta API-Football (RapidAPI) por partidos finalizados de una fecha."""
+    """Consulta API-Football por partidos finalizados de una fecha."""
 
     def __init__(self, api_key: str, api_host: str) -> None:
         self._api_key = api_key
         self._api_host = api_host
+
+    def _headers(self) -> dict[str, str]:
+        if "rapidapi" in self._api_host:
+            return {
+                "X-RapidAPI-Key": self._api_key,
+                "X-RapidAPI-Host": self._api_host,
+            }
+        # Acceso directo en api-football.com (api-sports.io).
+        return {"x-apisports-key": self._api_key}
 
     async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:
         date_str = date.strftime("%Y-%m-%d")
@@ -40,10 +56,7 @@ class ApiFootballProvider:
                 response = await client.get(
                     f"https://{self._api_host}/v3/fixtures",
                     params={"date": date_str},
-                    headers={
-                        "X-RapidAPI-Key": self._api_key,
-                        "X-RapidAPI-Host": self._api_host,
-                    },
+                    headers=self._headers(),
                 )
                 response.raise_for_status()
             except httpx.HTTPError as exc:
