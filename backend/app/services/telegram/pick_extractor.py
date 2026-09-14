@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from typing import Optional
 
 from openai import AsyncOpenAI
@@ -31,8 +32,69 @@ class ExtractedPick(BaseModel):
     casa: Optional[str] = None
     informante: Optional[str] = None
     explicacion: Optional[str] = None
+    # Fecha/hora del evento deportivo, si se pudo identificar en el texto.
+    # Necesaria para poder verificar el resultado más adelante.
+    fecha_evento: Optional[datetime] = None
     metodo: str = "unknown"  # 'rule', 'llm' o 'rejected'
     confianza: float = 0.0
+
+
+_MESES_ES = {
+    "ene": 1,
+    "feb": 2,
+    "mar": 3,
+    "abr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "ago": 8,
+    "sep": 9,
+    "set": 9,
+    "oct": 10,
+    "nov": 11,
+    "dic": 12,
+}
+
+
+def _extract_event_date(text: str) -> Optional[datetime]:
+    """Intenta extraer la fecha/hora del evento con patrones habituales.
+
+    Cubre formatos vistos en mensajes/OCR de tipsters, p. ej.:
+    - "12.09.2026 14:00" (boletos/capturas de casas de apuestas)
+    - "Sáb 12 sep 14:00" (interfaz de casa de apuestas)
+    No inventa nada: si no encuentra un patrón claro, devuelve None.
+    """
+    match = re.search(
+        r"(\d{1,2})[./](\d{1,2})[./](\d{4})(?:\s+(\d{1,2}):(\d{2}))?", text
+    )
+    if match:
+        day, month, year, hour, minute = match.groups()
+        try:
+            return datetime(
+                int(year), int(month), int(day), int(hour or 0), int(minute or 0)
+            )
+        except ValueError:
+            pass
+
+    match = re.search(
+        r"\b(\d{1,2})\s+(ene|feb|mar|abr|may|jun|jul|ago|sep|set|oct|nov|dic)"
+        r"[a-zñ]*\.?(?:\s+(\d{4}))?(?:\s+(\d{1,2}):(\d{2}))?",
+        text.lower(),
+    )
+    if match:
+        day, month_abbr, year, hour, minute = match.groups()
+        try:
+            return datetime(
+                int(year) if year else datetime.now().year,
+                _MESES_ES[month_abbr],
+                int(day),
+                int(hour or 0),
+                int(minute or 0),
+            )
+        except (ValueError, KeyError):
+            pass
+
+    return None
 
 
 _POSITIVE_PATTERNS = [
@@ -124,6 +186,7 @@ def _rule_extract(
         cuota=float(cuota_match.group(1).replace(",", ".")),
         stake=float(stake_match.group(1).replace(",", ".")),
         informante=informante,
+        fecha_evento=_extract_event_date(text),
         metodo="rule",
         confianza=0.85,
     )
@@ -143,7 +206,8 @@ Recibirás texto de canales de Telegram de tipsters. Devuelve ÚNICAMENTE un JSO
   "stake": number | null,
   "casa": string | null,
   "informante": string | null,
-  "explicacion": string | null
+  "explicacion": string | null,
+  "fecha_evento": string | null
 }
 
 Reglas:
@@ -151,10 +215,12 @@ Reglas:
 - "seleccion" es lo recomendado (ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5").
 - "evento" es el partido/competición (ej. "Tenis - Challenger Francia - Cassis").
 - "mercado" es el tipo de apuesta (ej. "ganador", "hándicap asiático").
+- "deporte" debe ser una palabra normalizada y simple: "fútbol", "tenis", "baloncesto", etc.
 - Extrae "cuota" solo si aparece un número claramente asociado a la cuota/odds de la selección.
 - Extrae "stake" ÚNICAMENTE si el texto menciona explícitamente la palabra "stake" o "unidades" seguida de un número (normalmente entre 1 y 10).
 - NUNCA uses como "stake" importes en euros/dólares que aparezcan en capturas de pantalla del boleto de una casa de apuestas (p. ej. "Importe", "Imp:", "Ganancias", "Cerrar apuesta", saldo, importe apostado, importe a pagar). Esos son cantidades de dinero del boleto del tipster, no el sistema de unidades de stake. Si no hay mención explícita de "stake" o "unidades", deja "stake" = null.
-- No inventes ni deduzcas valores (cuota, stake, casa, etc.) que no estén explícitamente en el texto. Ante la duda, usa null.
+- "fecha_evento" es la fecha (y hora si aparece) del partido/evento, en formato ISO 8601 (ej. "2026-09-12T14:00:00"). Solo si aparece explícitamente en el texto. Si no hay fecha, null.
+- No inventes ni deduzcas valores (cuota, stake, casa, fecha, etc.) que no estén explícitamente en el texto. Ante la duda, usa null.
 - No añadas markdown, solo el JSON.
 """
 
@@ -185,6 +251,8 @@ async def _llm_extract(
     pick.metodo = "llm"
     pick.confianza = 0.75 if pick.es_apuesta else 0.0
     pick.informante = pick.informante or informante
+    if pick.fecha_evento is None:
+        pick.fecha_evento = _extract_event_date(text)
     return pick
 
 
