@@ -12,6 +12,7 @@ from fastapi import FastAPI
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.services.results.verifier import verify_pending_picks
 from app.services.telegram.client import get_telegram_client, reset_telegram_client
 from app.services.telegram.handlers import register_handlers
 
@@ -26,6 +27,25 @@ async def _run_telegram_listener() -> None:
     await client.start(phone=settings.telegram_phone)
     logger.info("[TELEGRAM_LISTENER] Cliente de Telegram conectado y escuchando.")
     await client.run_until_disconnected()
+
+
+async def _run_results_verifier_loop() -> None:
+    """Revisa periódicamente picks pendientes de verificar resultados.
+
+    Corre en segundo plano mientras el backend esté arriba; no bloquea
+    el arranque ni el listener de Telegram.
+    """
+    settings = get_settings()
+    interval_seconds = settings.results_verification_interval_hours * 3600
+
+    while True:
+        try:
+            await verify_pending_picks()
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "[RESULTS_VERIFIER] Error verificando picks pendientes: %s", exc
+            )
+        await asyncio.sleep(interval_seconds)
 
 
 @asynccontextmanager
@@ -45,6 +65,20 @@ async def lifespan(app: FastAPI):
             "el listener de Telegram no se iniciará."
         )
 
+    results_task: asyncio.Task | None = None
+    if settings.football_data_api_key or settings.api_football_key:
+        results_task = asyncio.create_task(_run_results_verifier_loop())
+        logger.info(
+            "[LIFECYCLE] Verificador de resultados iniciado en segundo plano "
+            "(cada %sh).",
+            settings.results_verification_interval_hours,
+        )
+    else:
+        logger.warning(
+            "[LIFECYCLE] FOOTBALL_DATA_API_KEY/API_FOOTBALL_KEY no configurados; "
+            "la verificación automática de resultados no se ejecutará."
+        )
+
     try:
         yield
     finally:
@@ -61,3 +95,11 @@ async def lifespan(app: FastAPI):
 
             reset_telegram_client()
             logger.info("[LIFECYCLE] Listener de Telegram detenido.")
+
+        if results_task is not None:
+            results_task.cancel()
+            try:
+                await results_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            logger.info("[LIFECYCLE] Verificador de resultados detenido.")

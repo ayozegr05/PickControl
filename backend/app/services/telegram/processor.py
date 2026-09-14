@@ -160,6 +160,7 @@ async def process_incoming_message(
                     casa=pick.casa,
                     informante=channel,
                     explicacion=pick.explicacion,
+                    fecha_evento=pick.fecha_evento,
                     metodo=pick.metodo,
                     confianza=pick.confianza,
                 )

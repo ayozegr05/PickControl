@@ -10,7 +10,11 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import TopBar from "@/src/components/top-bar";
 import BottomBar from "@/src/components/bottom-bar";
-import { getParsedPicks, ParsedPick } from "@/src/api/parsed-picks.api";
+import {
+  getParsedPicks,
+  updateParsedPickAcierto,
+  ParsedPick,
+} from "@/src/api/parsed-picks.api";
 
 function formatDate(isoDate: string): string {
   const date = new Date(isoDate);
@@ -38,6 +42,7 @@ export default function ParsedPicksScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
@@ -47,18 +52,37 @@ export default function ParsedPicksScreen() {
       .finally(() => setLoading(false));
   }, []);
 
+  const handleCorregirAcierto = async (
+    pick: ParsedPick,
+    acierto: boolean | null
+  ) => {
+    try {
+      const updated = await updateParsedPickAcierto(pick.id, acierto);
+      setPicks((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const realPicks = useMemo(() => picks.filter((p) => p.es_apuesta), [picks]);
+  const visiblePicks = showAll ? picks : realPicks;
+
   const channels = useMemo(
     () =>
       Array.from(
-        new Set(picks.map((p) => cleanChannel(p.informante)).filter(Boolean))
+        new Set(
+          visiblePicks.map((p) => cleanChannel(p.informante)).filter(Boolean)
+        )
       ).sort(),
-    [picks]
+    [visiblePicks]
   );
 
   const filteredPicks = useMemo(() => {
-    if (!selectedChannel) return picks;
-    return picks.filter((p) => cleanChannel(p.informante) === selectedChannel);
-  }, [picks, selectedChannel]);
+    if (!selectedChannel) return visiblePicks;
+    return visiblePicks.filter(
+      (p) => cleanChannel(p.informante) === selectedChannel
+    );
+  }, [visiblePicks, selectedChannel]);
 
   return (
     <View style={styles.container}>
@@ -70,6 +94,21 @@ export default function ParsedPicksScreen() {
         ]}
       >
         <Text style={styles.title}>Picks extraídos de Telegram</Text>
+
+        <TouchableOpacity
+          style={styles.toggleRow}
+          onPress={() => {
+            setShowAll((prev) => !prev);
+            setSelectedChannel(null);
+          }}
+        >
+          <View
+            style={[styles.checkbox, showAll && styles.checkboxChecked]}
+          />
+          <Text style={styles.toggleLabel}>
+            Ver todos (incluye mensajes descartados por el filtro)
+          </Text>
+        </TouchableOpacity>
 
         {loading && <ActivityIndicator size="large" color="#ff9f1c" />}
         {error && <Text style={styles.error}>Error: {error}</Text>}
@@ -137,11 +176,63 @@ export default function ParsedPicksScreen() {
             <Text style={styles.cardMeta}>
               Método: {pick.metodo} | Confianza: {pick.confianza}
             </Text>
-            <Text style={styles.cardMeta}>
-              Es apuesta: {pick.es_apuesta ? "Sí" : "No"}
-            </Text>
+            {showAll && (
+              <Text style={styles.cardMeta}>
+                Es apuesta: {pick.es_apuesta ? "Sí" : "No"}
+              </Text>
+            )}
             {pick.explicacion && (
               <Text style={styles.explanation}>{pick.explicacion}</Text>
+            )}
+
+            {pick.es_apuesta && (
+              <View style={styles.acertoSection}>
+                <Text style={styles.cardMeta}>
+                  Resultado:{" "}
+                  <Text
+                    style={
+                      pick.acierto === true
+                        ? styles.acertoTrue
+                        : pick.acierto === false
+                        ? styles.acertoFalse
+                        : styles.acertoPending
+                    }
+                  >
+                    {pick.acierto === true
+                      ? "Acertó"
+                      : pick.acierto === false
+                      ? "Falló"
+                      : "Pendiente"}
+                  </Text>
+                  {pick.verificado_por && (
+                    <Text style={styles.cardMeta}>
+                      {" "}
+                      ({pick.verificado_por === "auto" ? "auto" : "manual"})
+                    </Text>
+                  )}
+                </Text>
+
+                <View style={styles.acertoButtons}>
+                  <TouchableOpacity
+                    style={[styles.acertoButton, styles.acertoButtonTrue]}
+                    onPress={() => handleCorregirAcierto(pick, true)}
+                  >
+                    <Text style={styles.acertoButtonText}>Acertó</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.acertoButton, styles.acertoButtonFalse]}
+                    onPress={() => handleCorregirAcierto(pick, false)}
+                  >
+                    <Text style={styles.acertoButtonText}>Falló</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.acertoButton, styles.acertoButtonPending]}
+                    onPress={() => handleCorregirAcierto(pick, null)}
+                  >
+                    <Text style={styles.acertoButtonText}>Pendiente</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             )}
           </View>
         ))}
@@ -228,5 +319,75 @@ const styles = StyleSheet.create({
     color: "#aaa",
     fontSize: 14,
     marginBottom: 12,
+  },
+  toggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  checkbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: "#666",
+    marginRight: 8,
+  },
+  checkboxChecked: {
+    backgroundColor: "#ff9f1c",
+    borderColor: "#ff9f1c",
+  },
+  toggleLabel: {
+    color: "#aaa",
+    fontSize: 13,
+    flexShrink: 1,
+  },
+  acertoSection: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#333",
+  },
+  acertoTrue: {
+    color: "#4caf50",
+    fontWeight: "bold",
+  },
+  acertoFalse: {
+    color: "#f44336",
+    fontWeight: "bold",
+  },
+  acertoPending: {
+    color: "#ff9f1c",
+    fontWeight: "bold",
+  },
+  acertoButtons: {
+    flexDirection: "row",
+    marginTop: 8,
+    gap: 8,
+  },
+  acertoButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    marginRight: 8,
+  },
+  acertoButtonTrue: {
+    backgroundColor: "#1e3a24",
+    borderColor: "#4caf50",
+    borderWidth: 1,
+  },
+  acertoButtonFalse: {
+    backgroundColor: "#3a1e1e",
+    borderColor: "#f44336",
+    borderWidth: 1,
+  },
+  acertoButtonPending: {
+    backgroundColor: "#332a1a",
+    borderColor: "#ff9f1c",
+    borderWidth: 1,
+  },
+  acertoButtonText: {
+    color: "#fff",
+    fontSize: 12,
   },
 });

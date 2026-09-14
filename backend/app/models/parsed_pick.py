@@ -25,6 +25,15 @@ class ParsedPickBase(SQLModel):
     metodo: str = Field(default="unknown", max_length=20)
     confianza: float = Field(default=0.0)
 
+    # Fecha/hora del evento deportivo (si se pudo extraer del mensaje).
+    # Necesaria para poder buscar el resultado real en las APIs deportivas.
+    fecha_evento: Optional[datetime] = None
+
+    # Verificación del resultado: None = pendiente, True = acertó, False = falló.
+    acierto: Optional[bool] = None
+    # Quién verificó el resultado: "auto" (API de resultados) o "manual".
+    verificado_por: Optional[str] = Field(default=None, max_length=20)
+
 
 class ParsedPick(ParsedPickBase, table=True):
     """Pick estructurado ligado a un mensaje crudo de Telegram."""

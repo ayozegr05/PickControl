@@ -20,7 +20,7 @@ export class ApiError extends Error {
 }
 
 type RequestOptions = {
-  method?: "GET" | "POST" | "PUT" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   /** Si es true, adjunta `Authorization: Bearer <token>` leyendo el
    * token guardado por AuthContext en AsyncStorage. */

@@ -54,6 +54,15 @@ class Settings(BaseSettings):
     # OpenAI (opcional, para OCR de imágenes de Telegram).
     openai_api_key: str | None = None
 
+    # Verificación automática de resultados (opcional).
+    # football-data.org: ligas top (La Liga, Champions, Premier...), gratis.
+    football_data_api_key: str | None = None
+    # API-Football vía RapidAPI: más cobertura (ligas menores), límite más bajo.
+    api_football_key: str | None = None
+    api_football_host: str = "api-football-v1.p.rapidapi.com"
+    # Cada cuántas horas se revisan picks pendientes de verificar en segundo plano.
+    results_verification_interval_hours: float = 3.0
+
 
 @lru_cache
 def get_settings() -> Settings:
