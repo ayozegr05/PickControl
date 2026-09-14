@@ -12,6 +12,18 @@ import TopBar from "@/src/components/top-bar";
 import BottomBar from "@/src/components/bottom-bar";
 import { getParsedPicks, ParsedPick } from "@/src/api/parsed-picks.api";
 
+function formatDate(isoDate: string): string {
+  const date = new Date(isoDate);
+  if (isNaN(date.getTime())) return isoDate;
+  return date.toLocaleString("es-ES", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function cleanChannel(name: string | null): string {
   if (!name) return "desconocido";
   return name
@@ -115,6 +127,7 @@ export default function ParsedPicksScreen() {
             <Text style={styles.cardTitle}>
               {pick.apuesta || "Sin apuesta"}
             </Text>
+            <Text style={styles.cardDate}>{formatDate(pick.created_at)}</Text>
             <Text style={styles.cardMeta}>
               Canal: {cleanChannel(pick.informante)}
             </Text>
@@ -165,6 +178,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "bold",
     marginBottom: 4,
+  },
+  cardDate: {
+    color: "#ff9f1c",
+    fontSize: 12,
+    marginBottom: 6,
   },
   cardMeta: {
     color: "#aaa",
