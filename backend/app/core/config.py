@@ -57,9 +57,12 @@ class Settings(BaseSettings):
     # Verificación automática de resultados (opcional).
     # football-data.org: ligas top (La Liga, Champions, Premier...), gratis.
     football_data_api_key: str | None = None
-    # API-Football vía RapidAPI: más cobertura (ligas menores), límite más bajo.
+    # API-Football: más cobertura (ligas menores), límite más bajo (100/día).
+    # Por defecto, acceso directo en api-football.com (api-sports.io). Si te
+    # registraste vía RapidAPI en su lugar, usa
+    # "api-football-v1.p.rapidapi.com".
     api_football_key: str | None = None
-    api_football_host: str = "api-football-v1.p.rapidapi.com"
+    api_football_host: str = "v3.football.api-sports.io"
     # Cada cuántas horas se revisan picks pendientes de verificar en segundo plano.
     results_verification_interval_hours: float = 3.0
 
