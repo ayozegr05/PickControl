@@ -4,6 +4,7 @@ Guarda el mensaje crudo y, si hay clave de OpenAI, intenta extraer un pick
 mediante el extractor híbrido (reglas + LLM).
 """
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
@@ -28,10 +29,23 @@ logger = get_logger("app.telegram")
 _DUPLICATE_WINDOW = timedelta(hours=6)
 _DUPLICATE_TEXT_SIMILARITY = 0.8
 _DUPLICATE_TEXT_SIMILARITY_WITH_MATCHING_CUOTA = 0.6
+# Similitud por conjunto de palabras (ignora el orden). Cubre casos como
+# "Real Madrid gana" (texto) vs "GANA REAL MADRID" (OCR de la misma
+# promo), donde el orden de las palabras cambia entre imagen y texto.
+_DUPLICATE_WORD_SET_SIMILARITY = 0.85
 
 
 def _text_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a.strip().lower(), b.strip().lower()).ratio()
+
+
+def _word_set_similarity(a: str, b: str) -> float:
+    """Similitud por conjunto de palabras (índice de Jaccard), sin orden."""
+    words_a = set(re.findall(r"\w+", a.lower()))
+    words_b = set(re.findall(r"\w+", b.lower()))
+    if not words_a or not words_b:
+        return 0.0
+    return len(words_a & words_b) / len(words_a | words_b)
 
 
 async def _find_duplicate_pick(
@@ -59,6 +73,11 @@ async def _find_duplicate_pick(
 
         similarity = _text_similarity(candidate.seleccion, pick.seleccion)
         if similarity >= _DUPLICATE_TEXT_SIMILARITY:
+            return candidate
+
+        if _word_set_similarity(candidate.seleccion, pick.seleccion) >= (
+            _DUPLICATE_WORD_SET_SIMILARITY
+        ):
             return candidate
 
         cuotas_coinciden = (

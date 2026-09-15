@@ -24,10 +24,11 @@ from app.db.postgres import AsyncSessionLocal
 from app.models.informante import Informante  # noqa: F401
 from app.models.parsed_pick import ParsedPick
 from app.models.user import User  # noqa: F401
-from app.services.telegram.processor import _text_similarity
+from app.services.telegram.processor import _text_similarity, _word_set_similarity
 
 _TEXT_SIMILARITY = 0.8
 _TEXT_SIMILARITY_WITH_MATCHING_CUOTA = 0.6
+_WORD_SET_SIMILARITY = 0.85
 
 
 def _is_duplicate(a: ParsedPick, b: ParsedPick) -> bool:
@@ -35,6 +36,8 @@ def _is_duplicate(a: ParsedPick, b: ParsedPick) -> bool:
         return False
     similarity = _text_similarity(a.seleccion, b.seleccion)
     if similarity >= _TEXT_SIMILARITY:
+        return True
+    if _word_set_similarity(a.seleccion, b.seleccion) >= _WORD_SET_SIMILARITY:
         return True
     cuotas_coinciden = (
         a.cuota is not None and b.cuota is not None and abs(a.cuota - b.cuota) < 0.01
