@@ -63,6 +63,11 @@ async def main() -> None:
             if not pick:
                 continue
 
+            if pick.fecha_evento is None and raw.received_at is not None:
+                # Aproximación: sin fecha explícita en el texto, asumimos
+                # que el pick se publicó el mismo día del partido.
+                pick.fecha_evento = raw.received_at
+
             duplicate = None
             if pick.es_apuesta:
                 duplicate = await _find_duplicate_pick(session, raw.channel_name, pick)
@@ -72,6 +77,14 @@ async def main() -> None:
                     f"  [{raw.id}] duplicado de ParsedPick id={duplicate.id}, "
                     f"'{pick.seleccion}' ~ '{duplicate.seleccion}', no se crea."
                 )
+                if duplicate.fecha_evento is None and pick.fecha_evento is not None:
+                    duplicate.fecha_evento = pick.fecha_evento
+                    session.add(duplicate)
+                    await session.flush()
+                    print(
+                        f"  [{raw.id}] fecha de evento completada en "
+                        f"ParsedPick id={duplicate.id} a partir del duplicado."
+                    )
             else:
                 parsed = ParsedPick(
                     raw_message_id=raw.id,

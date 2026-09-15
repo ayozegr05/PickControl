@@ -73,6 +73,7 @@ def _make_new_message_handler(target_label: str):
             text=text,
             media_path=media_path,
             extracted_text=extracted_text,
+            message_date=message.date,
         )
 
     return _on_new_message

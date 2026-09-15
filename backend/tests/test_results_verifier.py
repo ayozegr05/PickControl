@@ -18,6 +18,15 @@ class TestExtractPredictedTeam:
     def test_no_soporta_mercados_distintos_de_ganador(self):
         assert _extract_predicted_team("Real Sociedad B Hándicap Asiático +1.5") is None
 
+    def test_extrae_equipo_cuando_gana_va_primero(self):
+        assert _extract_predicted_team("GANA REAL MADRID") == "REAL MADRID"
+
+    def test_limpia_markdown_y_emojis(self):
+        assert (
+            _extract_predicted_team("**__➡️__**** Titouan Droguet gana**")
+            == "Titouan Droguet"
+        )
+
 
 class TestResolveWinner:
     def test_devuelve_equipo_local_si_gana(self):

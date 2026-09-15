@@ -14,7 +14,7 @@ Soporta dos formas de acceso, según cómo te hayas registrado:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Optional
 
@@ -26,6 +26,11 @@ from app.services.results.base import MatchResult
 logger = get_logger("app.results.api_football")
 
 _MIN_TEAM_SIMILARITY = 0.6
+# La fecha del evento a veces es solo una aproximación (día en que el
+# tipster publicó el pick, no el día exacto del partido). El endpoint de
+# fixtures solo acepta un día por petición, así que probamos el día
+# indicado y el anterior/siguiente (3 peticiones en total).
+_DATE_OFFSETS = (0, -1, 1)
 
 
 def _similar(a: str, b: str) -> float:
@@ -48,35 +53,49 @@ class ApiFootballProvider:
         # Acceso directo en api-football.com (api-sports.io).
         return {"x-apisports-key": self._api_key}
 
+    def _fixtures_url(self) -> str:
+        # El host de RapidAPI ("api-football-v1.p.rapidapi.com") no
+        # incluye la versión de la API en el propio host, así que hay
+        # que añadir "/v3" al path. El host directo de api-sports.io
+        # ("v3.football.api-sports.io") ya la incluye en el subdominio.
+        if "rapidapi" in self._api_host:
+            return f"https://{self._api_host}/v3/fixtures"
+        return f"https://{self._api_host}/fixtures"
+
+    async def _fetch_fixtures(self, client: httpx.AsyncClient, date_str: str) -> list:
+        try:
+            response = await client.get(
+                self._fixtures_url(),
+                params={"date": date_str},
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.warning("[API-Football] Error de API (%s): %s", date_str, exc)
+            return []
+        return response.json().get("response", [])
+
     async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:
-        date_str = date.strftime("%Y-%m-%d")
-
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
-                response = await client.get(
-                    f"https://{self._api_host}/v3/fixtures",
-                    params={"date": date_str},
-                    headers=self._headers(),
-                )
-                response.raise_for_status()
-            except httpx.HTTPError as exc:
-                logger.warning("[API-Football] Error de API: %s", exc)
-                return None
-
-        fixtures = response.json().get("response", [])
-
         best_match = None
         best_score = 0.0
-        for fixture in fixtures:
-            status_short = fixture.get("fixture", {}).get("status", {}).get("short")
-            if status_short != "FT":
-                continue
-            home = fixture["teams"]["home"]["name"]
-            away = fixture["teams"]["away"]["name"]
-            score = max(_similar(team_hint, home), _similar(team_hint, away))
-            if score > best_score:
-                best_score = score
-                best_match = (fixture, home, away)
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            for offset in _DATE_OFFSETS:
+                date_str = (date + timedelta(days=offset)).strftime("%Y-%m-%d")
+                fixtures = await self._fetch_fixtures(client, date_str)
+
+                for fixture in fixtures:
+                    status_short = (
+                        fixture.get("fixture", {}).get("status", {}).get("short")
+                    )
+                    if status_short != "FT":
+                        continue
+                    home = fixture["teams"]["home"]["name"]
+                    away = fixture["teams"]["away"]["name"]
+                    score = max(_similar(team_hint, home), _similar(team_hint, away))
+                    if score > best_score:
+                        best_score = score
+                        best_match = (fixture, home, away)
 
         if not best_match or best_score < _MIN_TEAM_SIMILARITY:
             return None
