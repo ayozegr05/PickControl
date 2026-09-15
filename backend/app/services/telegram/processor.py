@@ -201,6 +201,7 @@ async def process_incoming_message(
                     informante=channel,
                     explicacion=pick.explicacion,
                     fecha_evento=pick.fecha_evento,
+                    linea=pick.linea,
                     metodo=pick.metodo,
                     confianza=pick.confianza,
                 )

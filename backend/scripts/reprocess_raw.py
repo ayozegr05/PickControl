@@ -100,6 +100,7 @@ async def main() -> None:
                     informante=raw.channel_name,
                     explicacion=pick.explicacion,
                     fecha_evento=pick.fecha_evento,
+                    linea=pick.linea,
                     metodo=pick.metodo,
                     confianza=pick.confianza,
                 )

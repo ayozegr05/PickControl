@@ -80,3 +80,13 @@ Aplicar el esquema a la nueva base PostgreSQL:
 - **LLM local**: considerar `ollama` o modelos cuantizados una vez el volumen justifique la infraestructura.
 - **Batching**: agrupar varios mensajes en una sola llamada al LLM para reducir overhead.
 - **Caché por canal**: no reprocesar mensajes duplicados o plantillas de promoción repetidas.
+
+## Verificación automática de resultados
+
+Implementada para los mercados "ganador" (incl. "resultado sin empate"), hándicap asiático y over/under, usando football-data.org (ligas top) con fallback a API-Football (más cobertura, límite más bajo). Con líneas enteras de hándicap/over-under puede haber "push" (empate técnico), que se marca como `anulada` en vez de acierto/fallo.
+
+**Limitaciones conocidas:**
+- El plan gratuito de **API-Football solo permite consultar fechas dentro de una ventana de ±1 día respecto a "hoy"** (p. ej. si hoy es 15/09, solo admite 14/09-16/09). Para partidos de hace varios días (lo habitual, ya que se verifica después de jugarse) esta fuente prácticamente no aporta cobertura adicional salvo que se verifique casi en tiempo real. Football-data.org no tiene esta restricción para sus ligas cubiertas.
+- **Tenis y otros deportes no de fútbol** no están cubiertos por ninguna de las dos APIs actuales: quedan siempre en verificación manual.
+- **Ligas menores** (p. ej. Primera Federación/Segunda RFEF en España) no están cubiertas por football-data.org (solo ~12 competiciones top) y, aunque API-Football tiene más cobertura, la restricción de fechas del plan gratuito limita su utilidad práctica para verificación diferida.
+- Futuro: evaluar un plan de pago de API-Football (elimina la restricción de fechas) o una API de resultados de tenis, si el volumen de picks de ese tipo lo justifica.

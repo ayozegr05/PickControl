@@ -54,10 +54,10 @@ export default function ParsedPicksScreen() {
 
   const handleCorregirAcierto = async (
     pick: ParsedPick,
-    acierto: boolean | null
+    update: { acierto?: boolean | null; anulada?: boolean }
   ) => {
     try {
-      const updated = await updateParsedPickAcierto(pick.id, acierto);
+      const updated = await updateParsedPickAcierto(pick.id, update);
       setPicks((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
     } catch (err: any) {
       setError(err.message);
@@ -187,18 +187,25 @@ export default function ParsedPicksScreen() {
 
             {pick.es_apuesta && (
               <View style={styles.acertoSection}>
+                {pick.linea !== null && (
+                  <Text style={styles.cardMeta}>Línea: {pick.linea}</Text>
+                )}
                 <Text style={styles.cardMeta}>
                   Resultado:{" "}
                   <Text
                     style={
-                      pick.acierto === true
+                      pick.anulada
+                        ? styles.acertoAnulada
+                        : pick.acierto === true
                         ? styles.acertoTrue
                         : pick.acierto === false
                         ? styles.acertoFalse
                         : styles.acertoPending
                     }
                   >
-                    {pick.acierto === true
+                    {pick.anulada
+                      ? "Anulada"
+                      : pick.acierto === true
                       ? "Acertó"
                       : pick.acierto === false
                       ? "Falló"
@@ -215,19 +222,27 @@ export default function ParsedPicksScreen() {
                 <View style={styles.acertoButtons}>
                   <TouchableOpacity
                     style={[styles.acertoButton, styles.acertoButtonTrue]}
-                    onPress={() => handleCorregirAcierto(pick, true)}
+                    onPress={() => handleCorregirAcierto(pick, { acierto: true })}
                   >
                     <Text style={styles.acertoButtonText}>Acertó</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.acertoButton, styles.acertoButtonFalse]}
-                    onPress={() => handleCorregirAcierto(pick, false)}
+                    onPress={() => handleCorregirAcierto(pick, { acierto: false })}
                   >
                     <Text style={styles.acertoButtonText}>Falló</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
+                    style={[styles.acertoButton, styles.acertoButtonAnulada]}
+                    onPress={() => handleCorregirAcierto(pick, { anulada: true })}
+                  >
+                    <Text style={styles.acertoButtonText}>Anulada</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
                     style={[styles.acertoButton, styles.acertoButtonPending]}
-                    onPress={() => handleCorregirAcierto(pick, null)}
+                    onPress={() =>
+                      handleCorregirAcierto(pick, { acierto: null, anulada: false })
+                    }
                   >
                     <Text style={styles.acertoButtonText}>Pendiente</Text>
                   </TouchableOpacity>
@@ -360,6 +375,10 @@ const styles = StyleSheet.create({
     color: "#ff9f1c",
     fontWeight: "bold",
   },
+  acertoAnulada: {
+    color: "#9e9e9e",
+    fontWeight: "bold",
+  },
   acertoButtons: {
     flexDirection: "row",
     marginTop: 8,
@@ -379,6 +398,11 @@ const styles = StyleSheet.create({
   acertoButtonFalse: {
     backgroundColor: "#3a1e1e",
     borderColor: "#f44336",
+    borderWidth: 1,
+  },
+  acertoButtonAnulada: {
+    backgroundColor: "#2a2a2a",
+    borderColor: "#9e9e9e",
     borderWidth: 1,
   },
   acertoButtonPending: {

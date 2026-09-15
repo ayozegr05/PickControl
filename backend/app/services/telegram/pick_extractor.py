@@ -35,6 +35,9 @@ class ExtractedPick(BaseModel):
     # Fecha/hora del evento deportivo, si se pudo identificar en el texto.
     # Necesaria para poder verificar el resultado más adelante.
     fecha_evento: Optional[datetime] = None
+    # Valor numérico de la línea de hándicap (con signo, ej. +1.5/-1.5) u
+    # over/under (magnitud, ej. 2.5), si el mercado la tiene.
+    linea: Optional[float] = None
     metodo: str = "unknown"  # 'rule', 'llm' o 'rejected'
     confianza: float = 0.0
 
@@ -93,6 +96,32 @@ def _extract_event_date(text: str) -> Optional[datetime]:
             )
         except (ValueError, KeyError):
             pass
+
+    return None
+
+
+def _extract_linea(seleccion: str) -> Optional[float]:
+    """Extrae el valor numérico de la línea (hándicap u over/under).
+
+    Cubre patrones como "+1.5"/"-1.5" (hándicap asiático, con signo) y
+    "Over 2.5"/"Under 2.5"/"más de 2.5" (línea de goles/juegos, sin
+    signo). Si no encuentra un patrón claro, devuelve None.
+    """
+    if not seleccion:
+        return None
+
+    signed_match = re.search(r"([+-])\s?(\d+(?:[.,]\d+)?)", seleccion)
+    if signed_match:
+        sign, value = signed_match.groups()
+        number = float(value.replace(",", "."))
+        return number if sign == "+" else -number
+
+    unsigned_match = re.search(
+        r"\b(?:over|under|más de|menos de)\s+(\d+(?:[.,]\d+)?)",
+        seleccion.lower(),
+    )
+    if unsigned_match:
+        return float(unsigned_match.group(1).replace(",", "."))
 
     return None
 
@@ -187,6 +216,7 @@ def _rule_extract(
         stake=float(stake_match.group(1).replace(",", ".")),
         informante=informante,
         fecha_evento=_extract_event_date(text),
+        linea=_extract_linea(seleccion),
         metodo="rule",
         confianza=0.85,
     )
@@ -207,20 +237,22 @@ Recibirás texto de canales de Telegram de tipsters. Devuelve ÚNICAMENTE un JSO
   "casa": string | null,
   "informante": string | null,
   "explicacion": string | null,
-  "fecha_evento": string | null
+  "fecha_evento": string | null,
+  "linea": number | null
 }
 
 Reglas:
 - Si no es una apuesta, devuelve es_apuesta = false y el resto null.
 - "seleccion" es lo recomendado (ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5").
 - "evento" es el partido/competición (ej. "Tenis - Challenger Francia - Cassis").
-- "mercado" es el tipo de apuesta (ej. "ganador", "hándicap asiático").
+- "mercado" es el tipo de apuesta: usa siempre una de estas etiquetas si aplica: "ganador", "hándicap asiático", "over/under" (o "over/under goles", "over/under juegos" según el deporte). Si no encaja en ninguna, describe brevemente el mercado.
 - "deporte" debe ser una palabra normalizada y simple: "fútbol", "tenis", "baloncesto", etc.
+- "linea" es el valor numérico de la línea cuando el mercado es hándicap asiático u over/under (ej. 1.5, -1.5, 2.5). Con signo si es hándicap (+1.5 a favor del equipo de "seleccion", -1.5 en contra). Sin signo si es over/under. Si el mercado no tiene línea (p. ej. "ganador"), déjalo null.
 - Extrae "cuota" solo si aparece un número claramente asociado a la cuota/odds de la selección.
 - Extrae "stake" ÚNICAMENTE si el texto menciona explícitamente la palabra "stake" o "unidades" seguida de un número (normalmente entre 1 y 10).
 - NUNCA uses como "stake" importes en euros/dólares que aparezcan en capturas de pantalla del boleto de una casa de apuestas (p. ej. "Importe", "Imp:", "Ganancias", "Cerrar apuesta", saldo, importe apostado, importe a pagar). Esos son cantidades de dinero del boleto del tipster, no el sistema de unidades de stake. Si no hay mención explícita de "stake" o "unidades", deja "stake" = null.
 - "fecha_evento" es la fecha (y hora si aparece) del partido/evento, en formato ISO 8601 (ej. "2026-09-12T14:00:00"). Solo si aparece explícitamente en el texto. Si no hay fecha, null.
-- No inventes ni deduzcas valores (cuota, stake, casa, fecha, etc.) que no estén explícitamente en el texto. Ante la duda, usa null.
+- No inventes ni deduzcas valores (cuota, stake, casa, fecha, línea, etc.) que no estén explícitamente en el texto. Ante la duda, usa null.
 - No añadas markdown, solo el JSON.
 """
 
@@ -253,6 +285,8 @@ async def _llm_extract(
     pick.informante = pick.informante or informante
     if pick.fecha_evento is None:
         pick.fecha_evento = _extract_event_date(text)
+    if pick.linea is None and pick.seleccion:
+        pick.linea = _extract_linea(pick.seleccion)
     return pick
 
 

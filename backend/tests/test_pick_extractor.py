@@ -8,6 +8,7 @@ from datetime import datetime
 
 from app.services.telegram.pick_extractor import (
     _extract_event_date,
+    _extract_linea,
     _looks_like_bet,
     _rule_extract,
 )
@@ -67,3 +68,20 @@ class TestExtractEventDate:
     def test_sin_fecha_devuelve_none(self):
         text = "Titouan Droguet gana\nCuota 1.57 Stake 4"
         assert _extract_event_date(text) is None
+
+
+class TestExtractLinea:
+    def test_extrae_handicap_positivo(self):
+        assert _extract_linea("Real Sociedad B Hándicap Asiático +1.5") == 1.5
+
+    def test_extrae_handicap_negativo(self):
+        assert _extract_linea("Real Madrid Hándicap Asiático -1.5") == -1.5
+
+    def test_extrae_over_sin_signo(self):
+        assert _extract_linea("Over 2.5 goles") == 2.5
+
+    def test_extrae_under_sin_signo(self):
+        assert _extract_linea("Under 2.5 goles") == 2.5
+
+    def test_sin_linea_devuelve_none(self):
+        assert _extract_linea("Real Madrid gana") is None
