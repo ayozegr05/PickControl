@@ -7,8 +7,13 @@ fórmula de ganancia neta, que en el backend Node original tenía un bug
 bruto) en vez de `stake * (cuota - 1)` (beneficio neto).
 """
 
+from app.models.parsed_pick import ParsedPick
 from app.models.pick import Acierto, Pick, PickSource
-from app.services.pick_service import calcular_ganancia, calcular_stats
+from app.services.pick_service import (
+    calcular_ganancia,
+    calcular_stats,
+    calcular_stats_parsed,
+)
 
 
 class TestCalcularGanancia:
@@ -76,3 +81,44 @@ class TestCalcularStats:
         picks = [_make_pick(1, 10, 2.0, Acierto.TRUE)]
         stats = calcular_stats(picks)
         assert stats.ganancias_por_pick == {1: 10.0}
+
+
+def _make_parsed(
+    id_: int, stake: float, cuota: float, acierto: bool | None
+) -> ParsedPick:
+    return ParsedPick(
+        id=id_,
+        es_apuesta=True,
+        seleccion="Real Madrid gana",
+        cuota=cuota,
+        stake=stake,
+        acierto=acierto,
+        anulada=False,
+        raw_message_id=1,
+        informante_id=1,
+    )
+
+
+class TestCalcularStatsParsed:
+    def test_parsed_acierto_y_fallo(self):
+        parsed = [
+            _make_parsed(1, 10.0, 2.0, True),  # +10
+            _make_parsed(2, 10.0, 2.0, False),  # -10
+        ]
+        stats = calcular_stats_parsed(parsed)
+        assert stats.total_apuestas == 2
+        assert stats.total_aciertos == 1
+        assert stats.ganancias == 0.0
+        assert stats.porcentaje_aciertos == 50.0
+        assert stats.yield_pct == 0.0
+
+    def test_parsed_anulada_o_pendiente_no_cuenta_para_porcentaje(self):
+        parsed = [
+            _make_parsed(1, 10.0, 2.0, None),  # pendiente
+            _make_parsed(2, 10.0, 2.0, True),  # acierto
+        ]
+        stats = calcular_stats_parsed(parsed)
+        assert stats.total_apuestas == 2
+        assert stats.total_aciertos == 1
+        # Sólo la finalizada entra en % aciertos
+        assert stats.porcentaje_aciertos == 100.0

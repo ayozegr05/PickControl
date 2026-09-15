@@ -24,6 +24,7 @@ from app.models.informante import Informante  # noqa: F401
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.models.user import User  # noqa: F401
+from app.services.pick_service import get_or_create_informante
 from app.services.telegram.pick_extractor import extract_pick
 from app.services.telegram.processor import _find_duplicate_pick
 
@@ -86,8 +87,10 @@ async def main() -> None:
                         f"ParsedPick id={duplicate.id} a partir del duplicado."
                     )
             else:
+                informante = await get_or_create_informante(session, raw.channel_name)
                 parsed = ParsedPick(
                     raw_message_id=raw.id,
+                    informante_id=informante.id,
                     es_apuesta=pick.es_apuesta,
                     apuesta=pick.seleccion,
                     deporte=pick.deporte,

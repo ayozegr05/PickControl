@@ -14,4 +14,12 @@ export interface InformanteStats {
   porcentajeAciertos: number;
   yieldPct: number;
   apuestas: PickItem[];
+
+  // Picks extraídos automáticamente de Telegram.
+  parsedPicks: PickItem[];
+  parsedTotalApuestas: number;
+  parsedTotalAciertos: number;
+  parsedGanancias: number;
+  parsedPorcentajeAciertos: number;
+  parsedYieldPct: number;
 }

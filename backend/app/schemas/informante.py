@@ -14,7 +14,8 @@ class InformanteRead(InformanteBase):
 
 class InformanteStats(SQLModel):
     """Equivalente a la respuesta de GET /informante/:informante en Node,
-    con el campo `yield_pct` añadido (métrica nueva, no existía en Node)."""
+    con el campo `yield_pct` añadido (métrica nueva, no existía en Node)
+    y la integración de picks provenientes de Telegram."""
 
     informante: str
     total_apuestas: int
@@ -23,3 +24,11 @@ class InformanteStats(SQLModel):
     porcentaje_aciertos: float
     yield_pct: float
     apuestas: list[PickRead] = []
+
+    # Picks extraídos automáticamente de Telegram.
+    parsed_picks: list[PickRead] = []
+    parsed_total_apuestas: int = 0
+    parsed_total_aciertos: int = 0
+    parsed_ganancias: float = 0.0
+    parsed_porcentaje_aciertos: float = 0.0
+    parsed_yield_pct: float = 0.0

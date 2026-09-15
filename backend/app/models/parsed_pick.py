@@ -57,4 +57,9 @@ class ParsedPick(ParsedPickBase, table=True):
         index=True,
         nullable=False,
     )
+    informante_id: Optional[int] = Field(
+        default=None,
+        foreign_key="informantes.id",
+        index=True,
+    )
     created_at: datetime = Field(default_factory=utc_now)
