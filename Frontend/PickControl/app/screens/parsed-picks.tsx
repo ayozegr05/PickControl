@@ -9,7 +9,7 @@ import {
   RefreshControl,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
 import BottomBar from "@/src/components/bottom-bar";
 import {
@@ -47,6 +47,7 @@ export default function ParsedPicksScreen() {
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const insets = useSafeAreaInsets();
+  const router = useRouter();
 
   const loadPicks = useCallback(async () => {
     try {
@@ -194,7 +195,15 @@ export default function ParsedPicksScreen() {
             </Text>
             <Text style={styles.cardDate}>{formatDate(pick.created_at)}</Text>
             <Text style={styles.cardMeta}>
-              Canal: {cleanChannel(pick.informante)}
+              Canal:{" "}
+              <Text
+                style={styles.channelLink}
+                onPress={() =>
+                  router.push(`/dynamic-routes/${pick.informante}` as any)
+                }
+              >
+                {cleanChannel(pick.informante)}
+              </Text>
             </Text>
             <Text style={styles.cardMeta}>
               Cuota: {pick.cuota ?? "-"} | Stake: {pick.stake ?? "-"}
@@ -448,5 +457,9 @@ const styles = StyleSheet.create({
   acertoButtonText: {
     color: "#fff",
     fontSize: 12,
+  },
+  channelLink: {
+    color: "#ff9f1c",
+    textDecorationLine: "underline",
   },
 });
