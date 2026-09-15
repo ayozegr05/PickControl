@@ -115,6 +115,7 @@ async def obtener_stats_informante(
     parsed_picks_read = [
         _parsed_to_read(parsed, informante, parsed_stats.ganancias_por_pick)
         for parsed in parsed_picks
+        if parsed.es_apuesta
     ]
 
     return InformanteStats(
