@@ -206,6 +206,18 @@ export default function InformantDetail() {
     );
   };
 
+  // Picks de Telegram: solo lectura, sin tocar el modal de edición.
+  const renderPronosticoTelegram = (acierto: Acierto) => {
+    if (acierto === "True") {
+      return (
+        <Text style={[styles.icon, { color: "green", fontSize: 18 }]}>✅</Text>
+      );
+    } else if (acierto === "False") {
+      return <Text style={[styles.icon, { color: "red" }]}>❌</Text>;
+    }
+    return <Text style={[styles.icon, { color: "gray" }]}>❓</Text>;
+  };
+
   // Función para calcular las ganancias totales
   const calcularGananciasTotales = () => {
     if (!apuestas || apuestas.length === 0) {
@@ -632,6 +644,140 @@ export default function InformantDetail() {
               </View>
             </ScrollView>
           </View>
+
+          {data && data.parsedPicks.length > 0 && (
+            <View style={styles.card}>
+              <Text style={[styles.cardTitle, { color: "#ff9f1c" }]}>
+                Picks de Telegram
+              </Text>
+              <View style={styles.row}>
+                <Text style={styles.label}>Total Picks:</Text>
+                <Text style={styles.value}>{data.parsedTotalApuestas}</Text>
+              </View>
+              <View style={styles.row}>
+                <Text style={styles.label}>Aciertos:</Text>
+                <Text style={styles.value}>{data.parsedTotalAciertos}</Text>
+              </View>
+              <View style={styles.row}>
+                <Text style={styles.label}>Porcentaje de Aciertos:</Text>
+                <Text style={styles.value}>
+                  {data.parsedPorcentajeAciertos.toFixed(2)}%
+                </Text>
+              </View>
+              <View style={styles.row}>
+                <Text style={styles.label}>Ganancias (unidades):</Text>
+                <Text style={styles.value}>
+                  {data.parsedGanancias.toFixed(2)}u
+                </Text>
+              </View>
+              <View style={styles.row}>
+                <Text style={styles.label}>Yield:</Text>
+                <Text style={styles.value}>
+                  {data.parsedYieldPct.toFixed(2)}%
+                </Text>
+              </View>
+
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <View style={styles.table}>
+                  <View style={styles.tableRow}>
+                    <View style={[styles.tableHeaderCell, styles.border]}>
+                      <Text style={styles.tableHeaderText}>Apuesta</Text>
+                    </View>
+                    <View style={[styles.tableHeaderCell, styles.border]}>
+                      <Text style={styles.tableHeaderText}>Acierto</Text>
+                    </View>
+                    <View style={[styles.tableHeaderCell, styles.border]}>
+                      <Text style={styles.tableHeaderText}>Fecha</Text>
+                    </View>
+                    <View style={[styles.tableHeaderCell, styles.border]}>
+                      <Text style={styles.tableHeaderText}>Mercado</Text>
+                    </View>
+                    <View style={[styles.tableHeaderCell, styles.border]}>
+                      <Text style={styles.tableHeaderText}>Cuota</Text>
+                    </View>
+                    <View style={[styles.tableHeaderCell, styles.border]}>
+                      <Text style={styles.tableHeaderText}>Stake</Text>
+                    </View>
+                    <View style={[styles.tableHeaderCell, styles.border]}>
+                      <Text style={styles.tableHeaderText}>Ganancia</Text>
+                    </View>
+                  </View>
+
+                  {[...data.parsedPicks]
+                    .sort(
+                      (a, b) =>
+                        new Date(a.fecha).getTime() -
+                        new Date(b.fecha).getTime()
+                    )
+                    .map((apuesta, index) => (
+                      <View
+                        key={index}
+                        style={[
+                          styles.tableRow,
+                          index % 2 === 0 ? styles.evenRow : styles.oddRow,
+                        ]}
+                      >
+                        <View style={[styles.tableCell, styles.border]}>
+                          <Text
+                            style={[styles.cellText, { fontWeight: "bold" }]}
+                          >
+                            {apuesta.apuesta}
+                          </Text>
+                        </View>
+                        <View style={[styles.tableCell, styles.border]}>
+                          <Text>
+                            {renderPronosticoTelegram(apuesta.acierto)}
+                          </Text>
+                        </View>
+                        <View style={[styles.tableCell, styles.border]}>
+                          <Text
+                            style={[styles.cellText, { fontWeight: "bold" }]}
+                          >
+                            {formatearFecha(apuesta.fecha)}
+                          </Text>
+                        </View>
+                        <View style={[styles.tableCell, styles.border]}>
+                          <Text
+                            style={[styles.cellText, { fontWeight: "bold" }]}
+                          >
+                            {apuesta.tipoDeApuesta}
+                          </Text>
+                        </View>
+                        <View style={[styles.tableCell, styles.border]}>
+                          <Text
+                            style={[styles.cellText, { fontWeight: "bold" }]}
+                          >
+                            {Number(apuesta.cuota).toFixed(2)}
+                          </Text>
+                        </View>
+                        <View style={[styles.tableCell, styles.border]}>
+                          <Text
+                            style={[styles.cellText, { fontWeight: "bold" }]}
+                          >
+                            {Number(apuesta.cantidadApostada).toFixed(2)}
+                          </Text>
+                        </View>
+                        <View style={[styles.tableCell, styles.border]}>
+                          <Text
+                            style={[styles.cellText, { fontWeight: "bold" }]}
+                          >
+                            {Number(
+                              apuesta.ganancia ??
+                                calcularGanancia(
+                                  apuesta.cantidadApostada,
+                                  apuesta.cuota,
+                                  apuesta.acierto
+                                )
+                            ).toFixed(2)}
+                            <Text>u</Text>
+                          </Text>
+                        </View>
+                      </View>
+                    ))}
+                </View>
+              </ScrollView>
+            </View>
+          )}
         </ScrollView>
 
         <Modal
