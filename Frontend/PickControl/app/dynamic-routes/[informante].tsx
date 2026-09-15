@@ -577,7 +577,7 @@ export default function InformantDetail() {
 
                 {apuestasFiltradas().map((apuesta, index) => (
                   <View
-                    key={index}
+                    key={apuesta.id}
                     style={[
                       styles.tableRow,
                       index % 2 === 0 ? styles.evenRow : styles.oddRow,
@@ -588,7 +588,7 @@ export default function InformantDetail() {
                         onPress={() => handleEliminarPress(apuesta)}
                       >
                         <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                          {apuesta.apuesta}
+                          {apuesta.apuesta || "(sin nombre)"}
                         </Text>
                       </TouchableOpacity>
                     </View>
@@ -720,7 +720,7 @@ export default function InformantDetail() {
                     )
                     .map((apuesta, index) => (
                       <View
-                        key={index}
+                        key={apuesta.id}
                         style={[
                           styles.tableRow,
                           index % 2 === 0 ? styles.evenRow : styles.oddRow,
@@ -730,7 +730,7 @@ export default function InformantDetail() {
                           <Text
                             style={[styles.cellText, { fontWeight: "bold" }]}
                           >
-                            {apuesta.apuesta}
+                            {apuesta.apuesta || "(sin nombre)"}
                           </Text>
                         </View>
                         <View style={[styles.tableCell, styles.border]}>
