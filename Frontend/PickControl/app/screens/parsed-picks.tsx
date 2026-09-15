@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -6,8 +6,10 @@ import {
   StyleSheet,
   ActivityIndicator,
   TouchableOpacity,
+  RefreshControl,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFocusEffect } from "@react-navigation/native";
 import TopBar from "@/src/components/top-bar";
 import BottomBar from "@/src/components/bottom-bar";
 import {
@@ -40,17 +42,36 @@ function cleanChannel(name: string | null): string {
 export default function ParsedPicksScreen() {
   const [picks, setPicks] = useState<ParsedPick[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const insets = useSafeAreaInsets();
 
-  useEffect(() => {
-    getParsedPicks()
-      .then(setPicks)
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+  const loadPicks = useCallback(async () => {
+    try {
+      const data = await getParsedPicks();
+      setPicks(data);
+      setError(null);
+    } catch (err: any) {
+      setError(err.message);
+    }
   }, []);
+
+  // Recarga automáticamente cada vez que entras a esta pantalla (p. ej.
+  // al volver desde otra pestaña), sin tener que reabrir la app.
+  useFocusEffect(
+    useCallback(() => {
+      setLoading(true);
+      loadPicks().finally(() => setLoading(false));
+    }, [loadPicks])
+  );
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadPicks();
+    setRefreshing(false);
+  }, [loadPicks]);
 
   const handleCorregirAcierto = async (
     pick: ParsedPick,
@@ -92,6 +113,13 @@ export default function ParsedPicksScreen() {
           styles.scroll,
           { paddingTop: 80 + insets.top, paddingBottom: 80 + insets.bottom },
         ]}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor="#ff9f1c"
+          />
+        }
       >
         <Text style={styles.title}>Picks extraídos de Telegram</Text>
 
