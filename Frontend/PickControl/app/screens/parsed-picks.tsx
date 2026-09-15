@@ -9,7 +9,7 @@ import {
   RefreshControl,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect } from "expo-router";
 import TopBar from "@/src/components/top-bar";
 import BottomBar from "@/src/components/bottom-bar";
 import {
@@ -130,9 +130,7 @@ export default function ParsedPicksScreen() {
             setSelectedChannel(null);
           }}
         >
-          <View
-            style={[styles.checkbox, showAll && styles.checkboxChecked]}
-          />
+          <View style={[styles.checkbox, showAll && styles.checkboxChecked]} />
           <Text style={styles.toggleLabel}>
             Ver todos (incluye mensajes descartados por el filtro)
           </Text>
@@ -225,19 +223,19 @@ export default function ParsedPicksScreen() {
                       pick.anulada
                         ? styles.acertoAnulada
                         : pick.acierto === true
-                        ? styles.acertoTrue
-                        : pick.acierto === false
-                        ? styles.acertoFalse
-                        : styles.acertoPending
+                          ? styles.acertoTrue
+                          : pick.acierto === false
+                            ? styles.acertoFalse
+                            : styles.acertoPending
                     }
                   >
                     {pick.anulada
                       ? "Anulada"
                       : pick.acierto === true
-                      ? "Acertó"
-                      : pick.acierto === false
-                      ? "Falló"
-                      : "Pendiente"}
+                        ? "Acertó"
+                        : pick.acierto === false
+                          ? "Falló"
+                          : "Pendiente"}
                   </Text>
                   {pick.verificado_por && (
                     <Text style={styles.cardMeta}>
@@ -250,26 +248,35 @@ export default function ParsedPicksScreen() {
                 <View style={styles.acertoButtons}>
                   <TouchableOpacity
                     style={[styles.acertoButton, styles.acertoButtonTrue]}
-                    onPress={() => handleCorregirAcierto(pick, { acierto: true })}
+                    onPress={() =>
+                      handleCorregirAcierto(pick, { acierto: true })
+                    }
                   >
                     <Text style={styles.acertoButtonText}>Acertó</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.acertoButton, styles.acertoButtonFalse]}
-                    onPress={() => handleCorregirAcierto(pick, { acierto: false })}
+                    onPress={() =>
+                      handleCorregirAcierto(pick, { acierto: false })
+                    }
                   >
                     <Text style={styles.acertoButtonText}>Falló</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.acertoButton, styles.acertoButtonAnulada]}
-                    onPress={() => handleCorregirAcierto(pick, { anulada: true })}
+                    onPress={() =>
+                      handleCorregirAcierto(pick, { anulada: true })
+                    }
                   >
                     <Text style={styles.acertoButtonText}>Anulada</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.acertoButton, styles.acertoButtonPending]}
                     onPress={() =>
-                      handleCorregirAcierto(pick, { acierto: null, anulada: false })
+                      handleCorregirAcierto(pick, {
+                        acierto: null,
+                        anulada: false,
+                      })
                     }
                   >
                     <Text style={styles.acertoButtonText}>Pendiente</Text>
