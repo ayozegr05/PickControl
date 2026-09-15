@@ -32,3 +32,33 @@ class InformanteStats(SQLModel):
     parsed_ganancias: float = 0.0
     parsed_porcentaje_aciertos: float = 0.0
     parsed_yield_pct: float = 0.0
+
+
+class InformanteSummary(SQLModel):
+    """Resumen agregado de un informante para listados y rankings.
+
+    Incluye métricas de apuestas manuales, picks de Telegram y el total
+    combinado, para poder comparar la rentabilidad de cada tipster."""
+
+    informante: str
+
+    # Apuestas manuales.
+    manual_total: int = 0
+    manual_aciertos: int = 0
+    manual_ganancias: float = 0.0
+    manual_porcentaje: float = 0.0
+    manual_yield: float = 0.0
+
+    # Picks de Telegram.
+    parsed_total: int = 0
+    parsed_aciertos: int = 0
+    parsed_ganancias: float = 0.0
+    parsed_porcentaje: float = 0.0
+    parsed_yield: float = 0.0
+
+    # Totales combinados.
+    total: int = 0
+    aciertos: int = 0
+    ganancias: float = 0.0
+    porcentaje: float = 0.0
+    yield_pct: float = 0.0

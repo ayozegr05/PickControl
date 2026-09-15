@@ -23,3 +23,28 @@ export interface InformanteStats {
   parsedPorcentajeAciertos: number;
   parsedYieldPct: number;
 }
+
+export interface InformanteSummary {
+  informante: string;
+
+  // Apuestas manuales.
+  manualTotal: number;
+  manualAciertos: number;
+  manualGanancias: number;
+  manualPorcentaje: number;
+  manualYield: number;
+
+  // Picks de Telegram.
+  parsedTotal: number;
+  parsedAciertos: number;
+  parsedGanancias: number;
+  parsedPorcentaje: number;
+  parsedYield: number;
+
+  // Totales combinados.
+  total: number;
+  aciertos: number;
+  ganancias: number;
+  porcentaje: number;
+  yieldPct: number;
+}

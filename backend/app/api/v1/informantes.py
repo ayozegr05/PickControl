@@ -12,10 +12,11 @@ from app.db.postgres import get_session
 from app.models.informante import Informante
 from app.models.parsed_pick import ParsedPick
 from app.models.pick import Acierto, Pick, PickSource
-from app.schemas.informante import InformanteStats
+from app.schemas.informante import InformanteStats, InformanteSummary
 from app.schemas.pick import PickRead
 from app.services.pick_service import (
     calcular_stats,
+    calcular_stats_combinado,
     calcular_stats_parsed,
 )
 
@@ -131,3 +132,59 @@ async def obtener_stats_informante(
         parsed_porcentaje_aciertos=parsed_stats.porcentaje_aciertos,
         parsed_yield_pct=parsed_stats.yield_pct,
     )
+
+
+@router.get("/informantes", response_model=list[InformanteSummary])
+async def listar_informantes(
+    session: AsyncSession = Depends(get_session),
+) -> list[InformanteSummary]:
+    """Devuelve un resumen de todos los informantes con sus métricas
+    de apuestas manuales, picks de Telegram y el total combinado."""
+    informantes = (await session.exec(select(Informante))).all()
+    if not informantes:
+        return []
+
+    ids = [i.id for i in informantes]
+    picks = (await session.exec(select(Pick).where(Pick.informante_id.in_(ids)))).all()
+    parsed_picks = (
+        await session.exec(select(ParsedPick).where(ParsedPick.informante_id.in_(ids)))
+    ).all()
+
+    picks_by: dict[int, list[Pick]] = {}
+    parsed_by: dict[int, list[ParsedPick]] = {}
+    for pick in picks:
+        picks_by.setdefault(pick.informante_id, []).append(pick)
+    for parsed in parsed_picks:
+        parsed_by.setdefault(parsed.informante_id, []).append(parsed)
+
+    resultados: list[InformanteSummary] = []
+    for informante in informantes:
+        manuales = picks_by.get(informante.id, [])
+        telegram = parsed_by.get(informante.id, [])
+
+        manual_stats = calcular_stats(manuales)
+        parsed_stats = calcular_stats_parsed(telegram)
+        combined = calcular_stats_combinado(manuales, telegram)
+
+        resultados.append(
+            InformanteSummary(
+                informante=informante.nombre,
+                manual_total=manual_stats.total_apuestas,
+                manual_aciertos=manual_stats.total_aciertos,
+                manual_ganancias=manual_stats.ganancias,
+                manual_porcentaje=manual_stats.porcentaje_aciertos,
+                manual_yield=manual_stats.yield_pct,
+                parsed_total=parsed_stats.total_apuestas,
+                parsed_aciertos=parsed_stats.total_aciertos,
+                parsed_ganancias=parsed_stats.ganancias,
+                parsed_porcentaje=parsed_stats.porcentaje_aciertos,
+                parsed_yield=parsed_stats.yield_pct,
+                total=combined.total_apuestas,
+                aciertos=combined.total_aciertos,
+                ganancias=combined.ganancias,
+                porcentaje=combined.porcentaje_aciertos,
+                yield_pct=combined.yield_pct,
+            )
+        )
+
+    return sorted(resultados, key=lambda s: s.ganancias, reverse=True)

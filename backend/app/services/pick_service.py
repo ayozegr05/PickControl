@@ -158,6 +158,16 @@ def calcular_stats_parsed(parsed_picks: list[ParsedPick]) -> InformanteStatsResu
     )
 
 
+def calcular_stats_combinado(
+    picks: list[Pick], parsed_picks: list[ParsedPick]
+) -> InformanteStatsResult:
+    """Calcula métricas combinando apuestas manuales y picks de Telegram."""
+    return _stats_inputs_to_result(
+        [to_stats_input(p) for p in picks]
+        + [to_stats_input_from_parsed(p) for p in parsed_picks if p.es_apuesta]
+    )
+
+
 async def get_or_create_informante(session: AsyncSession, nombre: str) -> Informante:
     """Busca un informante por nombre o lo crea si no existe.
 

@@ -13,6 +13,8 @@ export default function Layout() {
           <Stack.Screen name="dynamic-routes/informante" />
           <Stack.Screen name="screens/add-pick" />
           <Stack.Screen name="screens/parsed-picks" />
+          <Stack.Screen name="screens/tipsters" />
+          <Stack.Screen name="dynamic-routes/[informante]" />
         </Stack>
       </AuthProvider>
     </SafeAreaProvider>

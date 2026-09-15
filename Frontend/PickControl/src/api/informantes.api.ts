@@ -5,7 +5,7 @@
 // (metrica nueva) y picks de Telegram (parsed_*). Se traduce a InformanteStats
 // (camelCase).
 import { apiRequest } from "./client";
-import { InformanteStats } from "../types/informante.types";
+import { InformanteStats, InformanteSummary } from "../types/informante.types";
 import { RawPick, toPickItem } from "./picks.api";
 
 type RawInformanteStats = {
@@ -46,4 +46,45 @@ export async function getInformanteStats(
     parsedPorcentajeAciertos: raw.parsed_porcentaje_aciertos,
     parsedYieldPct: raw.parsed_yield_pct,
   };
+}
+
+type RawInformanteSummary = {
+  informante: string;
+  manual_total: number;
+  manual_aciertos: number;
+  manual_ganancias: number;
+  manual_porcentaje: number;
+  manual_yield: number;
+  parsed_total: number;
+  parsed_aciertos: number;
+  parsed_ganancias: number;
+  parsed_porcentaje: number;
+  parsed_yield: number;
+  total: number;
+  aciertos: number;
+  ganancias: number;
+  porcentaje: number;
+  yield_pct: number;
+};
+
+export async function listInformantes(): Promise<InformanteSummary[]> {
+  const raws = await apiRequest<RawInformanteSummary[]>("/informantes");
+  return raws.map((raw) => ({
+    informante: raw.informante,
+    manualTotal: raw.manual_total,
+    manualAciertos: raw.manual_aciertos,
+    manualGanancias: raw.manual_ganancias,
+    manualPorcentaje: raw.manual_porcentaje,
+    manualYield: raw.manual_yield,
+    parsedTotal: raw.parsed_total,
+    parsedAciertos: raw.parsed_aciertos,
+    parsedGanancias: raw.parsed_ganancias,
+    parsedPorcentaje: raw.parsed_porcentaje,
+    parsedYield: raw.parsed_yield,
+    total: raw.total,
+    aciertos: raw.aciertos,
+    ganancias: raw.ganancias,
+    porcentaje: raw.porcentaje,
+    yieldPct: raw.yield_pct,
+  }));
 }
