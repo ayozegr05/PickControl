@@ -677,6 +677,15 @@ export default function InformantDetail() {
                 </Text>
               </View>
 
+              <TouchableOpacity
+                style={styles.telegramButton}
+                onPress={() => router.push("/screens/parsed-picks")}
+              >
+                <Text style={styles.telegramButtonText}>
+                  Corregir picks de Telegram
+                </Text>
+              </TouchableOpacity>
+
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 <View style={styles.table}>
                   <View style={styles.tableRow}>
@@ -1105,5 +1114,19 @@ const styles = StyleSheet.create({
   },
   calendarIcon: {
     marginLeft: 5,
+  },
+  telegramButton: {
+    backgroundColor: "#ff9f1c",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    alignSelf: "center",
+    marginVertical: 12,
+    alignItems: "center",
+  },
+  telegramButtonText: {
+    color: "#1a1a1a",
+    fontWeight: "bold",
+    fontSize: 14,
   },
 });
