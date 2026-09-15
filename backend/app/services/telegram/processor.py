@@ -18,7 +18,7 @@ from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
-from app.services.pick_service import to_naive_utc
+from app.services.pick_service import get_or_create_informante, to_naive_utc
 from app.services.telegram.pick_extractor import ExtractedPick, extract_pick
 
 logger = get_logger("app.telegram")
@@ -202,8 +202,10 @@ async def process_incoming_message(
                         duplicate.id,
                     )
             else:
+                informante = await get_or_create_informante(db_session, channel)
                 parsed = ParsedPick(
                     raw_message_id=raw.id,
+                    informante_id=informante.id,
                     es_apuesta=pick.es_apuesta,
                     apuesta=pick.seleccion,
                     deporte=pick.deporte,

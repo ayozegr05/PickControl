@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy import select
 
+from app.models.informante import Informante
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.services.telegram.pick_extractor import ExtractedPick
@@ -122,6 +123,13 @@ class TestProcessIncomingMessage:
         parsed = parsed_result.scalars().one()
         assert parsed.es_apuesta is True
         assert parsed.seleccion == "Real Madrid gana"
+        assert parsed.informante_id is not None
+
+        informante_result = await session.exec(
+            select(Informante).where(Informante.id == parsed.informante_id)
+        )
+        informante = informante_result.scalars().one()
+        assert informante.nombre == "Test Channel"
 
     async def test_rejected_message_is_persisted_as_not_bet(
         self, session, fake_settings, monkeypatch
@@ -152,3 +160,5 @@ class TestProcessIncomingMessage:
         )
         parsed = parsed_result.scalars().one()
         assert parsed.es_apuesta is False
+        assert parsed.informante_id is not None
+        assert parsed.informante == "Test Channel"
