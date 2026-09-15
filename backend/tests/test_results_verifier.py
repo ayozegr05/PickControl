@@ -27,6 +27,15 @@ class TestExtractPredictedTeam:
             == "Titouan Droguet"
         )
 
+    def test_acepta_solo_nombre_equipo_si_mercado_es_resultado_sin_empate(self):
+        assert (
+            _extract_predicted_team("Aston Villa", "resultado sin empate")
+            == "Aston Villa"
+        )
+
+    def test_no_acepta_solo_nombre_equipo_en_mercado_no_reconocido(self):
+        assert _extract_predicted_team("Aston Villa", "hándicap asiático") is None
+
 
 class TestResolveWinner:
     def test_devuelve_equipo_local_si_gana(self):
