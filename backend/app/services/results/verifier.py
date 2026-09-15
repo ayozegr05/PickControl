@@ -32,6 +32,15 @@ from app.services.results.football_data import FootballDataProvider
 logger = get_logger("app.results.verifier")
 
 _WIN_KEYWORDS = ["gana", "ganará", "ganara", "ganador", "vence"]
+# Mercados en los que la "selección" es solo el nombre del equipo (sin
+# verbo "gana") pero el mercado en sí ya implica un resultado directo.
+_NO_VERB_WIN_MARKETS = [
+    "resultado sin empate",
+    "ganador",
+    "gana el partido",
+    "vencedor",
+    "moneyline",
+]
 _MIN_TEAM_SIMILARITY = 0.6
 
 _MARKDOWN_NOISE = re.compile(r"[*_~`]+")
@@ -50,13 +59,17 @@ def _clean_team_name(raw: str) -> str:
     return cleaned.strip(" -:¡!.")
 
 
-def _extract_predicted_team(seleccion: str) -> Optional[str]:
+def _extract_predicted_team(
+    seleccion: str, mercado: Optional[str] = None
+) -> Optional[str]:
     """Extrae el nombre del equipo/jugador de una selección de "ganador".
 
-    Soporta tanto "Equipo gana" como "Gana Equipo". Devuelve None si la
-    selección no es un mercado de "ganador" simple (p. ej. hándicaps,
-    over/under, correct score...), que de momento no se verifican
-    automáticamente.
+    Soporta tanto "Equipo gana" como "Gana Equipo". Si la selección es
+    solo el nombre del equipo pero el `mercado` ya indica un resultado
+    directo (p. ej. "resultado sin empate", "ganador"), también se
+    acepta. Devuelve None para mercados que no se pueden resolver
+    comparando el marcador final (hándicaps, over/under, correct
+    score...), que de momento quedan para revisión manual.
     """
     low = seleccion.lower()
 
@@ -74,6 +87,13 @@ def _extract_predicted_team(seleccion: str) -> Optional[str]:
             team = _clean_team_name(seleccion[len(keyword) :])
             if team:
                 return team
+
+    # Selección = solo el nombre del equipo, pero el mercado ya implica
+    # "gana" (p. ej. "resultado sin empate").
+    if mercado and any(m in mercado.lower() for m in _NO_VERB_WIN_MARKETS):
+        team = _clean_team_name(seleccion)
+        if team:
+            return team
 
     return None
 
@@ -104,10 +124,16 @@ async def verify_pick(
     if not pick.fecha_evento or not pick.seleccion:
         return None
 
-    predicted_team = _extract_predicted_team(pick.seleccion)
+    predicted_team = _extract_predicted_team(pick.seleccion, pick.mercado)
     if not predicted_team:
         # Mercado no soportado todavía (hándicap, over/under...): manual.
         return None
+
+    es_mercado_sin_empate = bool(
+        pick.mercado
+        and any(m in pick.mercado.lower() for m in _NO_VERB_WIN_MARKETS)
+        and "resultado sin empate" in pick.mercado.lower()
+    )
 
     for provider in providers:
         try:
@@ -125,6 +151,13 @@ async def verify_pick(
 
         winner = _resolve_winner(match)
         if winner is None:
+            if es_mercado_sin_empate:
+                # "Resultado sin empate" normalmente anula/devuelve la
+                # apuesta en caso de empate en vez de perderla; no
+                # tenemos un estado "anulada", así que la dejamos
+                # pendiente para revisión manual en vez de marcarla como
+                # fallo incorrectamente.
+                return None
             return False  # empate: la apuesta a "gana" falla
 
         return _similar(predicted_team, winner) >= _MIN_TEAM_SIMILARITY
