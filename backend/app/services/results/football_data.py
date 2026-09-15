@@ -7,7 +7,7 @@ simplicidad, pero no cubre ligas menores ni otros deportes.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Optional
 
@@ -20,6 +20,10 @@ logger = get_logger("app.results.football_data")
 
 _BASE_URL = "https://api.football-data.org/v4"
 _MIN_TEAM_SIMILARITY = 0.6
+# La fecha del evento a veces es solo una aproximación (día en que el
+# tipster publicó el pick, no el día exacto del partido), así que
+# buscamos en una pequeña ventana alrededor en vez de un único día.
+_DATE_WINDOW = timedelta(days=1)
 
 
 def _similar(a: str, b: str) -> float:
@@ -27,19 +31,20 @@ def _similar(a: str, b: str) -> float:
 
 
 class FootballDataProvider:
-    """Consulta football-data.org por partidos finalizados de una fecha."""
+    """Consulta football-data.org por partidos finalizados cerca de una fecha."""
 
     def __init__(self, api_key: str) -> None:
         self._api_key = api_key
 
     async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:
-        date_str = date.strftime("%Y-%m-%d")
+        date_from = (date - _DATE_WINDOW).strftime("%Y-%m-%d")
+        date_to = (date + _DATE_WINDOW).strftime("%Y-%m-%d")
 
         async with httpx.AsyncClient(timeout=15) as client:
             try:
                 response = await client.get(
                     f"{_BASE_URL}/matches",
-                    params={"dateFrom": date_str, "dateTo": date_str},
+                    params={"dateFrom": date_from, "dateTo": date_to},
                     headers={"X-Auth-Token": self._api_key},
                 )
                 response.raise_for_status()

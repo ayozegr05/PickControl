@@ -14,6 +14,7 @@ Estrategia (MVP, solo mercado "ganador" en fútbol):
 
 from __future__ import annotations
 
+import re
 from difflib import SequenceMatcher
 from typing import Optional
 
@@ -33,24 +34,47 @@ logger = get_logger("app.results.verifier")
 _WIN_KEYWORDS = ["gana", "ganará", "ganara", "ganador", "vence"]
 _MIN_TEAM_SIMILARITY = 0.6
 
+_MARKDOWN_NOISE = re.compile(r"[*_~`]+")
+_NON_TEAM_CHARS = re.compile(r"[^\w\sÁÉÍÓÚÑáéíóúñ.'-]", re.UNICODE)
+
 
 def _similar(a: str, b: str) -> float:
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
-def _extract_predicted_team(seleccion: str) -> Optional[str]:
-    """Extrae el nombre del equipo/jugador de una selección tipo "X gana".
+def _clean_team_name(raw: str) -> str:
+    """Quita markdown, emojis y flechas típicas de Telegram del nombre."""
+    cleaned = _MARKDOWN_NOISE.sub("", raw)
+    cleaned = _NON_TEAM_CHARS.sub(" ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned.strip(" -:¡!.")
 
-    Devuelve None si la selección no es un mercado de "ganador" simple
-    (p. ej. hándicaps, over/under, correct score...), que de momento no
-    se verifican automáticamente.
+
+def _extract_predicted_team(seleccion: str) -> Optional[str]:
+    """Extrae el nombre del equipo/jugador de una selección de "ganador".
+
+    Soporta tanto "Equipo gana" como "Gana Equipo". Devuelve None si la
+    selección no es un mercado de "ganador" simple (p. ej. hándicaps,
+    over/under, correct score...), que de momento no se verifican
+    automáticamente.
     """
     low = seleccion.lower()
+
+    # Patrón "Equipo gana" (la palabra clave aparece al final).
     for keyword in _WIN_KEYWORDS:
         idx = low.find(keyword)
-        if idx != -1:
-            team = seleccion[:idx].strip(" -:¡!")
-            return team or None
+        if idx > 0:
+            team = _clean_team_name(seleccion[:idx])
+            if team:
+                return team
+
+    # Patrón "Gana Equipo" (la palabra clave aparece al principio).
+    for keyword in _WIN_KEYWORDS:
+        if low.startswith(keyword):
+            team = _clean_team_name(seleccion[len(keyword) :])
+            if team:
+                return team
+
     return None
 
 

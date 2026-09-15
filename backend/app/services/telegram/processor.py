@@ -5,7 +5,7 @@ mediante el extractor híbrido (reglas + LLM).
 """
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 
 from sqlmodel import select
@@ -17,6 +17,7 @@ from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
+from app.services.pick_service import to_naive_utc
 from app.services.telegram.pick_extractor import ExtractedPick, extract_pick
 
 logger = get_logger("app.telegram")
@@ -92,11 +93,14 @@ async def process_incoming_message(
     text: str,
     media_path: str | None = None,
     extracted_text: str | None = None,
+    message_date: datetime | None = None,
 ) -> None:
     """Punto de entrada único para procesar un mensaje entrante de Telegram.
 
-    TODO(fase-llm): sustituir este stub por la extracción real de picks
-    (parseo/LLM) y el guardado en base de datos vía `pick_service`.
+    `message_date` es la fecha/hora real del mensaje de Telegram (no la
+    de procesado). Se usa como aproximación de la fecha del evento
+    cuando el texto no la menciona explícitamente (la mayoría de
+    tipsters publican el pick el mismo día del partido).
     """
     message = IncomingTelegramMessage(
         channel=channel, channel_id=channel_id, message_id=message_id, text=text
@@ -104,6 +108,7 @@ async def process_incoming_message(
     logger.info("[TELEGRAM_PROCESSOR] Mensaje listo para procesar: %s", message)
 
     source_text = (extracted_text or text or "").strip()
+    naive_message_date = to_naive_utc(message_date) if message_date else None
 
     settings = get_settings()
     pick = None
@@ -112,6 +117,10 @@ async def process_incoming_message(
             source_text, settings.openai_api_key, informante=channel
         )
         if pick:
+            if pick.fecha_evento is None and naive_message_date is not None:
+                # Aproximación: sin fecha explícita en el texto, asumimos
+                # que el pick se publicó el mismo día del partido.
+                pick.fecha_evento = naive_message_date
             logger.info(
                 "[TELEGRAM_PROCESSOR] Pick extraído (método=%s, confianza=%s): %s",
                 pick.metodo,
@@ -128,6 +137,7 @@ async def process_incoming_message(
             media_path=media_path,
             extracted_text=extracted_text,
             processed=True if pick else False,
+            received_at=naive_message_date or utc_now(),
         )
         session.add(raw)
         await session.flush()
@@ -146,6 +156,17 @@ async def process_incoming_message(
                     pick.seleccion,
                     duplicate.seleccion,
                 )
+                if duplicate.fecha_evento is None and pick.fecha_evento is not None:
+                    # El mensaje duplicado puede traer información (p. ej.
+                    # la fecha del evento en la foto del boleto) que el
+                    # original no tenía. La fusionamos en vez de perderla.
+                    duplicate.fecha_evento = pick.fecha_evento
+                    session.add(duplicate)
+                    logger.info(
+                        "[TELEGRAM_PROCESSOR] Fecha de evento completada en "
+                        "pick id=%s a partir del duplicado.",
+                        duplicate.id,
+                    )
             else:
                 parsed = ParsedPick(
                     raw_message_id=raw.id,
