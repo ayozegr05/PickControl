@@ -15,9 +15,12 @@ router = APIRouter(tags=["telegram"])
 
 
 class ParsedPickAciertoUpdate(BaseModel):
-    """Payload para corregir manualmente el acierto de un pick extraído."""
+    """Payload para corregir manualmente el resultado de un pick extraído."""
 
     acierto: bool | None = None
+    # Apuesta anulada/devuelta (p. ej. "push" en hándicap/over-under).
+    # Si es True, `acierto` se ignora y se guarda como None.
+    anulada: bool = False
 
 
 @router.get("/telegram/raw-messages", response_model=list[TelegramRawMessage])
@@ -61,7 +64,7 @@ async def corregir_acierto_pick(
     session: AsyncSession = Depends(get_session),
     _user: User = Depends(get_current_user),
 ) -> ParsedPick:
-    """Corrige manualmente el acierto de un pick (Sí/No/Pendiente).
+    """Corrige manualmente el resultado de un pick (Acertó/Falló/Anulada/Pendiente).
 
     Útil cuando la verificación automática no puede resolverlo (deporte
     o mercado no soportado) o si se ha equivocado.
@@ -72,8 +75,11 @@ async def corregir_acierto_pick(
             status_code=status.HTTP_404_NOT_FOUND, detail="Pick no encontrado"
         )
 
-    pick.acierto = payload.acierto
-    pick.verificado_por = "manual" if payload.acierto is not None else None
+    pick.acierto = None if payload.anulada else payload.acierto
+    pick.anulada = payload.anulada
+    pick.verificado_por = (
+        "manual" if (payload.anulada or payload.acierto is not None) else None
+    )
 
     session.add(pick)
     await session.commit()

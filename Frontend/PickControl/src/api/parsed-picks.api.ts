@@ -16,7 +16,9 @@ export type ParsedPick = {
   metodo: string;
   confianza: number;
   fecha_evento: string | null;
+  linea: number | null;
   acierto: boolean | null;
+  anulada: boolean;
   verificado_por: string | null;
   raw_message_id: number;
   created_at: string;
@@ -28,11 +30,11 @@ export async function getParsedPicks(): Promise<ParsedPick[]> {
 
 export async function updateParsedPickAcierto(
   id: number,
-  acierto: boolean | null
+  update: { acierto?: boolean | null; anulada?: boolean }
 ): Promise<ParsedPick> {
   return apiRequest<ParsedPick>(`/telegram/parsed-picks/${id}`, {
     method: "PATCH",
-    body: { acierto },
+    body: update,
     auth: true,
   });
 }
