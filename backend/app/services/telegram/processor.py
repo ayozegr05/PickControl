@@ -113,6 +113,7 @@ async def process_incoming_message(
     media_path: str | None = None,
     extracted_text: str | None = None,
     message_date: datetime | None = None,
+    session: AsyncSession | None = None,
 ) -> None:
     """Punto de entrada único para procesar un mensaje entrante de Telegram.
 
@@ -120,6 +121,9 @@ async def process_incoming_message(
     de procesado). Se usa como aproximación de la fecha del evento
     cuando el texto no la menciona explícitamente (la mayoría de
     tipsters publican el pick el mismo día del partido).
+
+    Si `session` se proporciona, se usa en lugar de abrir una nueva
+    sesión. Útil en tests.
     """
     message = IncomingTelegramMessage(
         channel=channel, channel_id=channel_id, message_id=message_id, text=text
@@ -129,13 +133,37 @@ async def process_incoming_message(
     source_text = (extracted_text or text or "").strip()
     naive_message_date = to_naive_utc(message_date) if message_date else None
 
-    settings = get_settings()
-    pick = None
-    if settings.openai_api_key and source_text:
-        pick = await extract_pick(
-            source_text, settings.openai_api_key, informante=channel
+    async def _persist(db_session: AsyncSession) -> None:
+        raw = TelegramRawMessage(
+            channel_id=channel_id,
+            message_id=message_id,
+            channel_name=channel,
+            text=text or "",
+            media_path=media_path,
+            extracted_text=extracted_text,
+            processed=False,
+            received_at=naive_message_date or utc_now(),
         )
-        if pick:
+        db_session.add(raw)
+        await db_session.flush()
+
+        settings = get_settings()
+        pick = None
+        if settings.openai_api_key and source_text:
+            try:
+                pick = await extract_pick(
+                    source_text, settings.openai_api_key, informante=channel
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "[TELEGRAM_PROCESSOR] Error extrayendo pick del mensaje %s "
+                    "del canal %s; se conserva el mensaje crudo para auditoría.",
+                    message_id,
+                    channel,
+                )
+                pick = None
+
+        if pick is not None:
             if pick.fecha_evento is None and naive_message_date is not None:
                 # Aproximación: sin fecha explícita en el texto, asumimos
                 # que el pick se publicó el mismo día del partido.
@@ -146,25 +174,12 @@ async def process_incoming_message(
                 pick.confianza,
                 pick.model_dump(exclude_none=True),
             )
+            raw.processed = True
+            db_session.add(raw)
 
-    async with AsyncSessionLocal() as session:
-        raw = TelegramRawMessage(
-            channel_id=channel_id,
-            message_id=message_id,
-            channel_name=channel,
-            text=text or "",
-            media_path=media_path,
-            extracted_text=extracted_text,
-            processed=True if pick else False,
-            received_at=naive_message_date or utc_now(),
-        )
-        session.add(raw)
-        await session.flush()
-
-        if pick:
             duplicate = None
             if pick.es_apuesta:
-                duplicate = await _find_duplicate_pick(session, channel, pick)
+                duplicate = await _find_duplicate_pick(db_session, channel, pick)
 
             if duplicate:
                 logger.info(
@@ -180,7 +195,7 @@ async def process_incoming_message(
                     # la fecha del evento en la foto del boleto) que el
                     # original no tenía. La fusionamos en vez de perderla.
                     duplicate.fecha_evento = pick.fecha_evento
-                    session.add(duplicate)
+                    db_session.add(duplicate)
                     logger.info(
                         "[TELEGRAM_PROCESSOR] Fecha de evento completada en "
                         "pick id=%s a partir del duplicado.",
@@ -205,9 +220,19 @@ async def process_incoming_message(
                     metodo=pick.metodo,
                     confianza=pick.confianza,
                 )
-                session.add(parsed)
+                db_session.add(parsed)
+        elif not source_text:
+            # Sin texto (ni extraído ni crudo), no hay nada que procesar.
+            raw.processed = True
+            db_session.add(raw)
 
-        await session.commit()
+        await db_session.commit()
+
+    if session is not None:
+        await _persist(session)
+    else:
+        async with AsyncSessionLocal() as session:
+            await _persist(session)
 
     logger.info(
         "[TELEGRAM_PROCESSOR] Mensaje %s del canal %s guardado en BD",
