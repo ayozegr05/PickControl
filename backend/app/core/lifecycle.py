@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.services.results.verifier import verify_pending_picks
+from app.services.telegram.catchup import run_catchup
 from app.services.telegram.client import get_telegram_client, reset_telegram_client
 from app.services.telegram.handlers import register_handlers
 
@@ -26,6 +27,7 @@ async def _run_telegram_listener() -> None:
 
     await client.start(phone=settings.telegram_phone)
     logger.info("[TELEGRAM_LISTENER] Cliente de Telegram conectado y escuchando.")
+    await run_catchup(client)
     await client.run_until_disconnected()
 
 
