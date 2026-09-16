@@ -26,6 +26,24 @@ class TestLooksLikeBet:
     def test_rechaza_texto_vacio(self):
         assert _looks_like_bet("") is False
 
+    def test_acepta_pick_con_footer_de_afiliado(self):
+        # Pick real de Dm7 GRATUITO: el footer "GANA 200€ GRATIS" no debe
+        # ganar a las señales fuertes (CUOTA 1.70 + STAKE 4).
+        text = (
+            "Este es mi pronóstico para hoy\n"
+            "Levante 1X ESPAÑA\n"
+            "21:30\n"
+            "CUOTA 1.70 • STAKE 4\n"
+            "GANA 200€ GRATIS DE APUESTA AQUÍ https://bdeal.io/x"
+        )
+        assert _looks_like_bet(text) is True
+
+    def test_rechaza_promo_gratis_sin_datos(self):
+        # Una promo pura (sin cuota/stake) sigue rechazada aunque
+        # mencione apuestas.
+        text = "GANA 200€ GRATIS DE APUESTA AQUÍ https://bdeal.io/x"
+        assert _looks_like_bet(text) is False
+
 
 class TestRuleExtract:
     def test_extrae_cuota_stake_y_seleccion(self):
@@ -49,6 +67,32 @@ class TestRuleExtract:
         text = "Titouan Droguet 1.57\nImp: 1.000,00€\nGanancias 1.571,42€"
         pick = _rule_extract(text, informante="TestChannel")
         assert pick is None
+
+    def test_no_usa_linea_de_afiliado_como_seleccion(self):
+        # El footer de afiliado contiene "GANA" pero es publi: debe
+        # ignorarse. Al quedar sin línea de selección válida, la regla
+        # devuelve None y el pick pasa al LLM.
+        text = (
+            "Este es mi pronóstico para hoy\n"
+            "Levante 1X ESPAÑA\n"
+            "21:30\n"
+            "CUOTA 1.70 • STAKE 4\n"
+            "GANA 200€ GRATIS DE APUESTA AQUÍ https://bdeal.io/x"
+        )
+        pick = _rule_extract(text, informante="TestChannel")
+        assert pick is None
+
+    def test_seleccion_real_gana_a_footer_de_afiliado(self):
+        # Con una línea de selección real además del footer de afiliado,
+        # la regla debe quedarse con la selección, no con la publi.
+        text = (
+            "Titouan Droguet gana\n"
+            "Cuota 1.57 Stake 4\n"
+            "GANA 200€ GRATIS DE APUESTA AQUÍ https://bdeal.io/x"
+        )
+        pick = _rule_extract(text, informante="TestChannel")
+        assert pick is not None
+        assert "Droguet" in pick.seleccion
 
 
 class TestExtractEventDate:
