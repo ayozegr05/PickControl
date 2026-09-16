@@ -171,6 +171,16 @@ _NEGATIVE_PATTERNS = [
     r"\bseguidores\b",
 ]
 
+# Señales estructurales fuertes: "cuota"/"stake"/"unidades" seguidas de un
+# número. Una promo pura nunca las lleva, pero un pick real con publi de
+# afiliado al final ("GANA 200€ GRATIS AQUÍ", links bdeal.io...) sí — sin
+# esta precedencia, un negativo como "gratis" descartaba picks válidos.
+_STRONG_PICK_PATTERNS = [
+    r"\bcuota\s*[:•.\-@]?\s*\d",
+    r"\bstake\s*[:•.\-]?\s*\d",
+    r"\bunidades\s*[:•.\-]?\s*\d",
+]
+
 
 def _looks_like_bet(text: str) -> bool:
     """Heurística rápida para saber si merece la pena intentar extraer."""
@@ -178,6 +188,9 @@ def _looks_like_bet(text: str) -> bool:
         return False
 
     lowered = text.lower()
+    if any(re.search(pattern, lowered) for pattern in _STRONG_PICK_PATTERNS):
+        return True
+
     if any(re.search(pattern, lowered) for pattern in _NEGATIVE_PATTERNS):
         return False
 
@@ -208,11 +221,17 @@ def _rule_extract(
     if not cuota_match or not stake_match:
         return None
 
-    # Buscar selección: primera línea con palabras clave
+    # Buscar selección: primera línea con palabras clave, saltando las
+    # líneas de publi/afiliación (llevan enlaces o "gratis"). Sin este
+    # filtro, un footer tipo "GANA 200€ GRATIS AQUÍ bdeal.io/..." se
+    # confundía con la selección porque contiene "gana".
+    promo_line = re.compile(r"https?://|www\.|t\.me/|\]\(|gratis", re.IGNORECASE)
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     seleccion = None
     for line in lines:
         low = line.lower()
+        if promo_line.search(low):
+            continue
         if any(
             keyword in low
             for keyword in (

@@ -17,6 +17,7 @@ import {
   updateParsedPickAcierto,
   ParsedPick,
 } from "@/src/api/parsed-picks.api";
+import { listInformantes } from "@/src/api/informantes.api";
 
 const OVERVIEW_PER_CHANNEL = 4;
 const CHANNEL_PAGE_SIZE = 20;
@@ -35,14 +36,26 @@ function formatDate(isoDate: string): string {
 
 function cleanChannel(name: string | null): string {
   if (!name) return "desconocido";
-  return name
-    .replace(/[^\p{L}\p{N}\s|]/gu, " ")
-    .replace(/\s+/g, " ")
-    .split("|")[0]
-    .trim();
+  // Los canales se llaman p. ej. "Dm7 || GRATUITO || ⚡️": quedarse solo
+  // con el primer segmento haría que "Dm7 || Allsports ||" y
+  // "Dm7 || GRATUITO ||" se vieran ambos como "Dm7". Unimos todos los
+  // segmentos con texto para que cada canal tenga un nombre distinto.
+  return (
+    name
+      .split("|")
+      .map((part) =>
+        part
+          .replace(/[^\p{L}\p{N}\s]/gu, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+      )
+      .filter(Boolean)
+      .join(" ") || "desconocido"
+  );
 }
 
 type ChannelGroup = {
+  key: string;
   informanteId: number | null;
   name: string;
   picks: ParsedPick[];
@@ -50,6 +63,7 @@ type ChannelGroup = {
 
 export default function ParsedPicksScreen() {
   const [overviewPicks, setOverviewPicks] = useState<ParsedPick[]>([]);
+  const [channelNames, setChannelNames] = useState<string[]>([]);
   const [channelPicks, setChannelPicks] = useState<ParsedPick[]>([]);
   const [selectedChannel, setSelectedChannel] = useState<{
     id: number;
@@ -65,11 +79,18 @@ export default function ParsedPicksScreen() {
   const router = useRouter();
 
   const loadOverview = useCallback(async (includeDiscarded: boolean) => {
-    const data = await getParsedPicks({
-      perChannel: OVERVIEW_PER_CHANNEL,
-      soloApuestas: !includeDiscarded,
-    });
-    setOverviewPicks(data);
+    const [picksData, informantesData] = await Promise.all([
+      getParsedPicks({
+        perChannel: OVERVIEW_PER_CHANNEL,
+        soloApuestas: !includeDiscarded,
+      }),
+      // Los canales reales vienen de /informantes (ya filtrado a
+      // es_canal_telegram), para que un canal sin picks en el filtro
+      // actual siga apareciendo como sección vacía.
+      listInformantes(),
+    ]);
+    setOverviewPicks(picksData);
+    setChannelNames(informantesData.map((i) => i.informante));
   }, []);
 
   const loadChannel = useCallback(
@@ -183,31 +204,36 @@ export default function ParsedPicksScreen() {
   };
 
   const channelGroups = useMemo<ChannelGroup[]>(() => {
-    const map = new Map<number, ChannelGroup>();
+    const map = new Map<string, ChannelGroup>();
+    // Primero todos los canales reales: un canal sin picks en el filtro
+    // actual (p. ej. todos descartados) sigue apareciendo, vacío.
+    for (const nombre of channelNames) {
+      map.set(nombre, {
+        key: nombre,
+        informanteId: null,
+        name: cleanChannel(nombre),
+        picks: [],
+      });
+    }
     for (const p of overviewPicks) {
-      if (p.informante_id === null) continue;
-      const group = map.get(p.informante_id);
-      if (group) {
-        group.picks.push(p);
-      } else {
-        map.set(p.informante_id, {
+      const key = p.informante ?? "";
+      let group = map.get(key);
+      if (!group) {
+        group = {
+          key,
           informanteId: p.informante_id,
           name: cleanChannel(p.informante),
-          picks: [p],
-        });
+          picks: [],
+        };
+        map.set(key, group);
       }
+      group.informanteId = group.informanteId ?? p.informante_id;
+      group.picks.push(p);
     }
     return Array.from(map.values()).sort((a, b) =>
       a.name.localeCompare(b.name)
     );
-  }, [overviewPicks]);
-
-  // Picks sin informante asociado (no debería pasar: el procesador
-  // siempre crea el informante). Se muestran solo en el resumen.
-  const orphanPicks = useMemo(
-    () => overviewPicks.filter((p) => p.informante_id === null),
-    [overviewPicks]
-  );
+  }, [overviewPicks, channelNames]);
 
   const renderPickCard = (pick: ParsedPick) => (
     <View key={pick.id} style={styles.card}>
@@ -362,32 +388,34 @@ export default function ParsedPicksScreen() {
                 Todos
               </Text>
             </TouchableOpacity>
-            {channelGroups.map((group) => (
-              <TouchableOpacity
-                key={group.informanteId}
-                onPress={() =>
-                  handleSelectChannel({
-                    id: group.informanteId as number,
-                    name: group.name,
-                  })
-                }
-                style={[
-                  styles.channelChip,
-                  selectedChannel?.id === group.informanteId &&
-                    styles.channelChipActive,
-                ]}
-              >
-                <Text
+            {channelGroups
+              .filter((group) => group.informanteId !== null)
+              .map((group) => (
+                <TouchableOpacity
+                  key={group.key}
+                  onPress={() =>
+                    handleSelectChannel({
+                      id: group.informanteId as number,
+                      name: group.name,
+                    })
+                  }
                   style={[
-                    styles.channelChipText,
+                    styles.channelChip,
                     selectedChannel?.id === group.informanteId &&
-                      styles.channelChipTextActive,
+                      styles.channelChipActive,
                   ]}
                 >
-                  {group.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                  <Text
+                    style={[
+                      styles.channelChipText,
+                      selectedChannel?.id === group.informanteId &&
+                        styles.channelChipTextActive,
+                    ]}
+                  >
+                    {group.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
           </ScrollView>
         )}
 
@@ -399,29 +427,31 @@ export default function ParsedPicksScreen() {
               </Text>
             )}
             {channelGroups.map((group) => (
-              <View key={group.informanteId} style={styles.channelSection}>
+              <View key={group.key} style={styles.channelSection}>
                 <View style={styles.channelHeader}>
                   <Text style={styles.channelTitle}>{group.name}</Text>
-                  <TouchableOpacity
-                    onPress={() =>
-                      handleSelectChannel({
-                        id: group.informanteId as number,
-                        name: group.name,
-                      })
-                    }
-                  >
-                    <Text style={styles.seeAll}>Ver todos →</Text>
-                  </TouchableOpacity>
+                  {group.informanteId !== null && (
+                    <TouchableOpacity
+                      onPress={() =>
+                        handleSelectChannel({
+                          id: group.informanteId as number,
+                          name: group.name,
+                        })
+                      }
+                    >
+                      <Text style={styles.seeAll}>Ver todos →</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
-                {group.picks.map(renderPickCard)}
+                {group.picks.length === 0 ? (
+                  <Text style={styles.emptyChannel}>
+                    Sin picks extraídos con este filtro.
+                  </Text>
+                ) : (
+                  group.picks.map(renderPickCard)
+                )}
               </View>
             ))}
-            {orphanPicks.length > 0 && (
-              <View style={styles.channelSection}>
-                <Text style={styles.channelTitle}>Sin canal asociado</Text>
-                {orphanPicks.map(renderPickCard)}
-              </View>
-            )}
           </>
         ) : (
           <>
@@ -503,6 +533,12 @@ const styles = StyleSheet.create({
     color: "#aaa",
     fontSize: 14,
     marginTop: 12,
+  },
+  emptyChannel: {
+    color: "#666",
+    fontSize: 13,
+    marginBottom: 12,
+    fontStyle: "italic",
   },
   channelList: {
     paddingVertical: 8,

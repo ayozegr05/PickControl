@@ -16,6 +16,7 @@ import { useVideoPlayer, VideoView } from "expo-video";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { listInformantes } from "@/src/api/informantes.api";
 import { InformanteSummary } from "@/src/types/informante.types";
+import DonutChart from "@/src/components/donut-chart";
 
 function colorForYield(yieldPct: number): string {
   if (yieldPct > 0) return "#4caf50";
@@ -188,9 +189,14 @@ const Main = () => {
   }
 
   return (
-    <View style={[styles.container, { paddingBottom: insets.bottom }]}>
+    <View style={styles.container}>
       <TopBar />
-      <ScrollView contentContainerStyle={styles.scroll}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.scroll,
+          { paddingTop: 80 + insets.top, paddingBottom: 80 + insets.bottom },
+        ]}
+      >
         <Text style={styles.title}>Tipsters / Canales</Text>
         <Text style={styles.subtitle}>
           Rentabilidad verificada de cada tipster. Toca uno para ver su
@@ -199,14 +205,26 @@ const Main = () => {
         {tipsters.length === 0 ? (
           <Text style={styles.empty}>No hay informantes registrados.</Text>
         ) : (
-          tipsters.map((t) => (
+          tipsters.map((t, index) => (
             <TouchableOpacity
               key={t.informante}
               style={styles.card}
               onPress={() => handleTipsterPress(t.informante)}
             >
               <View style={styles.header}>
-                <Text style={styles.name}>{t.informante}</Text>
+                <View style={styles.nameRow}>
+                  <View
+                    style={[
+                      styles.rankBadge,
+                      index === 0 && styles.rankGold,
+                      index === 1 && styles.rankSilver,
+                      index === 2 && styles.rankBronze,
+                    ]}
+                  >
+                    <Text style={styles.rankText}>{index + 1}</Text>
+                  </View>
+                  <Text style={styles.name}>{t.informante}</Text>
+                </View>
                 <Text
                   style={[styles.yield, { color: colorForYield(t.yieldPct) }]}
                 >
@@ -225,7 +243,7 @@ const Main = () => {
                 </View>
                 <View style={styles.cell}>
                   <Text style={styles.label}>% acierto</Text>
-                  <Text style={styles.value}>{t.porcentaje.toFixed(2)}%</Text>
+                  <DonutChart percentage={t.porcentaje} />
                 </View>
                 <View style={styles.cell}>
                   <Text style={styles.label}>Ganancia</Text>
@@ -240,15 +258,15 @@ const Main = () => {
                 </View>
               </View>
 
-              <View style={styles.row}>
-                <View style={styles.cell}>
-                  <Text style={styles.subLabel}>Manual</Text>
-                  <Text style={styles.subValue}>{t.manualTotal}</Text>
-                </View>
-                <View style={styles.cell}>
-                  <Text style={styles.subLabel}>Telegram</Text>
-                  <Text style={styles.subValue}>{t.parsedTotal}</Text>
-                </View>
+              <View style={styles.footerRow}>
+                <Text style={styles.footerText}>
+                  Manual:{" "}
+                  <Text style={styles.footerValue}>{t.manualTotal}</Text>
+                </Text>
+                <Text style={styles.footerText}>
+                  Telegram:{" "}
+                  <Text style={styles.footerValue}>{t.parsedTotal}</Text>
+                </Text>
               </View>
             </TouchableOpacity>
           ))
@@ -275,8 +293,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   scroll: {
-    padding: 16,
-    paddingTop: 80,
+    paddingHorizontal: 16,
   },
   title: {
     color: "#ff9f1c",
@@ -310,6 +327,35 @@ const styles = StyleSheet.create({
     borderBottomColor: "#3a3a3a",
     paddingBottom: 8,
   },
+  nameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexShrink: 1,
+    marginRight: 8,
+  },
+  rankBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: "#3a3a3a",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 8,
+  },
+  rankGold: {
+    backgroundColor: "#b8860b",
+  },
+  rankSilver: {
+    backgroundColor: "#7d8590",
+  },
+  rankBronze: {
+    backgroundColor: "#8c5a2b",
+  },
+  rankText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "bold",
+  },
   name: {
     color: "#fff",
     fontSize: 17,
@@ -340,14 +386,21 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "bold",
   },
-  subLabel: {
-    color: "#888",
-    fontSize: 10,
-    marginBottom: 2,
+  footerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    borderTopWidth: 1,
+    borderTopColor: "#3a3a3a",
+    marginTop: 10,
+    paddingTop: 8,
   },
-  subValue: {
+  footerText: {
+    color: "#888",
+    fontSize: 11,
+  },
+  footerValue: {
     color: "#ccc",
-    fontSize: 13,
+    fontWeight: "bold",
   },
   videoContainer: {
     flex: 1,

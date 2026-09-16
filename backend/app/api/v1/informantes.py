@@ -196,4 +196,7 @@ async def listar_informantes(
             )
         )
 
-    return sorted(resultados, key=lambda s: s.ganancias, reverse=True)
+    # Ranking por rentabilidad: el yield (ganancia neta / total apostado)
+    # mide la eficiencia del tipster; las ganancias absolutas dependerían
+    # del volumen de picks, no de lo bueno que es.
+    return sorted(resultados, key=lambda s: s.yield_pct, reverse=True)
