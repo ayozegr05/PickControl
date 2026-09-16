@@ -18,6 +18,9 @@ import {
   ParsedPick,
 } from "@/src/api/parsed-picks.api";
 
+const OVERVIEW_PER_CHANNEL = 4;
+const CHANNEL_PAGE_SIZE = 20;
+
 function formatDate(isoDate: string): string {
   const date = new Date(isoDate);
   if (isNaN(date.getTime())) return isoDate;
@@ -39,40 +42,132 @@ function cleanChannel(name: string | null): string {
     .trim();
 }
 
+type ChannelGroup = {
+  informanteId: number | null;
+  name: string;
+  picks: ParsedPick[];
+};
+
 export default function ParsedPicksScreen() {
-  const [picks, setPicks] = useState<ParsedPick[]>([]);
+  const [overviewPicks, setOverviewPicks] = useState<ParsedPick[]>([]);
+  const [channelPicks, setChannelPicks] = useState<ParsedPick[]>([]);
+  const [selectedChannel, setSelectedChannel] = useState<{
+    id: number;
+    name: string;
+  } | null>(null);
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
-  const loadPicks = useCallback(async () => {
+  const loadOverview = useCallback(async (includeDiscarded: boolean) => {
+    const data = await getParsedPicks({
+      perChannel: OVERVIEW_PER_CHANNEL,
+      soloApuestas: !includeDiscarded,
+    });
+    setOverviewPicks(data);
+  }, []);
+
+  const loadChannel = useCallback(
+    async (informanteId: number, offset: number, includeDiscarded: boolean) => {
+      const data = await getParsedPicks({
+        informanteId,
+        soloApuestas: !includeDiscarded,
+        offset,
+        limit: CHANNEL_PAGE_SIZE,
+      });
+      if (offset === 0) {
+        setChannelPicks(data);
+      } else {
+        setChannelPicks((prev) => [...prev, ...data]);
+      }
+      setHasMore(data.length === CHANNEL_PAGE_SIZE);
+    },
+    []
+  );
+
+  const reload = useCallback(async () => {
     try {
-      const data = await getParsedPicks();
-      setPicks(data);
+      await loadOverview(showAll);
+      if (selectedChannel) {
+        await loadChannel(selectedChannel.id, 0, showAll);
+      }
       setError(null);
     } catch (err: any) {
       setError(err.message);
     }
-  }, []);
+  }, [loadOverview, loadChannel, selectedChannel, showAll]);
 
   // Recarga automáticamente cada vez que entras a esta pantalla (p. ej.
   // al volver desde otra pestaña), sin tener que reabrir la app.
   useFocusEffect(
     useCallback(() => {
       setLoading(true);
-      loadPicks().finally(() => setLoading(false));
-    }, [loadPicks])
+      reload().finally(() => setLoading(false));
+    }, [reload])
   );
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
-    await loadPicks();
+    await reload();
     setRefreshing(false);
-  }, [loadPicks]);
+  }, [reload]);
+
+  const handleSelectChannel = useCallback(
+    async (channel: { id: number; name: string } | null) => {
+      setSelectedChannel(channel);
+      setChannelPicks([]);
+      setHasMore(false);
+      if (channel) {
+        try {
+          await loadChannel(channel.id, 0, showAll);
+          setError(null);
+        } catch (err: any) {
+          setError(err.message);
+        }
+      }
+    },
+    [loadChannel, showAll]
+  );
+
+  const handleLoadMore = useCallback(async () => {
+    if (!selectedChannel || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      await loadChannel(selectedChannel.id, channelPicks.length, showAll);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [selectedChannel, loadingMore, channelPicks.length, loadChannel, showAll]);
+
+  const handleToggleShowAll = useCallback(async () => {
+    const next = !showAll;
+    setShowAll(next);
+    // El filtro es_apuesta se aplica en el backend ANTES del top-N,
+    // así que hay que refetchear para que el resumen no se quede con
+    // mensajes descartados ocupando los 4 huecos de cada canal.
+    setLoading(true);
+    try {
+      await loadOverview(next);
+      if (selectedChannel) {
+        await loadChannel(selectedChannel.id, 0, next);
+      }
+      setError(null);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [showAll, loadOverview, loadChannel, selectedChannel]);
+
+  const applyUpdate = (list: ParsedPick[], updated: ParsedPick) =>
+    list.map((p) => (p.id === updated.id ? updated : p));
 
   const handleCorregirAcierto = async (
     pick: ParsedPick,
@@ -80,31 +175,139 @@ export default function ParsedPicksScreen() {
   ) => {
     try {
       const updated = await updateParsedPickAcierto(pick.id, update);
-      setPicks((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      setOverviewPicks((prev) => applyUpdate(prev, updated));
+      setChannelPicks((prev) => applyUpdate(prev, updated));
     } catch (err: any) {
       setError(err.message);
     }
   };
 
-  const realPicks = useMemo(() => picks.filter((p) => p.es_apuesta), [picks]);
-  const visiblePicks = showAll ? picks : realPicks;
+  const channelGroups = useMemo<ChannelGroup[]>(() => {
+    const map = new Map<number, ChannelGroup>();
+    for (const p of overviewPicks) {
+      if (p.informante_id === null) continue;
+      const group = map.get(p.informante_id);
+      if (group) {
+        group.picks.push(p);
+      } else {
+        map.set(p.informante_id, {
+          informanteId: p.informante_id,
+          name: cleanChannel(p.informante),
+          picks: [p],
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
+  }, [overviewPicks]);
 
-  const channels = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          visiblePicks.map((p) => cleanChannel(p.informante)).filter(Boolean)
-        )
-      ).sort(),
-    [visiblePicks]
+  // Picks sin informante asociado (no debería pasar: el procesador
+  // siempre crea el informante). Se muestran solo en el resumen.
+  const orphanPicks = useMemo(
+    () => overviewPicks.filter((p) => p.informante_id === null),
+    [overviewPicks]
   );
 
-  const filteredPicks = useMemo(() => {
-    if (!selectedChannel) return visiblePicks;
-    return visiblePicks.filter(
-      (p) => cleanChannel(p.informante) === selectedChannel
-    );
-  }, [visiblePicks, selectedChannel]);
+  const renderPickCard = (pick: ParsedPick) => (
+    <View key={pick.id} style={styles.card}>
+      <Text style={styles.cardTitle}>{pick.apuesta || "Sin apuesta"}</Text>
+      <Text style={styles.cardDate}>{formatDate(pick.created_at)}</Text>
+      <Text style={styles.cardMeta}>
+        Canal:{" "}
+        <Text
+          style={styles.channelLink}
+          onPress={() =>
+            router.push(`/dynamic-routes/${pick.informante}` as any)
+          }
+        >
+          {cleanChannel(pick.informante)}
+        </Text>
+      </Text>
+      <Text style={styles.cardMeta}>
+        Cuota: {pick.cuota ?? "-"} | Stake: {pick.stake ?? "-"}
+      </Text>
+      <Text style={styles.cardMeta}>
+        Método: {pick.metodo} | Confianza: {pick.confianza}
+      </Text>
+      {showAll && (
+        <Text style={styles.cardMeta}>
+          Es apuesta: {pick.es_apuesta ? "Sí" : "No"}
+        </Text>
+      )}
+      {pick.explicacion && (
+        <Text style={styles.explanation}>{pick.explicacion}</Text>
+      )}
+
+      {pick.es_apuesta && (
+        <View style={styles.acertoSection}>
+          {pick.linea !== null && (
+            <Text style={styles.cardMeta}>Línea: {pick.linea}</Text>
+          )}
+          <Text style={styles.cardMeta}>
+            Resultado:{" "}
+            <Text
+              style={
+                pick.anulada
+                  ? styles.acertoAnulada
+                  : pick.acierto === true
+                    ? styles.acertoTrue
+                    : pick.acierto === false
+                      ? styles.acertoFalse
+                      : styles.acertoPending
+              }
+            >
+              {pick.anulada
+                ? "Anulada"
+                : pick.acierto === true
+                  ? "Acertó"
+                  : pick.acierto === false
+                    ? "Falló"
+                    : "Pendiente"}
+            </Text>
+            {pick.verificado_por && (
+              <Text style={styles.cardMeta}>
+                {" "}
+                ({pick.verificado_por === "auto" ? "auto" : "manual"})
+              </Text>
+            )}
+          </Text>
+
+          <View style={styles.acertoButtons}>
+            <TouchableOpacity
+              style={[styles.acertoButton, styles.acertoButtonTrue]}
+              onPress={() => handleCorregirAcierto(pick, { acierto: true })}
+            >
+              <Text style={styles.acertoButtonText}>Acertó</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.acertoButton, styles.acertoButtonFalse]}
+              onPress={() => handleCorregirAcierto(pick, { acierto: false })}
+            >
+              <Text style={styles.acertoButtonText}>Falló</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.acertoButton, styles.acertoButtonAnulada]}
+              onPress={() => handleCorregirAcierto(pick, { anulada: true })}
+            >
+              <Text style={styles.acertoButtonText}>Anulada</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.acertoButton, styles.acertoButtonPending]}
+              onPress={() =>
+                handleCorregirAcierto(pick, {
+                  acierto: null,
+                  anulada: false,
+                })
+              }
+            >
+              <Text style={styles.acertoButtonText}>Pendiente</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+    </View>
+  );
 
   return (
     <View style={styles.container}>
@@ -126,10 +329,7 @@ export default function ParsedPicksScreen() {
 
         <TouchableOpacity
           style={styles.toggleRow}
-          onPress={() => {
-            setShowAll((prev) => !prev);
-            setSelectedChannel(null);
-          }}
+          onPress={handleToggleShowAll}
         >
           <View style={[styles.checkbox, showAll && styles.checkboxChecked]} />
           <Text style={styles.toggleLabel}>
@@ -140,14 +340,14 @@ export default function ParsedPicksScreen() {
         {loading && <ActivityIndicator size="large" color="#ff9f1c" />}
         {error && <Text style={styles.error}>Error: {error}</Text>}
 
-        {channels.length > 0 && (
+        {channelGroups.length > 0 && (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.channelList}
           >
             <TouchableOpacity
-              onPress={() => setSelectedChannel(null)}
+              onPress={() => handleSelectChannel(null)}
               style={[
                 styles.channelChip,
                 selectedChannel === null && styles.channelChipActive,
@@ -162,139 +362,89 @@ export default function ParsedPicksScreen() {
                 Todos
               </Text>
             </TouchableOpacity>
-            {channels.map((channel) => (
+            {channelGroups.map((group) => (
               <TouchableOpacity
-                key={channel}
-                onPress={() => setSelectedChannel(channel)}
+                key={group.informanteId}
+                onPress={() =>
+                  handleSelectChannel({
+                    id: group.informanteId as number,
+                    name: group.name,
+                  })
+                }
                 style={[
                   styles.channelChip,
-                  selectedChannel === channel && styles.channelChipActive,
+                  selectedChannel?.id === group.informanteId &&
+                    styles.channelChipActive,
                 ]}
               >
                 <Text
                   style={[
                     styles.channelChipText,
-                    selectedChannel === channel && styles.channelChipTextActive,
+                    selectedChannel?.id === group.informanteId &&
+                      styles.channelChipTextActive,
                   ]}
                 >
-                  {channel}
+                  {group.name}
                 </Text>
               </TouchableOpacity>
             ))}
           </ScrollView>
         )}
 
-        <Text style={styles.count}>
-          {filteredPicks.length} pick{filteredPicks.length !== 1 ? "s" : ""}
-        </Text>
-
-        {filteredPicks.map((pick) => (
-          <View key={pick.id} style={styles.card}>
-            <Text style={styles.cardTitle}>
-              {pick.apuesta || "Sin apuesta"}
-            </Text>
-            <Text style={styles.cardDate}>{formatDate(pick.created_at)}</Text>
-            <Text style={styles.cardMeta}>
-              Canal:{" "}
-              <Text
-                style={styles.channelLink}
-                onPress={() =>
-                  router.push(`/dynamic-routes/${pick.informante}` as any)
-                }
-              >
-                {cleanChannel(pick.informante)}
-              </Text>
-            </Text>
-            <Text style={styles.cardMeta}>
-              Cuota: {pick.cuota ?? "-"} | Stake: {pick.stake ?? "-"}
-            </Text>
-            <Text style={styles.cardMeta}>
-              Método: {pick.metodo} | Confianza: {pick.confianza}
-            </Text>
-            {showAll && (
-              <Text style={styles.cardMeta}>
-                Es apuesta: {pick.es_apuesta ? "Sí" : "No"}
+        {selectedChannel === null ? (
+          <>
+            {channelGroups.length === 0 && !loading && (
+              <Text style={styles.emptyText}>
+                Todavía no hay picks extraídos.
               </Text>
             )}
-            {pick.explicacion && (
-              <Text style={styles.explanation}>{pick.explicacion}</Text>
-            )}
-
-            {pick.es_apuesta && (
-              <View style={styles.acertoSection}>
-                {pick.linea !== null && (
-                  <Text style={styles.cardMeta}>Línea: {pick.linea}</Text>
-                )}
-                <Text style={styles.cardMeta}>
-                  Resultado:{" "}
-                  <Text
-                    style={
-                      pick.anulada
-                        ? styles.acertoAnulada
-                        : pick.acierto === true
-                          ? styles.acertoTrue
-                          : pick.acierto === false
-                            ? styles.acertoFalse
-                            : styles.acertoPending
-                    }
-                  >
-                    {pick.anulada
-                      ? "Anulada"
-                      : pick.acierto === true
-                        ? "Acertó"
-                        : pick.acierto === false
-                          ? "Falló"
-                          : "Pendiente"}
-                  </Text>
-                  {pick.verificado_por && (
-                    <Text style={styles.cardMeta}>
-                      {" "}
-                      ({pick.verificado_por === "auto" ? "auto" : "manual"})
-                    </Text>
-                  )}
-                </Text>
-
-                <View style={styles.acertoButtons}>
+            {channelGroups.map((group) => (
+              <View key={group.informanteId} style={styles.channelSection}>
+                <View style={styles.channelHeader}>
+                  <Text style={styles.channelTitle}>{group.name}</Text>
                   <TouchableOpacity
-                    style={[styles.acertoButton, styles.acertoButtonTrue]}
                     onPress={() =>
-                      handleCorregirAcierto(pick, { acierto: true })
-                    }
-                  >
-                    <Text style={styles.acertoButtonText}>Acertó</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.acertoButton, styles.acertoButtonFalse]}
-                    onPress={() =>
-                      handleCorregirAcierto(pick, { acierto: false })
-                    }
-                  >
-                    <Text style={styles.acertoButtonText}>Falló</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.acertoButton, styles.acertoButtonAnulada]}
-                    onPress={() =>
-                      handleCorregirAcierto(pick, { anulada: true })
-                    }
-                  >
-                    <Text style={styles.acertoButtonText}>Anulada</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.acertoButton, styles.acertoButtonPending]}
-                    onPress={() =>
-                      handleCorregirAcierto(pick, {
-                        acierto: null,
-                        anulada: false,
+                      handleSelectChannel({
+                        id: group.informanteId as number,
+                        name: group.name,
                       })
                     }
                   >
-                    <Text style={styles.acertoButtonText}>Pendiente</Text>
+                    <Text style={styles.seeAll}>Ver todos →</Text>
                   </TouchableOpacity>
                 </View>
+                {group.picks.map(renderPickCard)}
+              </View>
+            ))}
+            {orphanPicks.length > 0 && (
+              <View style={styles.channelSection}>
+                <Text style={styles.channelTitle}>Sin canal asociado</Text>
+                {orphanPicks.map(renderPickCard)}
               </View>
             )}
-          </View>
-        ))}
+          </>
+        ) : (
+          <>
+            <Text style={styles.count}>
+              {channelPicks.length} pick{channelPicks.length !== 1 ? "s" : ""}{" "}
+              de {selectedChannel.name}
+            </Text>
+            {channelPicks.map(renderPickCard)}
+            {hasMore && (
+              <TouchableOpacity
+                style={styles.loadMore}
+                onPress={handleLoadMore}
+                disabled={loadingMore}
+              >
+                {loadingMore ? (
+                  <ActivityIndicator size="small" color="#ff9f1c" />
+                ) : (
+                  <Text style={styles.loadMoreText}>Cargar más</Text>
+                )}
+              </TouchableOpacity>
+            )}
+          </>
+        )}
       </ScrollView>
       <BottomBar />
     </View>
@@ -349,6 +499,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginBottom: 12,
   },
+  emptyText: {
+    color: "#aaa",
+    fontSize: 14,
+    marginTop: 12,
+  },
   channelList: {
     paddingVertical: 8,
     gap: 8,
@@ -374,10 +529,44 @@ const styles = StyleSheet.create({
     color: "#0d0d0d",
     fontWeight: "bold",
   },
+  channelSection: {
+    marginBottom: 8,
+  },
+  channelHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 8,
+    marginBottom: 10,
+  },
+  channelTitle: {
+    color: "#fff",
+    fontSize: 17,
+    fontWeight: "bold",
+  },
+  seeAll: {
+    color: "#ff9f1c",
+    fontSize: 13,
+    fontWeight: "bold",
+  },
   count: {
     color: "#aaa",
     fontSize: 14,
     marginBottom: 12,
+  },
+  loadMore: {
+    backgroundColor: "#1a1a1a",
+    borderColor: "#ff9f1c",
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  loadMoreText: {
+    color: "#ff9f1c",
+    fontSize: 14,
+    fontWeight: "bold",
   },
   toggleRow: {
     flexDirection: "row",
