@@ -137,7 +137,24 @@ _POSITIVE_PATTERNS = [
     r"\bgana\b",
     r"\bvs\b",
     r"\bapuesta\b",
+    r"\bpron[oó]stico\b",
+    r"\bdoble\s*oportunidad\b",
+    r"\bempate\b",
+    r"\bresultado\b",
+    r"\bganador\b",
+    r"\bc[oó]rners?\b",
+    r"\btarjetas?\b",
+    r"\bmarcador\b",
+    r"\bambos\s*equipos\s*marcan\b",
 ]
+
+# Dos nombres propios separados por un guion (p. ej. "Levante - Athletic de
+# Bilbao"), la forma más habitual de anunciar un partido sin usar "vs".
+_TEAM_VS_TEAM_PATTERN = re.compile(
+    r"\b[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.]*(?:\s+[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.]*)*"
+    r"\s-\s"
+    r"[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.]*(?:\s+[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.]*)*"
+)
 
 _NEGATIVE_PATTERNS = [
     r"\bpromo\b",
@@ -164,7 +181,12 @@ def _looks_like_bet(text: str) -> bool:
     if any(re.search(pattern, lowered) for pattern in _NEGATIVE_PATTERNS):
         return False
 
-    return any(re.search(pattern, lowered) for pattern in _POSITIVE_PATTERNS)
+    if any(re.search(pattern, lowered) for pattern in _POSITIVE_PATTERNS):
+        return True
+
+    # "Equipo - Equipo" (sin "vs" explícito) se busca sobre el texto
+    # original, sin pasar a minúsculas, porque depende de las mayúsculas.
+    return bool(_TEAM_VS_TEAM_PATTERN.search(text))
 
 
 def _rule_extract(
