@@ -42,9 +42,9 @@ const BottomBar = () => {
         <Ionicons name="add-circle" size={32} color="orange" />
       </TouchableOpacity>
 
-      {/* Botón de Tipsters */}
-      <TouchableOpacity onPress={() => router.push("/screens/tipsters")}>
-        <Ionicons name="trophy" size={30} color="orange" />
+      {/* Botón de Mis Apuestas */}
+      <TouchableOpacity onPress={() => router.push("/screens/my-picks")}>
+        <Ionicons name="list" size={30} color="orange" />
       </TouchableOpacity>
 
       {/* Botón de Picks de Telegram */}
