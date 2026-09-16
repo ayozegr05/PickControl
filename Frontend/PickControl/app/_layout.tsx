@@ -10,7 +10,6 @@ export default function Layout() {
           <Stack.Screen name="index" />
           <Stack.Screen name="screens/login" />
           <Stack.Screen name="screens/register" />
-          <Stack.Screen name="dynamic-routes/informante" />
           <Stack.Screen name="screens/add-pick" />
           <Stack.Screen name="screens/parsed-picks" />
           <Stack.Screen name="screens/my-picks" />
