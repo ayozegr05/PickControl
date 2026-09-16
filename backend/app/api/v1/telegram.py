@@ -1,6 +1,6 @@
 """Endpoints de mensajes crudos y picks extraídos de Telegram."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -42,12 +42,18 @@ async def listar_mensajes_crudos(
 
 @router.get("/telegram/parsed-picks", response_model=list[ParsedPick])
 async def listar_picks_extraidos(
-    limit: int = 50,
+    limit: int = Query(default=500, le=2000),
     offset: int = 0,
     session: AsyncSession = Depends(get_session),
     _user: User = Depends(get_current_user),
 ) -> list[ParsedPick]:
-    """Devuelve los picks extraídos de los mensajes de Telegram."""
+    """Devuelve los picks extraídos de los mensajes de Telegram.
+
+    `limit` por defecto es alto (500) porque la pantalla de depuración
+    de Telegram necesita ver todos los canales, no solo los más
+    recientes; con pocos canales activos, un límite bajo hacía que los
+    canales de menor volumen desaparecieran de la lista.
+    """
     result = await session.exec(
         select(ParsedPick)
         .order_by(ParsedPick.created_at.desc())

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   ScrollView,
   Alert,
   TouchableOpacity,
+  ActivityIndicator,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import RNPickerSelect from "react-native-picker-select";
@@ -14,12 +15,17 @@ import BottomBar from "@/src/components/bottom-bar";
 import { useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
 import { createPick } from "@/src/api/picks.api";
+import { listInformantes } from "@/src/api/informantes.api";
 import { ApiError } from "@/src/api/client";
 import { Acierto } from "@/src/types/pick.types";
 
 const AddPick = () => {
   // Estados para cada campo
-  const [selectedInformante, setSelectedInformante] = useState("Dm7 Gratis");
+  const [informantes, setInformantes] = useState<
+    { label: string; value: string }[]
+  >([]);
+  const [loadingInformantes, setLoadingInformantes] = useState(true);
+  const [selectedInformante, setSelectedInformante] = useState("");
   const [selectedCasa, setSelectedCasa] = useState("Bet365");
   const [acierto, setAcierto] = useState("Pending");
   const [cantidadApostada, setCantidadApostada] = useState("");
@@ -35,17 +41,31 @@ const AddPick = () => {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  // Listas de opciones para los dropdowns
-  const informantes = [
-    { label: "FunBet", value: "FunBet" },
-    { label: "Mr Bet", value: "Mr Bet" },
-    { label: "Dm7 Gratis", value: "Dm7 Gratis" },
-    { label: "Dm7 AllSport", value: "Dm7 AllSport" },
-    { label: "Ap. Diaria", value: "Ap. Diaria" },
-    { label: "AllSportsPick", value: "AllSportsPick" },
-    { label: "VipInsta", value: "VipInsta" },
-  ];
+  // Carga los tipsters/canales ya existentes en la app (manuales y de
+  // Telegram) para que la apuesta quede vinculada a un informante real,
+  // en vez de a un nombre suelto que no coincide con nada.
+  useEffect(() => {
+    listInformantes()
+      .then((data) => {
+        const items = data
+          .map((i) => ({ label: i.informante, value: i.informante }))
+          .sort((a, b) => a.label.localeCompare(b.label));
+        setInformantes(items);
+        if (items.length > 0) {
+          setSelectedInformante(items[0].value);
+        }
+      })
+      .catch((error) => {
+        console.error("Error al cargar informantes:", error);
+        Alert.alert(
+          "Error",
+          "No se pudieron cargar los tipsters/canales existentes."
+        );
+      })
+      .finally(() => setLoadingInformantes(false));
+  }, []);
 
+  // Listas de opciones para los dropdowns
   const casas = [
     { label: "Marathon", value: "Marathon" },
     { label: "BetWay", value: "BetWay" },
@@ -54,9 +74,9 @@ const AddPick = () => {
   ];
 
   const aciertos = [
-    { label: "✔️", value: "True" },
-    { label: "❌", value: "False" },
-    { label: "❓", value: "Pending" },
+    { label: "\u2714\ufe0f", value: "True" },
+    { label: "\u274c", value: "False" },
+    { label: "\u2753", value: "Pending" },
   ];
 
   const tiposDeApuesta = [
@@ -80,8 +100,13 @@ const AddPick = () => {
     (tipo) => tipo.value !== "Doble"
   );
 
-  // Manejo del envío de la apuesta (con fetch para hacer el POST)
+  // Manejo del envio de la apuesta (con fetch para hacer el POST)
   const handleSubmit = async () => {
+    if (!selectedInformante) {
+      Alert.alert("Error", "Selecciona un tipster/canal antes de continuar.");
+      return;
+    }
+
     // Preparamos los datos que vamos a enviar
     let finalTipoDeApuesta = tipoDeApuesta;
 
@@ -96,7 +121,7 @@ const AddPick = () => {
         segundaApuestaDoble === "Otro"
           ? customSegundaApuesta
           : segundaApuestaDoble;
-      finalTipoDeApuesta = `Doble: ${primera} + ${segunda}`;
+      finalTipoDeApuesta = "Doble: " + primera + " + " + segunda;
     }
 
     try {
@@ -111,12 +136,11 @@ const AddPick = () => {
       });
 
       Alert.alert(
-        "Apuesta enviada con éxito",
+        "Apuesta enviada con exito",
         "Tu apuesta se ha guardado correctamente",
         [{ text: "OK", onPress: () => router.push("/") }]
       );
       // Restablecer los estados al valor inicial
-      setSelectedInformante("");
       setSelectedCasa("");
       setAcierto("");
       setCantidadApostada("");
@@ -131,7 +155,7 @@ const AddPick = () => {
     } catch (error: any) {
       console.error("Error al crear la apuesta:", error);
       if (error instanceof ApiError && error.status === 401) {
-        Alert.alert("Error", "No has iniciado sesión");
+        Alert.alert("Error", "No has iniciado sesion");
         router.push("/screens/login");
         return;
       }
@@ -148,12 +172,12 @@ const AddPick = () => {
     <View style={[styles.container, { paddingTop: 20 + insets.top }]}>
       <TopBar />
 
-      {/* ScrollView para asegurar que todo el formulario sea accesible en dispositivos más pequeños */}
+      {/* ScrollView para asegurar que todo el formulario sea accesible en dispositivos mas pequenos */}
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={{ paddingBottom: 80 + insets.bottom }}
       >
-        <Text style={styles.text}>Añade tu apuesta</Text>
+        <Text style={styles.text}>Anade tu apuesta</Text>
         {/* Card que contiene el formulario */}
         <View style={styles.card}>
           {/* Campo Apuesta */}
@@ -206,6 +230,7 @@ const AddPick = () => {
                 onValueChange={setPrimeraApuestaDoble}
                 items={tiposDeApuestaSinDoble}
                 style={pickerSelectStyles}
+
                 value={primeraApuestaDoble}
                 placeholder={{
                   label: "Selecciona primera apuesta",
@@ -246,12 +271,26 @@ const AddPick = () => {
           )}
 
           {/* Informante Selector */}
-          <RNPickerSelect
-            onValueChange={(value) => setSelectedInformante(value)}
-            items={informantes}
-            style={pickerSelectStyles}
-            value={selectedInformante}
-          />
+          {loadingInformantes ? (
+            <ActivityIndicator
+              size="small"
+              color="#ff9f1c"
+              style={{ marginVertical: 10 }}
+            />
+          ) : informantes.length === 0 ? (
+            <Text
+              style={[styles.label, { color: "#f44336", marginVertical: 10 }]}
+            >
+              No hay tipsters/canales registrados todavía.
+            </Text>
+          ) : (
+            <RNPickerSelect
+              onValueChange={(value) => setSelectedInformante(value)}
+              items={informantes}
+              style={pickerSelectStyles}
+              value={selectedInformante}
+            />
+          )}
 
           {/* Casa de Apuestas Selector */}
           <RNPickerSelect
