@@ -24,6 +24,12 @@ import { ApiError } from "@/src/api/client";
 import { InformanteStats } from "@/src/types/informante.types";
 import { PickItem, Acierto } from "@/src/types/pick.types";
 
+function colorForYield(value: number): string {
+  if (value > 0) return "#4caf50";
+  if (value < 0) return "#f44336";
+  return "#aaa";
+}
+
 export default function InformantDetail() {
   const { informante } = useLocalSearchParams(); // Obtener el parámetro dinámico
   const [data, setData] = useState<InformanteStats | null>(null); // Para almacenar la respuesta del backend
@@ -236,6 +242,11 @@ export default function InformantDetail() {
     return <Text>{total.toFixed(2)}€</Text>;
   };
 
+  const totalGananciasNum = apuestas.reduce(
+    (acc, a) => acc + calcularGanancia(a.cantidadApostada, a.cuota, a.acierto),
+    0
+  );
+
   const actualizarApuesta = async (id: number, acierto: Acierto) => {
     if (!id) {
       console.error("El ID de la apuesta es nulo o indefinido.");
@@ -416,24 +427,89 @@ export default function InformantDetail() {
         >
           <Text style={styles.title}>{informante}</Text>
 
+          {/* Comparativa: lo que publica el tipster vs tu resultado real */}
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Estadísticas</Text>
-            <View style={styles.row}>
-              <Text style={styles.label}>Total Apuestas:</Text>
-              <Text style={styles.value}>{totalApuestas}</Text>
+            <Text style={[styles.cardTitle, { marginBottom: 12 }]}>
+              Tipster vs. tú
+            </Text>
+            <View style={styles.compareRow}>
+              <Text style={styles.compareLabel} />
+              <Text style={styles.compareColTitle}>El tipster</Text>
+              <Text style={styles.compareColTitle}>Tú</Text>
             </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>Total Aciertos:</Text>
-              <Text style={styles.value}>{totalAciertos}</Text>
+            <View style={styles.compareRow}>
+              <Text style={styles.compareLabel}>Yield</Text>
+              <Text
+                style={[
+                  styles.compareValue,
+                  { color: colorForYield(data.parsedYieldPct) },
+                ]}
+              >
+                {data.parsedTotalApuestas > 0
+                  ? `${data.parsedYieldPct.toFixed(2)}%`
+                  : "—"}
+              </Text>
+              <Text
+                style={[
+                  styles.compareValue,
+                  { color: colorForYield(data.yieldPct) },
+                ]}
+              >
+                {totalApuestas > 0 ? `${data.yieldPct.toFixed(2)}%` : "—"}
+              </Text>
             </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>Porcentaje de Aciertos:</Text>
-              <Text style={styles.value}>{porcentajeAciertos.toFixed(2)}%</Text>
+            <View style={styles.compareRow}>
+              <Text style={styles.compareLabel}>% acierto</Text>
+              <Text style={styles.compareValue}>
+                {data.parsedTotalApuestas > 0
+                  ? `${data.parsedPorcentajeAciertos.toFixed(1)}%`
+                  : "—"}
+              </Text>
+              <Text style={styles.compareValue}>
+                {totalApuestas > 0 ? `${porcentajeAciertos.toFixed(1)}%` : "—"}
+              </Text>
             </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>Ganancias Totales:</Text>
-              <Text style={styles.value}>{calcularGananciasTotales()}</Text>
+            <View style={styles.compareRow}>
+              <Text style={styles.compareLabel}>Picks</Text>
+              <Text style={styles.compareValue}>
+                {data.parsedTotalApuestas}
+              </Text>
+              <Text style={styles.compareValue}>{totalApuestas}</Text>
             </View>
+            <View style={styles.compareRow}>
+              <Text style={styles.compareLabel}>Pendientes</Text>
+              <Text style={styles.compareValue}>
+                {data.parsedPicks.filter((p) => p.acierto === "Pending").length}
+              </Text>
+              <Text style={styles.compareValue}>
+                {apuestas.filter((a) => a.acierto === "Pending").length}
+              </Text>
+            </View>
+            <View style={styles.compareRow}>
+              <Text style={styles.compareLabel}>Ganancia</Text>
+              <Text
+                style={[
+                  styles.compareValue,
+                  { color: colorForYield(data.parsedGanancias) },
+                ]}
+              >
+                {data.parsedTotalApuestas > 0
+                  ? `${data.parsedGanancias.toFixed(2)}u`
+                  : "—"}
+              </Text>
+              <Text
+                style={[
+                  styles.compareValue,
+                  { color: colorForYield(totalGananciasNum) },
+                ]}
+              >
+                {totalApuestas > 0 ? `${totalGananciasNum.toFixed(2)}€` : "—"}
+              </Text>
+            </View>
+            <Text style={styles.compareNote}>
+              El tipster: unidades (u) según su stake · Tú: euros que has
+              apostado
+            </Text>
           </View>
           <Modal
             animationType="slide"
@@ -491,212 +567,55 @@ export default function InformantDetail() {
             </View>
           </Modal>
 
+          {/* Picks publicados por el tipster (extraídos de Telegram) */}
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Pronósticos</Text>
-            <View style={styles.filterButtons}>
-              <TouchableOpacity
-                style={[
-                  styles.filterButton,
-                  periodoSeleccionado === "semana" && styles.filterButtonActive,
-                ]}
-                onPress={() => setPeriodoSeleccionado("semana")}
-              >
-                <Text
-                  style={[
-                    styles.filterButtonText,
-                    periodoSeleccionado === "semana" &&
-                      styles.filterButtonTextActive,
-                  ]}
-                >
-                  Semana
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.filterButton,
-                  periodoSeleccionado === "mes" && styles.filterButtonActive,
-                ]}
-                onPress={() => setPeriodoSeleccionado("mes")}
-              >
-                <Text
-                  style={[
-                    styles.filterButtonText,
-                    periodoSeleccionado === "mes" &&
-                      styles.filterButtonTextActive,
-                  ]}
-                >
-                  Mes
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.filterButton,
-                  periodoSeleccionado === "año" && styles.filterButtonActive,
-                ]}
-                onPress={() => setPeriodoSeleccionado("año")}
-              >
-                <Text
-                  style={[
-                    styles.filterButtonText,
-                    periodoSeleccionado === "año" &&
-                      styles.filterButtonTextActive,
-                  ]}
-                >
-                  Año
-                </Text>
-              </TouchableOpacity>
+            <Text style={[styles.cardTitle, { color: "#ff9f1c" }]}>
+              Picks del tipster
+            </Text>
+            <Text style={styles.cardSubtitle}>
+              Lo que ha publicado en su canal, verificado automáticamente
+            </Text>
+            <View style={styles.row}>
+              <Text style={styles.label}>Total Picks:</Text>
+              <Text style={styles.value}>{data.parsedTotalApuestas}</Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>Aciertos:</Text>
+              <Text style={styles.value}>{data.parsedTotalAciertos}</Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>Porcentaje de Aciertos:</Text>
+              <Text style={styles.value}>
+                {data.parsedPorcentajeAciertos.toFixed(2)}%
+              </Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>Ganancias (unidades):</Text>
+              <Text style={styles.value}>
+                {data.parsedGanancias.toFixed(2)}u
+              </Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>Yield:</Text>
+              <Text style={styles.value}>
+                {data.parsedYieldPct.toFixed(2)}%
+              </Text>
             </View>
 
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View style={styles.table}>
-                <View style={styles.tableRow}>
-                  <View style={[styles.tableHeaderCell, styles.border]}>
-                    <Text style={styles.tableHeaderText}>Apuesta</Text>
-                  </View>
-                  <View style={[styles.tableHeaderCell, styles.border]}>
-                    <Text style={styles.tableHeaderText}>Acierto</Text>
-                  </View>
-                  <View style={[styles.tableHeaderCell, styles.border]}>
-                    <Text style={styles.tableHeaderText}>Fecha</Text>
-                  </View>
-                  <View style={[styles.tableHeaderCell, styles.border]}>
-                    <Text style={styles.tableHeaderText}>Tipo de Apuesta</Text>
-                  </View>
-                  <View style={[styles.tableHeaderCell, styles.border]}>
-                    <Text style={styles.tableHeaderText}>Cuota</Text>
-                  </View>
-                  <View style={[styles.tableHeaderCell, styles.border]}>
-                    <Text style={styles.tableHeaderText}>Cant. Apostada</Text>
-                  </View>
-                  <View style={[styles.tableHeaderCell, styles.border]}>
-                    <Text style={styles.tableHeaderText}>Ganancia</Text>
-                  </View>
-                  <View style={[styles.tableHeaderCell, styles.border]}>
-                    <Text style={styles.tableHeaderText}>Acciones</Text>
-                  </View>
-                </View>
-
-                {apuestasFiltradas().map((apuesta, index) => (
-                  <View
-                    key={apuesta.id}
-                    style={[
-                      styles.tableRow,
-                      index % 2 === 0 ? styles.evenRow : styles.oddRow,
-                    ]}
-                  >
-                    <View style={[styles.tableCell, styles.border]}>
-                      <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                        {apuesta.apuesta || "(sin nombre)"}
-                      </Text>
-                    </View>
-                    <View style={[styles.tableCell, styles.border]}>
-                      <Text>{renderPronostico(apuesta.acierto, apuesta)}</Text>
-                    </View>
-                    <View style={[styles.tableCell, styles.border]}>
-                      <TouchableOpacity
-                        onPress={() => handleFechaPress(apuesta)}
-                        style={styles.fechaContainer}
-                      >
-                        <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                          {formatearFecha(apuesta.fecha)}
-                        </Text>
-                        <MaterialCommunityIcons
-                          name="calendar-edit"
-                          size={16}
-                          color="#ff9f1c"
-                          style={styles.calendarIcon}
-                        />
-                      </TouchableOpacity>
-                    </View>
-                    <View style={[styles.tableCell, styles.border]}>
-                      <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                        {apuesta.tipoDeApuesta}
-                      </Text>
-                    </View>
-                    <View style={[styles.tableCell, styles.border]}>
-                      <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                        {Number(apuesta.cuota).toFixed(2)}
-                      </Text>
-                    </View>
-                    <View style={[styles.tableCell, styles.border]}>
-                      <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                        {Number(apuesta.cantidadApostada).toFixed(2)}
-                        <Text>€</Text>
-                      </Text>
-                    </View>
-                    <View style={[styles.tableCell, styles.border]}>
-                      <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                        {Number(
-                          calcularGanancia(
-                            apuesta.cantidadApostada,
-                            apuesta.cuota,
-                            apuesta.acierto
-                          )
-                        ).toFixed(2)}
-                        <Text>€</Text>
-                      </Text>
-                    </View>
-                    <View style={[styles.tableCell, styles.border]}>
-                      <TouchableOpacity
-                        onPress={() => handleEliminarPress(apuesta)}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      >
-                        <MaterialCommunityIcons
-                          name="trash-can"
-                          size={22}
-                          color="#f44336"
-                        />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </ScrollView>
-          </View>
-
-          {data && data.parsedPicks.length > 0 && (
-            <View style={styles.card}>
-              <Text style={[styles.cardTitle, { color: "#ff9f1c" }]}>
-                Picks de Telegram
+            <TouchableOpacity
+              style={styles.telegramButton}
+              onPress={() => router.push("/screens/parsed-picks")}
+            >
+              <Text style={styles.telegramButtonText}>
+                Corregir picks de Telegram
               </Text>
-              <View style={styles.row}>
-                <Text style={styles.label}>Total Picks:</Text>
-                <Text style={styles.value}>{data.parsedTotalApuestas}</Text>
-              </View>
-              <View style={styles.row}>
-                <Text style={styles.label}>Aciertos:</Text>
-                <Text style={styles.value}>{data.parsedTotalAciertos}</Text>
-              </View>
-              <View style={styles.row}>
-                <Text style={styles.label}>Porcentaje de Aciertos:</Text>
-                <Text style={styles.value}>
-                  {data.parsedPorcentajeAciertos.toFixed(2)}%
-                </Text>
-              </View>
-              <View style={styles.row}>
-                <Text style={styles.label}>Ganancias (unidades):</Text>
-                <Text style={styles.value}>
-                  {data.parsedGanancias.toFixed(2)}u
-                </Text>
-              </View>
-              <View style={styles.row}>
-                <Text style={styles.label}>Yield:</Text>
-                <Text style={styles.value}>
-                  {data.parsedYieldPct.toFixed(2)}%
-                </Text>
-              </View>
+            </TouchableOpacity>
 
-              <TouchableOpacity
-                style={styles.telegramButton}
-                onPress={() => router.push("/screens/parsed-picks")}
-              >
-                <Text style={styles.telegramButtonText}>
-                  Corregir picks de Telegram
-                </Text>
-              </TouchableOpacity>
-
+            {data.parsedPicks.length === 0 ? (
+              <Text style={styles.emptyText}>
+                Todavía no hay picks extraídos de este canal.
+              </Text>
+            ) : (
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 <View style={styles.table}>
                   <View style={styles.tableRow}>
@@ -796,8 +715,209 @@ export default function InformantDetail() {
                     ))}
                 </View>
               </ScrollView>
+            )}
+          </View>
+
+          {/* Tus apuestas manuales siguiendo a este tipster */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Mis apuestas siguiéndolo</Text>
+            <Text style={styles.cardSubtitle}>
+              Las que has registrado manualmente
+            </Text>
+            <View style={styles.row}>
+              <Text style={styles.label}>Total Apuestas:</Text>
+              <Text style={styles.value}>{totalApuestas}</Text>
             </View>
-          )}
+            <View style={styles.row}>
+              <Text style={styles.label}>Total Aciertos:</Text>
+              <Text style={styles.value}>{totalAciertos}</Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>Porcentaje de Aciertos:</Text>
+              <Text style={styles.value}>{porcentajeAciertos.toFixed(2)}%</Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>Ganancias Totales:</Text>
+              <Text style={styles.value}>{calcularGananciasTotales()}</Text>
+            </View>
+            <View style={styles.filterButtons}>
+              <TouchableOpacity
+                style={[
+                  styles.filterButton,
+                  periodoSeleccionado === "semana" && styles.filterButtonActive,
+                ]}
+                onPress={() => setPeriodoSeleccionado("semana")}
+              >
+                <Text
+                  style={[
+                    styles.filterButtonText,
+                    periodoSeleccionado === "semana" &&
+                      styles.filterButtonTextActive,
+                  ]}
+                >
+                  Semana
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.filterButton,
+                  periodoSeleccionado === "mes" && styles.filterButtonActive,
+                ]}
+                onPress={() => setPeriodoSeleccionado("mes")}
+              >
+                <Text
+                  style={[
+                    styles.filterButtonText,
+                    periodoSeleccionado === "mes" &&
+                      styles.filterButtonTextActive,
+                  ]}
+                >
+                  Mes
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.filterButton,
+                  periodoSeleccionado === "año" && styles.filterButtonActive,
+                ]}
+                onPress={() => setPeriodoSeleccionado("año")}
+              >
+                <Text
+                  style={[
+                    styles.filterButtonText,
+                    periodoSeleccionado === "año" &&
+                      styles.filterButtonTextActive,
+                  ]}
+                >
+                  Año
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {apuestas.length === 0 ? (
+              <Text style={styles.emptyText}>
+                Aún no has registrado apuestas siguiendo a este tipster.
+              </Text>
+            ) : apuestasFiltradas().length === 0 ? (
+              <Text style={styles.emptyText}>
+                Sin apuestas en el período seleccionado.
+              </Text>
+            ) : (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <View style={styles.table}>
+                  <View style={styles.tableRow}>
+                    <View style={[styles.tableHeaderCell, styles.border]}>
+                      <Text style={styles.tableHeaderText}>Apuesta</Text>
+                    </View>
+                    <View style={[styles.tableHeaderCell, styles.border]}>
+                      <Text style={styles.tableHeaderText}>Acierto</Text>
+                    </View>
+                    <View style={[styles.tableHeaderCell, styles.border]}>
+                      <Text style={styles.tableHeaderText}>Fecha</Text>
+                    </View>
+                    <View style={[styles.tableHeaderCell, styles.border]}>
+                      <Text style={styles.tableHeaderText}>
+                        Tipo de Apuesta
+                      </Text>
+                    </View>
+                    <View style={[styles.tableHeaderCell, styles.border]}>
+                      <Text style={styles.tableHeaderText}>Cuota</Text>
+                    </View>
+                    <View style={[styles.tableHeaderCell, styles.border]}>
+                      <Text style={styles.tableHeaderText}>Cant. Apostada</Text>
+                    </View>
+                    <View style={[styles.tableHeaderCell, styles.border]}>
+                      <Text style={styles.tableHeaderText}>Ganancia</Text>
+                    </View>
+                    <View style={[styles.tableHeaderCell, styles.border]}>
+                      <Text style={styles.tableHeaderText}>Acciones</Text>
+                    </View>
+                  </View>
+
+                  {apuestasFiltradas().map((apuesta, index) => (
+                    <View
+                      key={apuesta.id}
+                      style={[
+                        styles.tableRow,
+                        index % 2 === 0 ? styles.evenRow : styles.oddRow,
+                      ]}
+                    >
+                      <View style={[styles.tableCell, styles.border]}>
+                        <Text style={[styles.cellText, { fontWeight: "bold" }]}>
+                          {apuesta.apuesta || "(sin nombre)"}
+                        </Text>
+                      </View>
+                      <View style={[styles.tableCell, styles.border]}>
+                        <Text>
+                          {renderPronostico(apuesta.acierto, apuesta)}
+                        </Text>
+                      </View>
+                      <View style={[styles.tableCell, styles.border]}>
+                        <TouchableOpacity
+                          onPress={() => handleFechaPress(apuesta)}
+                          style={styles.fechaContainer}
+                        >
+                          <Text
+                            style={[styles.cellText, { fontWeight: "bold" }]}
+                          >
+                            {formatearFecha(apuesta.fecha)}
+                          </Text>
+                          <MaterialCommunityIcons
+                            name="calendar-edit"
+                            size={16}
+                            color="#ff9f1c"
+                            style={styles.calendarIcon}
+                          />
+                        </TouchableOpacity>
+                      </View>
+                      <View style={[styles.tableCell, styles.border]}>
+                        <Text style={[styles.cellText, { fontWeight: "bold" }]}>
+                          {apuesta.tipoDeApuesta}
+                        </Text>
+                      </View>
+                      <View style={[styles.tableCell, styles.border]}>
+                        <Text style={[styles.cellText, { fontWeight: "bold" }]}>
+                          {Number(apuesta.cuota).toFixed(2)}
+                        </Text>
+                      </View>
+                      <View style={[styles.tableCell, styles.border]}>
+                        <Text style={[styles.cellText, { fontWeight: "bold" }]}>
+                          {Number(apuesta.cantidadApostada).toFixed(2)}
+                          <Text>€</Text>
+                        </Text>
+                      </View>
+                      <View style={[styles.tableCell, styles.border]}>
+                        <Text style={[styles.cellText, { fontWeight: "bold" }]}>
+                          {Number(
+                            calcularGanancia(
+                              apuesta.cantidadApostada,
+                              apuesta.cuota,
+                              apuesta.acierto
+                            )
+                          ).toFixed(2)}
+                          <Text>€</Text>
+                        </Text>
+                      </View>
+                      <View style={[styles.tableCell, styles.border]}>
+                        <TouchableOpacity
+                          onPress={() => handleEliminarPress(apuesta)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <MaterialCommunityIcons
+                            name="trash-can"
+                            size={22}
+                            color="#f44336"
+                          />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              </ScrollView>
+            )}
+          </View>
         </ScrollView>
 
         <Modal
@@ -1139,5 +1259,52 @@ const styles = StyleSheet.create({
     color: "#1a1a1a",
     fontWeight: "bold",
     fontSize: 14,
+  },
+  cardSubtitle: {
+    fontSize: 13,
+    color: "#999",
+    textAlign: "center",
+    marginTop: -20,
+    marginBottom: 15,
+  },
+  emptyText: {
+    fontSize: 15,
+    color: "#aaa",
+    textAlign: "center",
+    marginVertical: 15,
+    fontStyle: "italic",
+  },
+  compareRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: "#3a3a3a",
+  },
+  compareLabel: {
+    flex: 1.2,
+    fontSize: 15,
+    color: "#ccc",
+  },
+  compareColTitle: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "bold",
+    color: "#ff9f1c",
+    textAlign: "center",
+  },
+  compareValue: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: "bold",
+    color: "white",
+    textAlign: "center",
+  },
+  compareNote: {
+    fontSize: 11,
+    color: "#777",
+    textAlign: "center",
+    marginTop: 10,
+    fontStyle: "italic",
   },
 });
