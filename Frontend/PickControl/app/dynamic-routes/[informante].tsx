@@ -573,6 +573,9 @@ export default function InformantDetail() {
                   <View style={[styles.tableHeaderCell, styles.border]}>
                     <Text style={styles.tableHeaderText}>Ganancia</Text>
                   </View>
+                  <View style={[styles.tableHeaderCell, styles.border]}>
+                    <Text style={styles.tableHeaderText}>Acciones</Text>
+                  </View>
                 </View>
 
                 {apuestasFiltradas().map((apuesta, index) => (
@@ -584,13 +587,9 @@ export default function InformantDetail() {
                     ]}
                   >
                     <View style={[styles.tableCell, styles.border]}>
-                      <TouchableOpacity
-                        onPress={() => handleEliminarPress(apuesta)}
-                      >
-                        <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                          {apuesta.apuesta || "(sin nombre)"}
-                        </Text>
-                      </TouchableOpacity>
+                      <Text style={[styles.cellText, { fontWeight: "bold" }]}>
+                        {apuesta.apuesta || "(sin nombre)"}
+                      </Text>
                     </View>
                     <View style={[styles.tableCell, styles.border]}>
                       <Text>{renderPronostico(apuesta.acierto, apuesta)}</Text>
@@ -638,6 +637,18 @@ export default function InformantDetail() {
                         ).toFixed(2)}
                         <Text>€</Text>
                       </Text>
+                    </View>
+                    <View style={[styles.tableCell, styles.border]}>
+                      <TouchableOpacity
+                        onPress={() => handleEliminarPress(apuesta)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <MaterialCommunityIcons
+                          name="trash-can"
+                          size={22}
+                          color="#f44336"
+                        />
+                      </TouchableOpacity>
                     </View>
                   </View>
                 ))}
