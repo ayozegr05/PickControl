@@ -139,9 +139,17 @@ async def obtener_stats_informante(
 async def listar_informantes(
     session: AsyncSession = Depends(get_session),
 ) -> list[InformanteSummary]:
-    """Devuelve un resumen de todos los informantes con sus métricas
-    de apuestas manuales, picks de Telegram y el total combinado."""
-    informantes = (await session.exec(select(Informante))).all()
+    """Devuelve un resumen de los informantes con sus métricas
+    de apuestas manuales, picks de Telegram y el total combinado.
+
+    Solo se listan canales de Telegram reales (`es_canal_telegram`):
+    el ranking y el formulario de alta manual trabajan siempre sobre
+    canales monitorizados, no sobre nombres libres."""
+    informantes = (
+        await session.exec(
+            select(Informante).where(Informante.es_canal_telegram.is_(True))
+        )
+    ).all()
     if not informantes:
         return []
 

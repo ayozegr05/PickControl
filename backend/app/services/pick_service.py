@@ -168,18 +168,29 @@ def calcular_stats_combinado(
     )
 
 
-async def get_or_create_informante(session: AsyncSession, nombre: str) -> Informante:
+async def get_or_create_informante(
+    session: AsyncSession, nombre: str, es_canal_telegram: bool = False
+) -> Informante:
     """Busca un informante por nombre o lo crea si no existe.
 
     En Mongo, `Informante` era un string libre dentro de cada `Pick`; al
     normalizar a Postgres se convierte en su propia tabla, así que hay
     que resolver/crear la fila correspondiente al guardar una apuesta.
+
+    `es_canal_telegram` solo lo pasa el pipeline de Telegram: marca el
+    informante como canal real. Si el informante ya existía (p. ej. creado
+    a mano antes de esta restricción) y llega un pick de su canal, se
+    "asciende" a canal para unificar los datos.
     """
     result = await session.exec(select(Informante).where(Informante.nombre == nombre))
     informante = result.first()
     if informante is None:
-        informante = Informante(nombre=nombre)
+        informante = Informante(nombre=nombre, es_canal_telegram=es_canal_telegram)
         session.add(informante)
         await session.flush()
         await session.refresh(informante)
+    elif es_canal_telegram and not informante.es_canal_telegram:
+        informante.es_canal_telegram = True
+        session.add(informante)
+        await session.flush()
     return informante

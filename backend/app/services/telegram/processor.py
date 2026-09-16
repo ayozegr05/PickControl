@@ -202,7 +202,9 @@ async def process_incoming_message(
                         duplicate.id,
                     )
             else:
-                informante = await get_or_create_informante(db_session, channel)
+                informante = await get_or_create_informante(
+                    db_session, channel, es_canal_telegram=True
+                )
                 parsed = ParsedPick(
                     raw_message_id=raw.id,
                     informante_id=informante.id,

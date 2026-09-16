@@ -27,7 +27,6 @@ from app.models.user import User, UserRole
 from app.schemas.pick import PickCreate, PickRead, PickUpdate
 from app.services.pick_service import (
     calcular_ganancia,
-    get_or_create_informante,
     to_naive_utc,
 )
 
@@ -76,8 +75,28 @@ async def crear_apuesta(
     current_user: User = Depends(get_current_user),
 ) -> PickRead:
     """Equivalente a `router.post("/apuestas", ...)`. Requiere autenticación,
-    igual que en el Node original (verificaba el JWT manualmente)."""
-    informante = await get_or_create_informante(session, payload.informante)
+    igual que en el Node original (verificaba el JWT manualmente).
+
+    A diferencia del Node original, el informante NO se crea si no existe:
+    las apuestas manuales solo pueden vincularse a canales de Telegram
+    reales ya monitorizados (`es_canal_telegram`), para que el ranking y
+    el detalle del tipster siempre hablen del mismo canal."""
+    informante = (
+        await session.exec(
+            select(Informante).where(
+                Informante.nombre == payload.informante,
+                Informante.es_canal_telegram.is_(True),
+            )
+        )
+    ).first()
+    if informante is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Informante no encontrado: solo puedes registrar apuestas "
+                "sobre canales de Telegram monitorizados."
+            ),
+        )
 
     pick = Pick(
         apuesta=payload.apuesta,

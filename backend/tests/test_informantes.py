@@ -18,8 +18,9 @@ class TestInformantes:
         assert response.status_code == 404
 
     async def test_informante_existe_pero_sin_picks(
-        self, client: AsyncClient, auth_headers
+        self, client: AsyncClient, auth_headers, crear_canal
     ):
+        await crear_canal(PICK_CREATE["informante"])
         # Crear una apuesta con un informante, luego borrarla.
         create = await client.post(
             "/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers
@@ -31,7 +32,10 @@ class TestInformantes:
         response = await client.get("/api/v1/informante/TipsterPro")
         assert response.status_code == 404
 
-    async def test_stats_informante_con_mixta(self, client: AsyncClient, auth_headers):
+    async def test_stats_informante_con_mixta(
+        self, client: AsyncClient, auth_headers, crear_canal
+    ):
+        await crear_canal(PICK_CREATE["informante"])
         # Crear dos apuestas del mismo informante: una acierto y otra fallo.
         acierto = PICK_CREATE.copy()
         acierto["cuota"] = 2.0
@@ -67,3 +71,20 @@ class TestInformantes:
         assert data["porcentaje_aciertos"] == 50.0
         assert data["yield_pct"] == 0.0  # ganancias 0 / total apostado 40
         assert len(data["apuestas"]) == 2
+
+    async def test_listar_informantes_solo_canales_telegram(
+        self, client: AsyncClient, session, crear_canal
+    ):
+        """GET /informantes solo lista canales de Telegram reales; los
+        informantes sin canal (es_canal_telegram=False) quedan fuera."""
+        from app.models.informante import Informante
+
+        await crear_canal("CanalReal")
+        session.add(Informante(nombre="ManualInventado", es_canal_telegram=False))
+        await session.commit()
+
+        response = await client.get("/api/v1/informantes")
+        assert response.status_code == 200
+        nombres = [i["informante"] for i in response.json()]
+        assert "CanalReal" in nombres
+        assert "ManualInventado" not in nombres

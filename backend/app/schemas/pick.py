@@ -13,7 +13,10 @@ class PickCreate(SQLModel):
 
     apuesta: str
     informante: str = Field(
-        description="Nombre del informante; se resuelve/crea internamente"
+        description=(
+            "Nombre del informante; debe ser un canal de Telegram "
+            "monitorizado existente (no se crean informantes nuevos)"
+        )
     )
     tipo_de_apuesta: str
     casa: str

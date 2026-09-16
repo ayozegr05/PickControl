@@ -16,6 +16,10 @@ from app.core.dates import utc_now
 
 class InformanteBase(SQLModel):
     nombre: str = Field(index=True, unique=True, max_length=150)
+    # True si el informante representa un canal de Telegram monitorizado.
+    # Las apuestas manuales solo pueden vincularse a canales reales: ya no
+    # se pueden crear informantes "de nombre libre" desde POST /apuestas.
+    es_canal_telegram: bool = Field(default=False)
 
 
 class Informante(InformanteBase, table=True):
