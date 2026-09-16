@@ -130,6 +130,7 @@ class TestProcessIncomingMessage:
         )
         informante = informante_result.scalars().one()
         assert informante.nombre == "Test Channel"
+        assert informante.es_canal_telegram is True
 
     async def test_rejected_message_is_persisted_as_not_bet(
         self, session, fake_settings, monkeypatch

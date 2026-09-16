@@ -18,7 +18,10 @@ class TestListarPicks:
         assert response.status_code == 200
         assert response.json() == []
 
-    async def test_listar_despues_de_crear(self, client: AsyncClient, auth_headers):
+    async def test_listar_despues_de_crear(
+        self, client: AsyncClient, auth_headers, crear_canal
+    ):
+        await crear_canal(PICK_CREATE["informante"])
         create = await client.post(
             "/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers
         )
@@ -33,7 +36,10 @@ class TestListarPicks:
 
 
 class TestCrearPick:
-    async def test_crear_con_token_valido(self, client: AsyncClient, auth_headers):
+    async def test_crear_con_token_valido(
+        self, client: AsyncClient, auth_headers, crear_canal
+    ):
+        await crear_canal(PICK_CREATE["informante"])
         response = await client.post(
             "/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers
         )
@@ -49,9 +55,37 @@ class TestCrearPick:
         response = await client.post("/api/v1/apuestas", json=PICK_CREATE)
         assert response.status_code == 401
 
+    async def test_crear_con_informante_inexistente_falla(
+        self, client: AsyncClient, auth_headers
+    ):
+        """Las apuestas manuales solo pueden vincularse a canales reales:
+        un nombre libre que no existe como canal devuelve 404."""
+        response = await client.post(
+            "/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers
+        )
+        assert response.status_code == 404
+
+    async def test_crear_con_informante_no_canal_falla(
+        self, client: AsyncClient, auth_headers, session
+    ):
+        """Un informante existente pero que NO es canal de Telegram
+        (p. ej. creado a mano en otra época) tampoco es válido."""
+        from app.models.informante import Informante
+
+        session.add(Informante(nombre="ElTipster", es_canal_telegram=False))
+        await session.commit()
+
+        response = await client.post(
+            "/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers
+        )
+        assert response.status_code == 404
+
 
 class TestActualizarPick:
-    async def test_actualizar_propia_apuesta(self, client: AsyncClient, auth_headers):
+    async def test_actualizar_propia_apuesta(
+        self, client: AsyncClient, auth_headers, crear_canal
+    ):
+        await crear_canal(PICK_CREATE["informante"])
         create = await client.post(
             "/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers
         )
@@ -69,8 +103,9 @@ class TestActualizarPick:
         assert data["ganancia"] == 15.0
 
     async def test_actualizar_apuesta_ajena_prohibido(
-        self, client: AsyncClient, auth_headers
+        self, client: AsyncClient, auth_headers, crear_canal
     ):
+        await crear_canal(PICK_CREATE["informante"])
         # Usuario A crea una apuesta.
         create = await client.post(
             "/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers
@@ -106,7 +141,10 @@ class TestActualizarPick:
 
 
 class TestEliminarPick:
-    async def test_eliminar_propia_apuesta(self, client: AsyncClient, auth_headers):
+    async def test_eliminar_propia_apuesta(
+        self, client: AsyncClient, auth_headers, crear_canal
+    ):
+        await crear_canal(PICK_CREATE["informante"])
         create = await client.post(
             "/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers
         )

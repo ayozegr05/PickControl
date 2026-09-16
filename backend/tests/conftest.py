@@ -23,6 +23,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db.postgres import get_session
 from app.main import app
+from app.models.informante import Informante
 
 
 @pytest_asyncio.fixture
@@ -71,3 +72,22 @@ async def auth_headers(client: AsyncClient) -> dict[str, str]:
     assert response.status_code == 201
     token = response.json()["token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest_asyncio.fixture
+async def crear_canal(session: AsyncSession):
+    """Fábrica de informantes-canal de Telegram para los tests.
+
+    POST /apuestas ya no crea informantes: la apuesta manual solo puede
+    vincularse a un canal real, así que los tests que crean apuestas
+    deben sembrar el canal antes.
+    """
+
+    async def _crear(nombre: str) -> Informante:
+        informante = Informante(nombre=nombre, es_canal_telegram=True)
+        session.add(informante)
+        await session.commit()
+        await session.refresh(informante)
+        return informante
+
+    return _crear
