@@ -33,6 +33,7 @@ export interface InformanteSummary {
   manualGanancias: number;
   manualPorcentaje: number;
   manualYield: number;
+  manualPendientes: number;
 
   // Picks de Telegram.
   parsedTotal: number;
@@ -40,6 +41,7 @@ export interface InformanteSummary {
   parsedGanancias: number;
   parsedPorcentaje: number;
   parsedYield: number;
+  parsedPendientes: number;
 
   // Totales combinados.
   total: number;
@@ -47,4 +49,5 @@ export interface InformanteSummary {
   ganancias: number;
   porcentaje: number;
   yieldPct: number;
+  pendientes: number;
 }

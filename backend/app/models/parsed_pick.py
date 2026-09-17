@@ -36,6 +36,11 @@ class ParsedPickBase(SQLModel):
     #   dirección over/under se guarda en `mercado`/`seleccion`).
     linea: Optional[float] = None
 
+    # Apuesta de "reto" del tipster (p. ej. "RETO X3 GRATIS"): va en su
+    # propia sección y no se mezcla con las apuestas diarias ni con las
+    # estadísticas del canal.
+    es_reto: bool = Field(default=False)
+
     # Verificación del resultado: None = pendiente, True = acertó, False = falló.
     acierto: Optional[bool] = None
     # Apuesta anulada/devuelta (p. ej. "push" en hándicap/over-under con

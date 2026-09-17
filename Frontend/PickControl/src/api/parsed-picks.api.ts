@@ -23,6 +23,7 @@ export type ParsedPick = {
   informante_id: number | null;
   raw_message_id: number;
   created_at: string;
+  es_reto: boolean;
 };
 
 export type ParsedPicksQuery = {

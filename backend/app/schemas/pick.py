@@ -47,3 +47,7 @@ class PickRead(SQLModel):
     fecha: datetime
     source: PickSource
     ganancia: Optional[float] = None
+    evento: Optional[str] = None
+    # Solo para picks de Telegram: apuesta de "reto" del tipster (va en su
+    # propia sección, fuera de las apuestas diarias y de las stats).
+    es_reto: bool = False

@@ -28,6 +28,8 @@ export type RawPick = {
   fecha: string;
   source: PickSource;
   ganancia?: number | null;
+  evento?: string | null;
+  es_reto?: boolean;
 };
 
 export function toPickItem(raw: RawPick): PickItem {
@@ -43,6 +45,8 @@ export function toPickItem(raw: RawPick): PickItem {
     fecha: raw.fecha,
     source: raw.source,
     ganancia: raw.ganancia ?? undefined,
+    evento: raw.evento ?? null,
+    esReto: raw.es_reto ?? false,
   };
 }
 

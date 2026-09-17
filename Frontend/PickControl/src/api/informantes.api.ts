@@ -55,16 +55,19 @@ type RawInformanteSummary = {
   manual_ganancias: number;
   manual_porcentaje: number;
   manual_yield: number;
+  manual_pendientes: number;
   parsed_total: number;
   parsed_aciertos: number;
   parsed_ganancias: number;
   parsed_porcentaje: number;
   parsed_yield: number;
+  parsed_pendientes: number;
   total: number;
   aciertos: number;
   ganancias: number;
   porcentaje: number;
   yield_pct: number;
+  pendientes: number;
 };
 
 export async function listInformantes(): Promise<InformanteSummary[]> {
@@ -81,10 +84,13 @@ export async function listInformantes(): Promise<InformanteSummary[]> {
     parsedGanancias: raw.parsed_ganancias,
     parsedPorcentaje: raw.parsed_porcentaje,
     parsedYield: raw.parsed_yield,
+    manualPendientes: raw.manual_pendientes,
+    parsedPendientes: raw.parsed_pendientes,
     total: raw.total,
     aciertos: raw.aciertos,
     ganancias: raw.ganancias,
     porcentaje: raw.porcentaje,
     yieldPct: raw.yield_pct,
+    pendientes: raw.pendientes,
   }));
 }

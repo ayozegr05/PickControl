@@ -32,6 +32,7 @@ const LoginScreen = () => {
   const insets = useSafeAreaInsets();
   const [isBiometricSupported, setIsBiometricSupported] = useState(false);
   const [savedCredentials, setSavedCredentials] = useState(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     checkBiometricSupport();
@@ -168,14 +169,27 @@ const LoginScreen = () => {
                     <Text style={styles.errorText}>{errors.email}</Text>
                   )}
 
-                  <TextInput
-                    style={styles.input}
-                    onChangeText={handleChange("password")}
-                    value={values.password}
-                    placeholder="Contraseña"
-                    placeholderTextColor="#95a5a6"
-                    secureTextEntry
-                  />
+                  <View style={styles.passwordContainer}>
+                    <TextInput
+                      style={[styles.input, styles.passwordInput]}
+                      onChangeText={handleChange("password")}
+                      value={values.password}
+                      placeholder="Contraseña"
+                      placeholderTextColor="#95a5a6"
+                      secureTextEntry={!showPassword}
+                    />
+                    <TouchableOpacity
+                      style={styles.eyeButton}
+                      onPress={() => setShowPassword((prev) => !prev)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      <MaterialCommunityIcons
+                        name={showPassword ? "eye-off" : "eye"}
+                        size={22}
+                        color="#95a5a6"
+                      />
+                    </TouchableOpacity>
+                  </View>
                   {errors.password && touched.password && (
                     <Text style={styles.errorText}>{errors.password}</Text>
                   )}
@@ -263,6 +277,19 @@ const styles = StyleSheet.create({
     borderColor: "#4d4d4d",
     fontSize: 16,
     color: "#fff",
+  },
+  passwordContainer: {
+    position: "relative",
+    justifyContent: "center",
+    marginBottom: 15,
+  },
+  passwordInput: {
+    paddingRight: 48,
+    marginBottom: 0,
+  },
+  eyeButton: {
+    position: "absolute",
+    right: 14,
   },
   errorText: {
     color: "#ff6b6b",
