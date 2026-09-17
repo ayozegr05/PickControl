@@ -55,6 +55,7 @@ async def _to_pick_read(session: AsyncSession, pick: Pick) -> PickRead:
         cuota=pick.cuota,
         fecha=pick.fecha,
         source=pick.source,
+        parsed_pick_id=pick.parsed_pick_id,
         ganancia=calcular_ganancia(pick.cantidad_apostada, pick.cuota, pick.acierto),
     )
 

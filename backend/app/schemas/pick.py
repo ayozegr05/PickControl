@@ -48,6 +48,9 @@ class PickRead(SQLModel):
     source: PickSource
     ganancia: Optional[float] = None
     evento: Optional[str] = None
+    # Si la apuesta nació de un pick de Telegram ("Yo también la jugué"),
+    # id del parsed_pick de origen; None en apuestas dadas de alta a mano.
+    parsed_pick_id: Optional[int] = None
     # Solo para picks de Telegram: apuesta de "reto" del tipster (va en su
     # propia sección, fuera de las apuestas diarias y de las stats).
     es_reto: bool = False

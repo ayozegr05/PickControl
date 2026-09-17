@@ -1,4 +1,5 @@
 import { apiRequest } from "./client";
+import { RawPick } from "./picks.api";
 
 export type ParsedPick = {
   id: number;
@@ -69,6 +70,33 @@ export async function updateParsedPickAcierto(
   return apiRequest<ParsedPick>(`/telegram/parsed-picks/${id}`, {
     method: "PATCH",
     body: update,
+    auth: true,
+  });
+}
+
+export type JugarPickPayload = {
+  /** Importe real apostado por el usuario (obligatorio). */
+  cantidadApostada: number;
+  /** Cuota real conseguida; si no se envía se copia la del tipster. */
+  cuota?: number;
+  /** Casa donde se jugó; si no se envía se copia la del tipster. */
+  casa?: string;
+};
+
+/** Registra una apuesta del usuario copiada de un pick de Telegram
+ * ("Yo también la jugué"). Devuelve la apuesta creada (o la existente
+ * si ya se había registrado). */
+export async function jugarParsedPick(
+  id: number,
+  payload: JugarPickPayload
+): Promise<RawPick> {
+  return apiRequest<RawPick>(`/telegram/parsed-picks/${id}/jugar`, {
+    method: "POST",
+    body: {
+      cantidad_apostada: payload.cantidadApostada,
+      cuota: payload.cuota,
+      casa: payload.casa,
+    },
     auth: true,
   });
 }

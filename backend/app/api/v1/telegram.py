@@ -1,16 +1,21 @@
 """Endpoints de mensajes crudos y picks extraídos de Telegram."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.dates import utc_now
 from app.db.postgres import get_session
+from app.models.informante import Informante
 from app.models.parsed_pick import ParsedPick
+from app.models.pick import Acierto, Pick, PickSource
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.models.user import User
+from app.schemas.pick import PickRead
+from app.services.pick_service import calcular_ganancia, to_naive_utc
 
 router = APIRouter(tags=["telegram"])
 
@@ -133,3 +138,92 @@ async def corregir_acierto_pick(
     await session.commit()
     await session.refresh(pick)
     return pick
+
+
+class JugarPickCreate(BaseModel):
+    """Datos de la apuesta real del usuario al marcar "yo también la jugué".
+
+    `cuota` y `casa` son opcionales: si no se envían se copian las del
+    tipster. Conviene enviarlas cuando el usuario consiguió una cuota
+    distinta — es justo lo que permite comparar el yield publicado con
+    el yield real alcanzable.
+    """
+
+    cantidad_apostada: float = Field(gt=0)
+    cuota: float | None = Field(default=None, gt=1.0)
+    casa: str | None = Field(default=None, max_length=100)
+
+
+def _pick_to_read(pick: Pick, informante: Informante | None) -> PickRead:
+    return PickRead(
+        id=pick.id,
+        apuesta=pick.apuesta,
+        informante=informante.nombre if informante else "",
+        tipo_de_apuesta=pick.tipo_de_apuesta,
+        acierto=pick.acierto,
+        casa=pick.casa,
+        cantidad_apostada=pick.cantidad_apostada,
+        cuota=pick.cuota,
+        fecha=pick.fecha,
+        source=pick.source,
+        parsed_pick_id=pick.parsed_pick_id,
+        ganancia=calcular_ganancia(pick.cantidad_apostada, pick.cuota, pick.acierto),
+    )
+
+
+@router.post("/telegram/parsed-picks/{pick_id}/jugar", response_model=PickRead)
+async def jugar_pick(
+    pick_id: int,
+    payload: JugarPickCreate,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> PickRead:
+    """Registra que el usuario también jugó un pick extraído de Telegram.
+
+    Crea una apuesta (`picks`) copiando selección/mercado/cuota del pick
+    y enlazándola con `parsed_pick_id` para trazabilidad. Si el usuario
+    ya la registró, devuelve la existente en vez de crear un duplicado.
+    """
+    parsed = await session.get(ParsedPick, pick_id)
+    if parsed is None or not parsed.es_apuesta:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pick no encontrado",
+        )
+    if parsed.informante_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="El pick no tiene canal asociado",
+        )
+
+    existing = (
+        await session.exec(
+            select(Pick).where(
+                Pick.parsed_pick_id == parsed.id,
+                Pick.usuario_id == current_user.id,
+            )
+        )
+    ).first()
+    if existing is not None:
+        informante = await session.get(Informante, existing.informante_id)
+        return _pick_to_read(existing, informante)
+
+    pick = Pick(
+        apuesta=parsed.seleccion or parsed.apuesta or "(pick Telegram)",
+        tipo_de_apuesta=(parsed.mercado or "Otro")[:50],
+        casa=(payload.casa or parsed.casa or "Otra")[:100],
+        acierto=Acierto.PENDING,
+        cantidad_apostada=payload.cantidad_apostada,
+        cuota=payload.cuota if payload.cuota is not None else (parsed.cuota or 1.0),
+        fecha=to_naive_utc(parsed.fecha_evento) if parsed.fecha_evento else utc_now(),
+        source=PickSource.TELEGRAM,
+        parsed_pick_id=parsed.id,
+        usuario_id=current_user.id,
+        informante_id=parsed.informante_id,
+    )
+    session.add(pick)
+    await session.commit()
+    await session.refresh(pick)
+
+    informante = await session.get(Informante, pick.informante_id)
+    return _pick_to_read(pick, informante)

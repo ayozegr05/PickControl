@@ -48,6 +48,7 @@ def _pick_to_read(
         cuota=pick.cuota,
         fecha=pick.fecha,
         source=pick.source,
+        parsed_pick_id=pick.parsed_pick_id,
         ganancia=ganancias.get(pick.id),
     )
 
