@@ -63,6 +63,20 @@ class Settings(BaseSettings):
     # "api-football-v1.p.rapidapi.com".
     api_football_key: str | None = None
     api_football_host: str = "v3.football.api-sports.io"
+    # Tenis vía TheSportsDB (gratis; la key pública "3" vale para uso
+    # personal — con Patreon de $2 dan una propia). Cubre ATP/WTA Tour
+    # y Grand Slams; Challengers/ITF quedan para el fallback.
+    api_tennis_key: str | None = "3"
+    # Fallback de tenis vía RapidAPI ("Tennis API - ATP WTA ITF":
+    # cubre Challenger/ITF). Plan gratuito con cuota diaria limitada —
+    # solo se consume cuando TheSportsDB no encuentra el partido.
+    rapidapi_tennis_key: str | None = None
+    rapidapi_tennis_host: str = "tennis-api-atp-wta-itf.p.rapidapi.com"
+    # Tercer nivel de tenis: "TennisApi" (tennisapi1, datos de Sofascore:
+    # ATP/WTA/Challenger/ITF). Reutiliza RAPIDAPI_TENNIS_KEY — la key es
+    # por cuenta RapidAPI, no por producto; cada suscripción lleva su
+    # propia cuota (~50 req/día cada una).
+    rapidapi_tennisapi1_host: str = "tennisapi1.p.rapidapi.com"
     # Cada cuántas horas se revisan picks pendientes de verificar en segundo plano.
     results_verification_interval_hours: float = 3.0
 

@@ -41,6 +41,8 @@ venv/
 *.session
 *.session-journal
 media/
+# Estado persistente de cuotas/fallos de las APIs de resultados
+provider_state.json
 
 # ============================
 # Backend: bases de datos locales y logs de desarrollo
