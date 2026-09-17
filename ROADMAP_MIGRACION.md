@@ -194,9 +194,11 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
       genera dumps comprimidos (`pg_dump -Fc`) en `backend/backups/` con
       timestamp, retención de 14 días (`BACKUP_RETENTION_DAYS`) y
       localiza `pg_dump` en PATH o en `Program Files\PostgreSQL`. El
-      directorio está en `.gitignore`. Programación diaria: Task
-      Scheduler / cron (comandos en la docstring del script). Restaurar:
+      directorio está en `.gitignore`. Restaurar:
       `pg_restore -d controlpick backups/<dump>.dump`.
+      **Pendiente: programarlo diario** (Task Scheduler/cron — comandos
+      en la docstring del script). En local basta ejecución manual antes
+      de migraciones o reprocesos; el diario se activa al desplegar.
 - [x] **Tests del pipeline de Telegram** (hecho): `catchup.py` (marca de
       agua, huecos por debajo de la marca, raw vacío/`processed=False`
       reprocesado, raw con pick vinculado no se toca, corte por 7 días,
