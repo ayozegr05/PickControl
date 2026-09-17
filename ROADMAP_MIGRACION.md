@@ -100,8 +100,13 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
       "X recibe tarjeta"; gol en propia y penalti fallado no cuentan;
       y si el jugador no consta en ningún evento se consulta además
       `/fixtures/players`: consta que no disputó minutos → `anulada`
-      (la casa devuelve), sin datos fiables → pendiente). Pendiente
-      aún: **primera parte/descanso** y **combinadas** (hay que modelar
+      (la casa devuelve), sin datos fiables → pendiente). También los
+      **props de jugador con número** ("X más de 1.5 tiros a puerta",
+      "2 o más tiros - Jugador") con las stats por jugador del mismo
+      endpoint, el **resultado exacto** ("2-1", con corrección de
+      orientación si el evento va al revés) y los **cuartos de
+      hándicap** (±0.25/±0.75 → dos medias apuestas). Pendiente aún:
+      **primera parte/descanso** y **combinadas** (hay que modelar
       cada selección por separado; hasta entonces quedan manuales —
       nunca se verifican contra una sola selección, eso sería un falso
       resultado).
