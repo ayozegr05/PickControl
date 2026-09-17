@@ -166,9 +166,13 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 
 ### 3. App / producto
 
-- [ ] **Pantalla de análisis global**: ROI/yield por canal y por deporte,
-      comparativa "tipster vs tú" agregada — es el valor real del proyecto
-      (auditar si un tipster es rentable de verdad).
+- [x] **Pantalla de análisis global** (hecho): `GET /api/v1/analisis`
+      agrega por canal y por deporte las stats del tipster (picks de
+      Telegram) contra las apuestas del usuario, con ranking por yield y
+      comparativa de cuota media publicada vs conseguida sobre los picks
+      jugados ("Yo también la jugué"). Pantalla `app/screens/auditoria.tsx`
+      (icono "Análisis" de la bottom-bar); la calculadora de proyecciones
+      queda en `/screens/analysis`, enlazada desde la auditoría.
 - [x] **"Yo también la jugué"** (hecho): `POST /telegram/parsed-picks/{id}/jugar`
       crea una apuesta del usuario (`picks`) copiando selección/mercado/cuota/
       stake/casa del pick, enlazada con `picks.parsed_pick_id` (FK nueva,
