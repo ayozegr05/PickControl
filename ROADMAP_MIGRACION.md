@@ -86,9 +86,17 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
       reintentarse en cada ciclo y quedan para corrección manual. Si sigue
       corto: bajar la frecuencia del verificador (hoy cada 3 h) o plan de pago
       que elimine la restricción de fechas.
-- [ ] **Verificar mercados complejos**: combinadas, tarjetas, córners,
-      "jugador marca", doble oportunidad. Hoy solo se resuelven ganador /
-      hándicap / over-under goles; el resto es manual.
+- [ ] **Verificar mercados complejos** (parcial): ya se resuelven con el
+      marcador — ganador, hándicap asiático, over/under goles (total del
+      partido y por equipo), doble oportunidad (1X/X2/12/"equipo y
+      empate"), ambos marcan (sí/no) y empate no válido. Pendiente:
+      **córners, tarjetas, tiros y demás líneas que no son goles**
+      (necesitan un proveedor de estadísticas por partido, no solo el
+      marcador — API-Football `/fixtures/statistics` solo con plan de
+      pago o en ventana ±1 día), **primera parte/descanso**, "jugador
+      marca" y **combinadas** (hay que modelar cada selección por
+      separado; hasta entonces quedan manuales — nunca se verifican
+      contra una sola selección, eso sería un falso resultado).
 - [ ] **Comparar cuota del tipster vs cuota real de mercado**: contrastar la
       cuota publicada por el informante contra la cuota disponible en APIs de
       apuestas (The Odds API, Pinnacle, Betfair...) en el momento de la
