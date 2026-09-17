@@ -103,6 +103,10 @@ class MatchResult:
     los juegos de cada set orientados igual que home/away
     (`[(juegos_home_set1, juegos_away_set1), ...]`): permite mercados
     de juegos (over/under, hándicap). None si el proveedor no lo da.
+
+    `status` marca finales anómalos reportados por el proveedor
+    ("retired", "walkover" en tenis): el partido no terminó por la vía
+    normal y las casas suelen devolver la apuesta. None = final normal.
     """
 
     home_team: str
@@ -110,6 +114,7 @@ class MatchResult:
     home_score: int
     away_score: int
     sets: Optional[list[tuple[int, int]]] = None
+    status: Optional[str] = None
 
 
 @dataclass

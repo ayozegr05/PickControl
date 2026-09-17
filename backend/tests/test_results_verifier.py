@@ -121,6 +121,7 @@ class _StubTennisProvider:
         home_sets: int,
         away_sets: int,
         sets: list[tuple[int, int]] | None = None,
+        status: str | None = None,
     ):
         self._match = MatchResult(
             home_team="Carlos Alcaraz",
@@ -128,6 +129,7 @@ class _StubTennisProvider:
             home_score=home_sets,
             away_score=away_sets,
             sets=sets,
+            status=status,
         )
 
     async def find_match(self, date, team_hint):
@@ -257,6 +259,110 @@ class TestTennisMarkets:
         acierto, anulada = await verify_pick(pick, [provider])
         assert (acierto, anulada) == (None, False)
 
+    async def test_retirada_anula_ganador(self):
+        provider = _StubTennisProvider(1, 0, sets=[(6, 4)], status="retired")
+        acierto, anulada = await verify_pick(_pick_tenis("Alcaraz gana"), [provider])
+        assert (acierto, anulada) == (None, True)
+
+    async def test_walkover_anula_ganador(self):
+        provider = _StubTennisProvider(0, 0, status="walkover")
+        acierto, anulada = await verify_pick(_pick_tenis("Alcaraz gana"), [provider])
+        assert (acierto, anulada) == (None, True)
+
+    async def test_retirada_anula_over_juegos(self):
+        provider = _StubTennisProvider(1, 0, sets=[(6, 4)], status="retired")
+        pick = _pick_tenis("Más de 20.5 juegos", "más de")
+        pick.linea = 20.5
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, True)
+
+    async def test_gana_primer_set_acierta(self):
+        # 6-4 3-6 6-2: Alcaraz ganó el set 1.
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        acierto, _ = await verify_pick(
+            _pick_tenis("Alcaraz gana el primer set"), [provider]
+        )
+        assert acierto is True
+
+    async def test_gana_primer_set_falla(self):
+        # Sinner perdió el set 1 (4-6).
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        acierto, _ = await verify_pick(
+            _pick_tenis("Sinner gana el primer set"), [provider]
+        )
+        assert acierto is False
+
+    async def test_gana_segundo_set_visitante(self):
+        # 3-6 en el set 2: Sinner (away) lo ganó.
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        acierto, _ = await verify_pick(_pick_tenis("Sinner gana el 2º set"), [provider])
+        assert acierto is True
+
+    async def test_set_no_jugado_pendiente(self):
+        # El partido acabó 2-0: el 3er set no se jugó.
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])
+        acierto, anulada = await verify_pick(
+            _pick_tenis("Alcaraz gana el tercer set"), [provider]
+        )
+        assert (acierto, anulada) == (None, False)
+
+    async def test_set_winner_via_mercado_sin_verbo(self):
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        acierto, _ = await verify_pick(_pick_tenis("Sinner", "1er set"), [provider])
+        assert acierto is False  # Sinner perdió el set 1
+
+    async def test_tiebreak_si_acierta(self):
+        provider = _StubTennisProvider(2, 0, sets=[(7, 6), (6, 2)])
+        acierto, _ = await verify_pick(
+            _pick_tenis("Habrá tiebreak", "tiebreak"), [provider]
+        )
+        assert acierto is True
+
+    async def test_tiebreak_si_falla_sin_7_6(self):
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 2)])
+        acierto, _ = await verify_pick(
+            _pick_tenis("Habrá tiebreak", "tiebreak"), [provider]
+        )
+        assert acierto is False
+
+    async def test_no_habra_tiebreak_acierta(self):
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 2)])
+        acierto, _ = await verify_pick(
+            _pick_tenis("No habrá tiebreak", "tiebreak"), [provider]
+        )
+        assert acierto is True
+
+    async def test_tiebreak_sin_desglose_pendiente(self):
+        provider = _StubTennisProvider(2, 0)
+        acierto, anulada = await verify_pick(
+            _pick_tenis("Habrá tiebreak", "tiebreak"), [provider]
+        )
+        assert (acierto, anulada) == (None, False)
+
+    async def test_over_juegos_primer_set(self):
+        # Set 1: 6-4 = 10 juegos > 9.5
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        pick = _pick_tenis("Más de 9.5 juegos en el 1er set", "más de")
+        pick.linea = 9.5
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_over_juegos_jugador_primer_set(self):
+        # Sinner solo ganó 4 juegos en el set 1 -> under 4.5 falla el over.
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        pick = _pick_tenis("Sinner más de 4.5 juegos en el primer set", "más de")
+        pick.linea = 4.5
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_handicap_juegos_primer_set(self):
+        # Set 1 Alcaraz 6-4: -1.5 -> 4.5 > 4 gana.
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        pick = _pick_tenis("Alcaraz -1.5 juegos 1er set", "hándicap")
+        pick.linea = -1.5
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
     async def test_gana_20_con_20_real_acierta(self):
         provider = _StubTennisProvider(2, 0)
         acierto, _ = await verify_pick(_pick_tenis("Alcaraz gana 2-0"), [provider])
@@ -356,6 +462,43 @@ class TestTennisProviderSets:
         match = _parse_event(event)
         assert match is not None
         assert match.sets is None
+
+    def test_thesportsdb_retirada_con_marcador(self):
+        # "1-0 RET" no es un 1-0 real: el partido no terminó.
+        from app.services.results.api_tennis import _parse_result
+
+        match = _parse_result({"strResult": "Sinner  beat Alcaraz  1-0 RET"})
+        assert match is not None
+        assert match.status == "retired"
+        assert match.home_team == "Sinner"
+
+    def test_thesportsdb_walkover(self):
+        from app.services.results.api_tennis import _parse_result
+
+        match = _parse_result({"strResult": "Sinner  beat Alcaraz  W/O"})
+        assert match is not None
+        assert match.status == "walkover"
+
+    def test_rapidapi_ret_es_retirada(self):
+        from app.services.results.rapidapi_tennis import _RETIREMENT_PATTERN
+
+        assert _RETIREMENT_PATTERN.search("6-1 2-0 RET")
+        assert _RETIREMENT_PATTERN.search("W/O")
+        assert not _RETIREMENT_PATTERN.search("6-1 6-2")
+
+    def test_tennisapi1_retired_status(self):
+        from app.services.results.tennisapi1 import _parse_event
+
+        event = {
+            "status": {"type": "retired"},
+            "homeTeam": {"name": "Carlos Alcaraz"},
+            "awayTeam": {"name": "Jannik Sinner"},
+            "homeScore": {"current": 1},
+            "awayScore": {"current": 0},
+        }
+        match = _parse_event(event)
+        assert match is not None
+        assert match.status == "retired"
 
 
 class TestResolveWinner:

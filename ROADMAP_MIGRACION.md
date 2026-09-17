@@ -78,12 +78,14 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
         acierto de un "gana 2-0"); también "jugador" + mercado
         "resultado exacto" con orientación por el orden del evento.
       - ~~Over/under y hándicap de juegos~~ — **hecho**: sumando juegos
-        por set; total del partido y por jugador, líneas de cuarto y
-        push incluidos. Over/under de sets también.
-      - RET/W-O quedan pendientes a propósito (cada casa aplica reglas
-        distintas sobre cuánto partido debe completarse; si el dato es
-        ambiguo mejor pendiente que inventado). Política de anulada
-        automática por decidir.
+        por set; total del partido y por jugador, por set concreto,
+        líneas de cuarto y push incluidos. Over/under de sets también.
+      - ~~RET/W-O~~ — **hecho**: si el proveedor reporta retirada o
+        walkover (`MatchResult.status`) el pick se anula en cualquier
+        mercado; si la casa difiere, corrección manual.
+      - ~~Ganador de set individual y tiebreak~~ — **hecho**: "X gana
+        el 1er set" se resuelve con los juegos de ese set; "habrá
+        tiebreak" se deduce de un 7-6 en el desglose.
 - [x] **Amortizar el límite de API-Football** (implementado): caché de
       fixtures por fecha + caché de stats/events/players por fixture,
       pendientes ordenados por `fecha_evento` DESC (los picks que caducan
@@ -237,9 +239,10 @@ importados). "Push" (líneas enteras) y aplazados/cancelados >72 h se marcan
   amistosos, Primera Federación...): solo resolubles dentro de la ventana de
   API-Football; fuera de ella, corrección manual.
 - **Tenis** resuelve ganador, marcador exacto en sets, over/under y hándicap
-  de juegos y de sets (vía `MatchResult.sets` parseado de los 3 proveedores).
-  Pendiente a propósito: RET/W-O (reglas de anulada varían por casa) y mercados
-  sin sujeto inequívoco ("-1.5" a secas no distingue sets de juegos).
+  de juegos y de sets — también por set concreto —, ganador de set individual
+  y tiebreak sí/no (vía `MatchResult.sets`). RET/W-O → anulada automática.
+  Pendiente a propósito: hándicap "-1.5" sin sujeto (ambiguo entre sets y
+  juegos), dobles y combinadas.
 - **Baloncesto** sin proveedor (API-Basketball de api-sports.io sería el
   candidato).
 - Futuro: plan de pago de API-Football eliminaría la restricción de fechas.

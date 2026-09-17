@@ -71,11 +71,26 @@ def _parse_event(event: dict) -> Optional[MatchResult]:
     set — se guardan en `MatchResult.sets` para mercados de juegos.
     """
     status = (event.get("status") or {}).get("type")
-    if status != "finished":
-        return None
     home = (event.get("homeTeam") or {}).get("name") or ""
     away = (event.get("awayTeam") or {}).get("name") or ""
     if not home or not away or "/" in home or "/" in away:
+        return None
+    if status in ("retired", "walkover"):
+        # Retirada/walkover: el partido no terminó por la vía normal.
+        # Marcador parcial aproximado; el verificador devuelve anulada.
+        try:
+            ret_home = int((event.get("homeScore") or {})["current"])
+            ret_away = int((event.get("awayScore") or {})["current"])
+        except (KeyError, TypeError, ValueError):
+            ret_home = ret_away = 0
+        return MatchResult(
+            home_team=home,
+            away_team=away,
+            home_score=ret_home,
+            away_score=ret_away,
+            status=status,
+        )
+    if status != "finished":
         return None
     try:
         home_sets = int((event.get("homeScore") or {})["current"])
