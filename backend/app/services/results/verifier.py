@@ -1,6 +1,7 @@
 """Verificación automática de picks pendientes contra resultados reales.
 
-Estrategia (mercados soportados: ganador, hándicap asiático, over/under):
+Estrategia (mercados soportados: ganador, hándicap asiático, over/under,
+doble oportunidad, ambos marcan, empate no válido):
 1. Busca ParsedPick con `es_apuesta=True`, `acierto` aún sin verificar y
    `fecha_evento` en el pasado (el partido ya se habrá jugado).
 2. Según el `mercado`, resuelve de forma distinta:
@@ -8,8 +9,17 @@ Estrategia (mercados soportados: ganador, hándicap asiático, over/under):
    - "hándicap asiático": aplica la línea (con signo) al marcador del
      equipo antes de comparar. Con líneas enteras puede haber "push"
      (empate técnico) → se marca como `anulada`, no como acierto/fallo.
-   - "over/under": compara el total de goles/tantos contra la línea.
-     También puede haber "push" con líneas enteras.
+   - "over/under": compara el total de goles contra la línea, o los
+     goles del equipo si la selección lo nombra ("Betis más de 1.5").
+     Solo se resuelven líneas de GOLES: córners, tarjetas, tiros,
+     primera parte, etc. quedan para revisión manual — verificarlas con
+     el marcador sería un falso resultado. También puede haber "push"
+     con líneas enteras.
+   - "doble oportunidad": "1X" (local o empate), "X2" (empate o
+     visitante), "12" (cualquiera gana) o "Equipo y/o empate".
+   - "ambos marcan" (BTTS): sí/no según marquen ambos equipos.
+   - "empate no válido" / "resultado sin empate" / "draw no bet":
+     empate → `anulada` en vez de fallo.
 3. Consulta primero football-data.org (ligas top); si no encuentra el
    partido, intenta con API-Football (más cobertura, límite más bajo).
 4. Si ningún proveedor encuentra el partido, o el mercado no está
@@ -45,6 +55,8 @@ _WIN_KEYWORDS = ["gana", "ganará", "ganara", "ganador", "vence"]
 # verbo "gana") pero el mercado en sí ya implica un resultado directo.
 _NO_VERB_WIN_MARKETS = [
     "resultado sin empate",
+    "empate no válido",
+    "draw no bet",
     "ganador",
     "gana el partido",
     "vencedor",
@@ -122,6 +134,50 @@ _MARKDOWN_NOISE = re.compile(r"[*_~`]+")
 _NON_TEAM_CHARS = re.compile(r"[^\w\sÁÉÍÓÚÑáéíóúñ.'-]", re.UNICODE)
 _HANDICAP_KEYWORDS = re.compile(r"h[aá]nd(?:icap)?\.?\s*asi[aá]tico", re.IGNORECASE)
 _LINEA_PATTERN = re.compile(r"[+-]\s?\d+(?:[.,]\d+)?")
+
+# Sujeto de una línea over/under que NO se puede resolver con el
+# marcador final: córners, tarjetas, tiros, faltas, juegos, sets...
+# Verificar "Menos de 11.0 córners" contra los goles del partido sería
+# un falso resultado (casi siempre sale "acierto"). Se queda pendiente
+# para revisión manual hasta tener un proveedor de estadísticas.
+_OU_NON_GOALS_PATTERN = re.compile(
+    r"c[oó]rner|esquina|tarjeta|card|booking|amarilla|roja|tiro|shot|"
+    r"falta|foul|fuera\s+de\s+juego|offside|juego|set|punto|coche|saque",
+    re.IGNORECASE,
+)
+# "Más de 0.5 goles 1ª parte": el marcador final no dice nada del
+# descanso — no resoluble con los proveedores actuales.
+_FIRST_HALF_PATTERN = re.compile(
+    r"1[ªaer°]?\s*(?:parte|tiempo|mitad)|primer(?:a)?\s+(?:parte|tiempo|mitad)|"
+    r"first\s+half|descanso",
+    re.IGNORECASE,
+)
+_GOALS_PATTERN = re.compile(r"gol", re.IGNORECASE)
+# Separador entre el equipo y la línea en un over/under por equipo
+# ("Real Madrid más de 1.5 goles" -> equipo = "Real Madrid").
+_OU_SPLIT_PATTERN = re.compile(r"\b(?:m[aá]s|menos|over|under)\b", re.IGNORECASE)
+# Línea alta sin mención de goles: en fútbol casi seguro son córners
+# (líneas típicas 7.5-12.5), no goles. Sin sujeto explícito no se
+# puede saber, así que se deja pendiente en vez de arriesgar.
+_AMBIGUOUS_LINE_MIN = 5.0
+
+_DOUBLE_CHANCE_PATTERN = re.compile(
+    r"doble\s+oportunidad|double\s*chance|doble\s+resultado", re.IGNORECASE
+)
+_BTTS_YES_PATTERN = re.compile(
+    r"ambos\s+(?:equipos?\s+)?(?:marcan|anotan)|both\s+teams\s+to\s+score|\bbtts\b",
+    re.IGNORECASE,
+)
+_BTTS_NO_PATTERN = re.compile(
+    r"no\s+(?:anotan|marcan)\s+ambos|ambos\s+equipos?\s+no\s+(?:marcan|anotan)|"
+    r"al\s+menos\s+un\s+equipo\s+no\s+(?:marca|anota)",
+    re.IGNORECASE,
+)
+_DRAW_NO_BET_PATTERN = re.compile(
+    r"resultado\s+sin\s+empate|empate\s+no\s+v[aá]lido|draw\s+no\s+bet|"
+    r"empate.{0,10}apuesta\s+no\s+v[aá]lida",
+    re.IGNORECASE,
+)
 
 
 def _similar(a: str, b: str) -> float:
@@ -252,6 +308,83 @@ def _resolve_over_under(
     return None, True
 
 
+def _match_team_scores(match: MatchResult, team: str) -> tuple[int, int] | None:
+    """Goles (equipo, rival) si `team` se parece a alguno de los dos."""
+    home_similarity = _similar(team, match.home_team)
+    away_similarity = _similar(team, match.away_team)
+    if max(home_similarity, away_similarity) < _MIN_TEAM_SIMILARITY:
+        return None
+    if home_similarity >= away_similarity:
+        return match.home_score, match.away_score
+    return match.away_score, match.home_score
+
+
+def _resolve_team_over_under(
+    match: MatchResult, team: str, direction: str, linea: float
+) -> tuple[Optional[bool], bool]:
+    """Over/under sobre los goles de UN equipo ("Betis más de 1.5")."""
+    scores = _match_team_scores(match, team)
+    if scores is None:
+        return None, False
+    goals, _ = scores
+    if direction == "over":
+        if goals > linea:
+            return True, False
+        if goals < linea:
+            return False, False
+        return None, True
+    if goals < linea:
+        return True, False
+    if goals > linea:
+        return False, False
+    return None, True
+
+
+def _extract_team_total_team(seleccion: str) -> Optional[str]:
+    """Equipo de un over/under por equipo, si la selección lo nombra.
+
+    "Real Madrid más de 1.5 goles" -> "Real Madrid"; "Más de 2.5
+    goles" (sin equipo delante) -> None = total del partido.
+    """
+    split = _OU_SPLIT_PATTERN.search(seleccion)
+    if not split or split.start() == 0:
+        return None
+    team = _clean_team_name(seleccion[: split.start()])
+    return team or None
+
+
+def _resolve_double_chance(
+    match: MatchResult, seleccion: str
+) -> tuple[Optional[bool], bool]:
+    """Doble oportunidad: "1X" / "X2" / "12" o "Equipo y/o empate"."""
+    low = seleccion.strip().lower()
+    if re.fullmatch(r"1x", low):
+        return match.home_score >= match.away_score, False
+    if re.fullmatch(r"x2", low):
+        return match.away_score >= match.home_score, False
+    if re.fullmatch(r"12", low) or "cualquiera" in low:
+        return match.home_score != match.away_score, False
+    # "Levante y empate" / "Empate o Betis": gana si el equipo gana o empata.
+    team = _clean_team_name(
+        re.sub(
+            r"\bempate\b|\by\b|\bo\b|\bor\b|\band\b|\be\b", " ", seleccion, flags=re.I
+        )
+    )
+    if not team:
+        return None, False
+    scores = _match_team_scores(match, team)
+    if scores is None:
+        return None, False
+    team_score, opponent_score = scores
+    return team_score >= opponent_score, False
+
+
+def _resolve_btts(match: MatchResult, yes: bool) -> tuple[bool, bool]:
+    """Ambos equipos marcan: yes=True exige gol de los dos."""
+    both_scored = match.home_score > 0 and match.away_score > 0
+    return (both_scored if yes else not both_scored), False
+
+
 async def _get_providers() -> list[ResultsProvider]:
     settings = get_settings()
     providers: list[ResultsProvider] = []
@@ -331,6 +464,62 @@ async def verify_pick(
         # resolver con esos números. Solo el mercado "ganador" aplica.
         return None, False
 
+    if any(
+        m in mercado_low
+        for m in ("combinada", "combinado", "acumulador", "múltiple", "multiple")
+    ):
+        # Una combinada no se resuelve con un solo marcador: hay que
+        # verificar cada selección por separado. Sin eso, la rama de
+        # "ganador" solo comprobaría la primera y daría un falso
+        # resultado. Manual hasta modelar las selecciones sueltas.
+        return None, False
+
+    # Mercados de fútbol que se resuelven solo con el marcador final.
+    combined = f"{pick.mercado or ''} {pick.seleccion or ''}"
+    if sport in ("futbol", None):
+        if _DOUBLE_CHANCE_PATTERN.search(combined):
+            sel_clean = (pick.seleccion or "").strip().lower()
+            if re.fullmatch(r"1x|x2|12", sel_clean):
+                # "1X"/"X2"/"12" no nombran equipo: localizar por evento.
+                team_hint = pick.evento
+            else:
+                # "Levante y empate" -> "Levante" como pista de equipo.
+                team_hint = (
+                    _clean_team_name(
+                        re.sub(
+                            r"\bempate\b|\by\b|\bo\b|\bor\b|\band\b|\be\b",
+                            " ",
+                            pick.seleccion or "",
+                            flags=re.I,
+                        )
+                    )
+                    or pick.evento
+                )
+            if not team_hint:
+                return None, False
+            match = await _find_match_across_providers(
+                pick.fecha_evento, team_hint, providers_for_sport, pick.id
+            )
+            if not match:
+                return None, False
+            return _resolve_double_chance(match, pick.seleccion or "")
+
+        btts_no = _BTTS_NO_PATTERN.search(combined)
+        btts_yes = _BTTS_YES_PATTERN.search(combined)
+        if btts_yes and re.search(r"(?:-|:)\s*no\b", combined, re.IGNORECASE):
+            # Formato de slip "Ambos equipos marcan - No".
+            btts_no, btts_yes = btts_yes, None
+        if btts_no or btts_yes:
+            team_hint = pick.evento
+            if not team_hint:
+                return None, False
+            match = await _find_match_across_providers(
+                pick.fecha_evento, team_hint, providers_for_sport, pick.id
+            )
+            if not match:
+                return None, False
+            return _resolve_btts(match, yes=bool(btts_yes) and not btts_no)
+
     if es_handicap and pick.linea is not None:
         team_hint = _extract_handicap_team(pick.seleccion)
         if not team_hint:
@@ -348,11 +537,26 @@ async def verify_pick(
         ) or _detect_over_under_direction(pick.mercado or "")
         if not direction:
             return None, False
-        # Over/under es sobre el total del partido, no sobre un equipo
-        # concreto, pero necesitamos un nombre de equipo para localizar
-        # el partido en la API. Probamos con lo que haya en la
-        # selección o, si no, con el evento.
-        team_hint = _extract_handicap_team(pick.seleccion) or pick.evento
+        ou_text = f"{pick.seleccion or ''} {pick.mercado or ''}"
+        if _OU_NON_GOALS_PATTERN.search(ou_text) or _FIRST_HALF_PATTERN.search(ou_text):
+            # Córners/tarjetas/tiros/primera parte: no resoluble con el
+            # marcador — queda para revisión manual (o un futuro
+            # proveedor de estadísticas).
+            return None, False
+        if pick.linea >= _AMBIGUOUS_LINE_MIN and not _GOALS_PATTERN.search(ou_text):
+            # Línea alta sin la palabra "gol": en fútbol casi seguro son
+            # córners, no goles. Mejor pendiente que mal verificado.
+            return None, False
+        # Over/under es sobre el total del partido o sobre un equipo
+        # concreto; en ambos casos necesitamos un nombre de equipo para
+        # localizar el partido en la API.
+        team_total_team = _extract_team_total_team(pick.seleccion or "")
+        # El evento ("Elche - Real Madrid") es la mejor pista cuando la
+        # selección no nombra equipo: el texto de la línea ("Más de 2.5
+        # goles") no se parece a ningún equipo y ensucia la búsqueda.
+        team_hint = (
+            team_total_team or pick.evento or _extract_handicap_team(pick.seleccion)
+        )
         if not team_hint:
             return None, False
         match = await _find_match_across_providers(
@@ -360,6 +564,10 @@ async def verify_pick(
         )
         if not match:
             return None, False
+        if team_total_team:
+            return _resolve_team_over_under(
+                match, team_total_team, direction, pick.linea
+            )
         return _resolve_over_under(match, direction, pick.linea)
 
     # Mercado "ganador" simple (o "resultado sin empate" con selección =
@@ -369,7 +577,10 @@ async def verify_pick(
         # Mercado no soportado todavía: manual.
         return None, False
 
-    es_mercado_sin_empate = "resultado sin empate" in mercado_low
+    es_mercado_sin_empate = bool(
+        _DRAW_NO_BET_PATTERN.search(mercado_low)
+        or _DRAW_NO_BET_PATTERN.search(pick.seleccion or "")
+    )
 
     match = await _find_match_across_providers(
         pick.fecha_evento, predicted_team, providers_for_sport, pick.id

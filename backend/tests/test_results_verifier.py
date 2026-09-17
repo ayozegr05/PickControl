@@ -217,6 +217,213 @@ class TestResolveOverUnder:
         assert anulada is True
 
 
+class _StubProvider:
+    """Proveedor de fútbol que devuelve siempre el mismo marcador.
+
+    `calls` cuenta las consultas: los mercados no resolubles con el
+    marcador (córners, tarjetas, combinadas...) no deben ni llamar a
+    la API — se quedan pendientes sin gastar cuota.
+    """
+
+    SUPPORTED_SPORTS = frozenset({"futbol"})
+
+    def __init__(self, match: MatchResult):
+        self._match = match
+        self.calls = 0
+
+    async def find_match(self, date, team_hint):
+        self.calls += 1
+        return self._match
+
+
+def _pick(
+    seleccion: str,
+    mercado: str | None,
+    linea: float | None = None,
+    evento: str | None = "Levante - Real Betis",
+) -> ParsedPick:
+    return ParsedPick(
+        raw_message_id=1,
+        deporte="fútbol",
+        mercado=mercado,
+        seleccion=seleccion,
+        linea=linea,
+        evento=evento,
+        fecha_evento=datetime(2026, 9, 15, 21, 0),
+    )
+
+
+def _match(home: int, away: int) -> MatchResult:
+    return MatchResult(
+        home_team="Levante", away_team="Real Betis", home_score=home, away_score=away
+    )
+
+
+class TestDoubleChance:
+    async def test_equipo_y_empate_acierta_con_empate(self):
+        provider = _StubProvider(_match(1, 1))
+        pick = _pick("Levante y empate", "doble oportunidad")
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (True, False)
+
+    async def test_equipo_y_empate_acierta_si_gana_el_equipo(self):
+        provider = _StubProvider(_match(2, 0))
+        pick = _pick("Levante y empate", "doble oportunidad")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_equipo_y_empate_falla_si_pierde(self):
+        provider = _StubProvider(_match(0, 1))
+        pick = _pick("Levante y empate", "doble oportunidad")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_1x_literal(self):
+        provider = _StubProvider(_match(0, 2))
+        pick = _pick("1X", "doble oportunidad")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False  # ganó el visitante
+
+    async def test_x2_literal(self):
+        provider = _StubProvider(_match(0, 2))
+        pick = _pick("X2", "doble oportunidad")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True  # empate o visitante
+
+    async def test_12_falla_con_empate(self):
+        provider = _StubProvider(_match(2, 2))
+        pick = _pick("12", "doble oportunidad")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+
+class TestBtts:
+    async def test_ambos_marcan_acierta(self):
+        provider = _StubProvider(_match(2, 1))
+        pick = _pick("Ambos equipos marcan", "ambos marcan")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_ambos_marcan_falla_con_porteria_a_cero(self):
+        provider = _StubProvider(_match(2, 0))
+        pick = _pick("Ambos equipos marcan", "ambos marcan")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_no_anotan_ambos_acierta_con_porteria_a_cero(self):
+        provider = _StubProvider(_match(1, 0))
+        pick = _pick("NO ANOTAN AMBOS EQUIPOS EN EL PARTIDO", "no anotan ambos equipos")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_no_anotan_ambos_falla_si_marcan_los_dos(self):
+        provider = _StubProvider(_match(1, 1))
+        pick = _pick("NO ANOTAN AMBOS EQUIPOS EN EL PARTIDO", "no anotan ambos equipos")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_formato_slip_no(self):
+        provider = _StubProvider(_match(0, 0))
+        pick = _pick("Ambos equipos marcan - No", "ambos marcan")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+
+class TestEmpateNoValido:
+    async def test_empate_anula(self):
+        provider = _StubProvider(_match(1, 1))
+        pick = _pick("Levante", "empate no válido")
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert acierto is None
+        assert anulada is True
+
+    async def test_victoria_acierta(self):
+        provider = _StubProvider(_match(2, 0))
+        pick = _pick("Levante", "draw no bet")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+
+class TestOverUnderSubjectGuards:
+    """Las líneas de córners/tarjetas/etc. no se pueden resolver con el
+    marcador: quedan pendientes SIN llamar a la API (antes "Menos de
+    11.0 córners" se comparaba contra los goles y salía falso acierto)."""
+
+    async def test_corners_no_se_resuelve_con_goles(self):
+        provider = _StubProvider(_match(1, 0))  # 1 gol < 11 -> sería "acierto"
+        pick = _pick("Menos de 11.0 corners", "over/under", linea=11.0)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+        assert provider.calls == 0
+
+    async def test_tarjetas_no_se_resuelven(self):
+        provider = _StubProvider(_match(0, 0))
+        pick = _pick("Más de 3 tarjetas", "over/under tarjetas", linea=3.0)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+        assert provider.calls == 0
+
+    async def test_linea_alta_sin_gol_es_ambigua(self):
+        # "Más de 8.0" sin sujeto: casi seguro córners, no goles.
+        provider = _StubProvider(_match(5, 4))
+        pick = _pick("Más de 8.0", "over/under", linea=8.0)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+        assert provider.calls == 0
+
+    async def test_primera_parte_no_se_resuelve(self):
+        provider = _StubProvider(_match(3, 0))
+        pick = _pick("Más de 0.5 goles 1ª parte", "over/under goles", linea=0.5)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+        assert provider.calls == 0
+
+    async def test_goles_si_se_resuelve(self):
+        provider = _StubProvider(_match(2, 1))
+        pick = _pick("Más de 2.5 goles", "over/under goles", linea=2.5)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+
+class TestTeamTotalOverUnder:
+    async def test_equipo_mas_de_acierta(self):
+        provider = _StubProvider(_match(2, 1))
+        pick = _pick("Levante más de 1.5 goles", "over/under", linea=1.5)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True  # Levante marcó 2
+
+    async def test_equipo_mas_de_falla(self):
+        provider = _StubProvider(_match(1, 2))
+        pick = _pick("Levante más de 1.5 goles", "over/under", linea=1.5)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False  # Levante marcó solo 1 aunque hubo 3 goles
+
+    async def test_equipo_menos_de_acierta(self):
+        provider = _StubProvider(_match(0, 3))
+        pick = _pick("Levante menos de 2.5 goles", "over/under", linea=2.5)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+
+class TestCombinadaGuard:
+    """Una combinada no se puede resolver con un solo marcador: la rama
+    de "ganador" solo comprobaría la primera selección."""
+
+    async def test_combinada_queda_pendiente_sin_consultar(self):
+        provider = _StubProvider(_match(2, 0))
+        pick = _pick("Levante gana + Real Betis gana", "combinada")
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+        assert provider.calls == 0
+
+    async def test_acumulador_queda_pendiente(self):
+        provider = _StubProvider(_match(2, 0))
+        pick = _pick("Isak: Marca gol + Menos de 9.5 córners", "acumulador")
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+        assert provider.calls == 0
+
+
 class _FakeResponse:
     """Respuesta httpx vacía (sin fixtures) para los tests de caché."""
 
