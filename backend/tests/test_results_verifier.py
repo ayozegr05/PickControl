@@ -110,6 +110,34 @@ class TestProvidersForSport:
         assert _providers_for_sport(None, providers) == providers
 
 
+class _StubTennisProvider:
+    """Proveedor de tenis que devuelve sets ganados en home/away_score."""
+
+    SUPPORTED_SPORTS = frozenset({"tenis"})
+
+    def __init__(self, home_sets: int, away_sets: int):
+        self._match = MatchResult(
+            home_team="Carlos Alcaraz",
+            away_team="Jannik Sinner",
+            home_score=home_sets,
+            away_score=away_sets,
+        )
+
+    async def find_match(self, date, team_hint):
+        return self._match
+
+
+def _pick_tenis(seleccion: str, mercado: str | None = "ganador") -> ParsedPick:
+    return ParsedPick(
+        raw_message_id=1,
+        deporte="tenis",
+        mercado=mercado,
+        seleccion=seleccion,
+        evento="Alcaraz - Sinner",
+        fecha_evento=datetime(2026, 9, 15, 12, 0),
+    )
+
+
 class TestTennisMarkets:
     """En tenis el proveedor devuelve sets ganados, no juegos: solo el
     mercado "ganador" se puede resolver; hándicaps y totales de juegos
@@ -128,6 +156,41 @@ class TestTennisMarkets:
         acierto, anulada = await verify_pick(pick, [ApiTennisProvider("k")])
         assert acierto is None
         assert anulada is False
+
+    async def test_gana_20_con_20_real_acierta(self):
+        provider = _StubTennisProvider(2, 0)
+        acierto, _ = await verify_pick(_pick_tenis("Alcaraz gana 2-0"), [provider])
+        assert acierto is True
+
+    async def test_gana_20_con_21_real_es_fallo(self):
+        # El bug: "gana 2-0" se verificaba como ganador a secas y un
+        # 2-1 real se marcaba acierto cuando la apuesta perdió.
+        provider = _StubTennisProvider(2, 1)
+        acierto, anulada = await verify_pick(
+            _pick_tenis("Alcaraz gana 2-0"), [provider]
+        )
+        assert (acierto, anulada) == (False, False)
+
+    async def test_gana_20_perdio_es_fallo(self):
+        provider = _StubTennisProvider(0, 2)
+        acierto, _ = await verify_pick(_pick_tenis("Alcaraz gana 2-0"), [provider])
+        assert acierto is False
+
+    async def test_gana_a_secas_sigue_siendo_ganador(self):
+        provider = _StubTennisProvider(2, 1)
+        acierto, _ = await verify_pick(_pick_tenis("Alcaraz gana"), [provider])
+        assert acierto is True
+
+    async def test_marcador_en_mercado_resultado_exacto(self):
+        provider = _StubTennisProvider(1, 2)
+        pick = _pick_tenis("Sinner", "resultado exacto 1-2")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_gana_con_marcador_jugador_desconocido_pendiente(self):
+        provider = _StubTennisProvider(2, 0)
+        acierto, anulada = await verify_pick(_pick_tenis("Fokina gana 2-0"), [provider])
+        assert (acierto, anulada) == (None, False)
 
 
 class TestResolveWinner:

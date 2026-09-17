@@ -73,9 +73,10 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 - [ ] **Mercados de sets/juegos en tenis** (mismo coste de API: los 3
       proveedores ya devuelven el desglose por sets — `strResult`,
       `result`, `homeScore.periodN` — solo falta parsearlo):
-      - Correct score en sets ("gana 2-0"): hoy un pick así se etiqueta
-        mercado "ganador" y se marca acierto aunque gane 2-1 — bug de
-        precisión: la apuesta real se perdió. Verificación estricta.
+      - ~~Correct score en sets ("gana 2-0")~~ — **hecho**: "X gana A-B"
+        exige el marcador exacto de sets (un 2-1 real ya no cuenta como
+        acierto de un "gana 2-0"); también "jugador" + mercado
+        "resultado exacto" con orientación por el orden del evento.
       - Over/under y hándicap de juegos: sumando juegos por set.
       - Decidir política ante RET/W-O (bookies suelen anular).
 - [x] **Amortizar el límite de API-Football** (implementado): caché de

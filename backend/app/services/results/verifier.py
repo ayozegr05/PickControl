@@ -762,6 +762,45 @@ def _extract_exact_score(
     return int(m.group(1)), int(m.group(2))
 
 
+# --- Tenis: "gana 2-0" es resultado exacto en sets, no solo ganador --
+#
+# El extractor suele etiquetar estos picks como mercado "ganador" y la
+# selección "Alcaraz gana 2-0" extrae jugador="Alcaraz": si se verifica
+# solo el ganador, un 2-1 real se marcaría acierto cuando la apuesta
+# perdió. Los proveedores devuelven sets ganados en home/away_score, así
+# que se puede verificar el marcador exacto de sets.
+_TENNIS_SETS_AFTER_VERB = re.compile(
+    r"(?:gana\w*|vence\w*|se\s+impone)\s+(\d+)\s*[-:]\s*(\d+)", re.IGNORECASE
+)
+
+
+def _extract_tennis_sets_prediction(
+    seleccion: str, mercado: Optional[str]
+) -> Optional[tuple[str, int, int, bool]]:
+    """(jugador, s1, s2, player_oriented) si la selección lleva
+    marcador de sets; None si es un "ganador" a secas.
+
+    - "Sinner gana 2-1": el verbo ata el marcador al jugador nombrado
+      (player_oriented=True → Sinner 2 sets, rival 1).
+    - "Sinner" + mercado "resultado exacto 1-2": el marcador describe
+      el partido en orden del evento (player_oriented=False → hay que
+      ver en qué lado está el jugador).
+    """
+    m = _TENNIS_SETS_AFTER_VERB.search(seleccion or "")
+    if m:
+        team = _clean_team_name((seleccion or "")[: m.start()])
+        if team:
+            return team, int(m.group(1)), int(m.group(2)), True
+    # "Alcaraz" + mercado "resultado exacto 2-0" / "correct score".
+    if mercado and _EXACT_SCORE_MARKET.search(mercado):
+        m = _SCORELINE.search(mercado)
+        if m:
+            team = _clean_team_name(seleccion or "")
+            if team:
+                return team, int(m.group(1)), int(m.group(2)), False
+    return None
+
+
 async def _get_providers() -> list[ResultsProvider]:
     settings = get_settings()
     providers: list[ResultsProvider] = []
@@ -1159,6 +1198,42 @@ async def verify_pick(
         if players is None:
             return None, False
         return _resolve_player_prop(players, player, prop_keys, prop_dir, prop_linea)
+
+    # Tenis: "X gana 2-0" es resultado exacto en sets — verificar solo
+    # el ganador marcaría acierto en un 2-1 real (la apuesta perdió).
+    if sport == "tenis":
+        sets_pred = _extract_tennis_sets_prediction(pick.seleccion or "", pick.mercado)
+        if sets_pred:
+            team, s1, s2, player_oriented = sets_pred
+            team_hint = pick.evento or team
+            match = await _find_match_across_providers(
+                pick.fecha_evento, team_hint, providers_for_sport, pick.id
+            )
+            if not match:
+                return None, False
+            scores = _match_team_scores(match, team)
+            if scores is None:
+                return None, False
+            player_sets, opp_sets = scores
+            if player_sets <= opp_sets:
+                return False, False  # el jugador predicho perdió
+            if player_oriented:
+                pred_ps, pred_os = s1, s2
+            else:
+                # Marcador en orden del evento: pasarlo a sets del
+                # jugador según el lado que ocupa (y si el evento va
+                # al revés que el fixture).
+                player_is_home = _similar(team, match.home_team) >= _similar(
+                    team, match.away_team
+                )
+                reversed_order = bool(pick.evento) and match_reversed(
+                    pick.evento, match.home_team, match.away_team
+                )
+                if player_is_home != reversed_order:
+                    pred_ps, pred_os = s1, s2
+                else:
+                    pred_ps, pred_os = s2, s1
+            return (player_sets == pred_ps and opp_sets == pred_os), False
 
     # Mercado "ganador" simple (o "resultado sin empate" con selección =
     # solo el nombre del equipo).
