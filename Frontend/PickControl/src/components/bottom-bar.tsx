@@ -32,8 +32,8 @@ const BottomBar = () => {
         <FontAwesome6 name="sack-dollar" size={24} color="orange" />
       </TouchableOpacity>
 
-      {/* Botón de Análisis */}
-      <TouchableOpacity onPress={() => router.push("/screens/analysis")}>
+      {/* Botón de Análisis global (auditoría tipster vs tú) */}
+      <TouchableOpacity onPress={() => router.push("/screens/auditoria")}>
         <Ionicons name="analytics" size={38} color="orange" />
       </TouchableOpacity>
 
