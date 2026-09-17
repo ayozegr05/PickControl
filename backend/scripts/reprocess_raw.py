@@ -59,7 +59,10 @@ async def main() -> None:
                 continue
 
             pick = await extract_pick(
-                source_text, settings.openai_api_key, informante=raw.channel_name
+                source_text,
+                settings.openai_api_key,
+                informante=raw.channel_name,
+                fecha_referencia=raw.received_at,
             )
             if not pick:
                 continue
@@ -71,7 +74,9 @@ async def main() -> None:
 
             duplicate = None
             if pick.es_apuesta:
-                duplicate = await _find_duplicate_pick(session, raw.channel_name, pick)
+                duplicate = await _find_duplicate_pick(
+                    session, raw.channel_name, pick, raw.received_at
+                )
 
             if duplicate:
                 print(

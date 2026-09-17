@@ -63,13 +63,18 @@ def _make_new_message_handler(target_label: str):
     """Fabrica un handler con el nombre del canal cerrado en el closure."""
 
     async def _on_new_message(event: events.NewMessage.Event) -> None:
+        message = event.message
+        # Los miembros de un álbum también disparan NewMessage; los
+        # procesa el handler de Album, que agrupa y comparte la caption.
+        if getattr(message, "grouped_id", None) is not None:
+            return
+
         chat_entity = await event.get_chat()
         chat_name = (
             getattr(chat_entity, "title", None)
             or getattr(chat_entity, "username", None)
             or str(target_label)
         )
-        message = event.message
 
         text, media_path, extracted_text = await fetch_message_content(
             event.client, message
@@ -94,6 +99,54 @@ def _make_new_message_handler(target_label: str):
     return _on_new_message
 
 
+def _make_album_handler(target_label: str):
+    """Handler para álbumes (varias fotos enviadas como un solo mensaje).
+
+    Un "pack" de picks suele llegar como álbum: N boletos con un mismo
+    `grouped_id` y la caption ("STAKE 4, CUOTA...") solo en uno de ellos.
+    Cada foto es un pick distinto, así que cada una genera su propio raw
+    y ParsedPick, pero hereda la caption compartida si no lleva texto.
+    """
+
+    async def _on_album(event: events.Album.Event) -> None:
+        chat_entity = await event.get_chat()
+        chat_name = (
+            getattr(chat_entity, "title", None)
+            or getattr(chat_entity, "username", None)
+            or str(target_label)
+        )
+
+        messages = list(event.messages)
+        # Caption del álbum: el texto de cualquiera de sus mensajes (Telegram
+        # permite una caption por mensaje; en la práctica solo uno la lleva).
+        shared_caption = next(
+            (m.text for m in messages if getattr(m, "text", None)), ""
+        )
+
+        logger.info(
+            "[TELEGRAM_LISTENER] Álbum recibido de @%s: %s fotos, caption=%s",
+            chat_name,
+            len(messages),
+            (shared_caption or "")[:80],
+        )
+
+        for message in messages:
+            text, media_path, extracted_text = await fetch_message_content(
+                event.client, message
+            )
+            await process_incoming_message(
+                channel=chat_name,
+                channel_id=event.chat_id,
+                message_id=message.id,
+                text=text or shared_caption,
+                media_path=media_path,
+                extracted_text=extracted_text,
+                message_date=message.date,
+            )
+
+    return _on_album
+
+
 def register_handlers(client: TelegramClient) -> None:
     """Registra un listener de mensajes nuevos por cada canal configurado.
 
@@ -116,6 +169,7 @@ def register_handlers(client: TelegramClient) -> None:
         chat = to_telegram_chat_id(target) if looks_like_id(target) else target
 
         client.on(events.NewMessage(chats=[chat]))(_make_new_message_handler(target))
+        client.on(events.Album(chats=[chat]))(_make_album_handler(target))
         logger.info("[TELEGRAM_LISTENER] Escuchando canal objetivo: %s", target)
 
 

@@ -4,13 +4,15 @@ No llaman a OpenAI: solo cubren el pre-filtro, las reglas y la
 extracción de fecha del evento.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.services.telegram.pick_extractor import (
     _extract_event_date,
     _extract_linea,
+    _is_settled_ticket,
     _looks_like_bet,
     _rule_extract,
+    _sanitize_event_date,
 )
 
 
@@ -42,6 +44,29 @@ class TestLooksLikeBet:
         # Una promo pura (sin cuota/stake) sigue rechazada aunque
         # mencione apuestas.
         text = "GANA 200€ GRATIS DE APUESTA AQUÍ https://bdeal.io/x"
+        assert _looks_like_bet(text) is False
+
+    def test_rechaza_anuncio_de_supercuota(self):
+        # Caso real: OCR de la promo "EL SUVIDÓN" generaba un pick
+        # fantasma "Real Madrid gana" con la fecha del mensaje.
+        text = (
+            "EL SUVIDÓN\nMULTIPLICA TUS GANANCIAS\nREAL MADRID GANA\n"
+            "1.90\n1900\n*Cuotas sujetas a cambios. Se aplican T&C's.\n"
+            "SOLO NUEVOS USUARIOS.\n"
+            "¡MULTIPLICA TUS GANANCIAS X10 CON EL SUVIDÓN!"
+        )
+        assert _looks_like_bet(text) is False
+
+    def test_rechaza_celebracion_de_acierto(self):
+        # Caso real: mensaje de celebración "acertando otra vez /
+        # CLAVAMOS" generaba un pick fantasma del día.
+        text = (
+            "✅ LA INFORMACIÓN ES PODER ✅\n\n"
+            "Sabíamos que este MEGAPACK era 100% seguro y lo hemos "
+            "demostrado nuevamente acertando otra vez. CLAVAMOS EL 99% "
+            "de estos PACKS\n\n✅ Mas de 1 gol y 2 tarjetas\n\n"
+            "Tenemos info, entramos muy fuerte y ganamos dinero."
+        )
         assert _looks_like_bet(text) is False
 
 
@@ -112,6 +137,89 @@ class TestExtractEventDate:
     def test_sin_fecha_devuelve_none(self):
         text = "Titouan Droguet gana\nCuota 1.57 Stake 4"
         assert _extract_event_date(text) is None
+
+    def test_fecha_sin_ano_usa_la_del_mensaje(self):
+        # El OCR del boleto dice "Mar 15 sep 21:00" sin año: debe salir
+        # el año de la fecha del mensaje (2026), no el año actual ni uno
+        # inventado — caso real del pick Alavés-Valencia.
+        text = "Alavés\nValencia\nMar 15 sep\n21:00"
+        ref = datetime(2026, 9, 15, 15, 23)
+        result = _extract_event_date(text, fecha_referencia=ref)
+        assert result == datetime(2026, 9, 15, 21, 0)
+
+    def test_fecha_sin_ano_sin_referencia_usa_ano_actual(self):
+        text = "Sáb 12 sep 14:00"
+        result = _extract_event_date(text)
+        assert result is not None
+        assert result.year == datetime.now().year
+
+    def test_set_de_tenis_no_es_fecha(self):
+        # Caso real: "en el 1 set" se interpretaba como 1 de septiembre
+        # ("set" era abreviatura de mes). Un pick de tenis con sets no
+        # debe producir fecha.
+        text = (
+            "Tenis - Challenger Francia\n"
+            "Daniel Rincón gana y +7.5 juegos en el 1 set\n"
+            "Cuota 1.55 Stake 4"
+        )
+        ref = datetime(2026, 9, 16, 6, 41)
+        assert _extract_event_date(text, fecha_referencia=ref) is None
+
+
+class TestSanitizeEventDate:
+    def test_descarta_fecha_muy_antigua(self):
+        # Caso real: el LLM devolvió 2023 para un mensaje de 2026.
+        ref = datetime(2026, 9, 15, 9, 45)
+        assert _sanitize_event_date(datetime(2023, 9, 15, 21, 0), ref) is None
+
+    def test_descarta_fecha_semanas_atras(self):
+        # Caso real: combinada con fecha de hace un mes (emisión del slip).
+        ref = datetime(2026, 9, 16, 19, 49)
+        assert _sanitize_event_date(datetime(2026, 8, 24, 19, 30), ref) is None
+
+    def test_conserva_fecha_del_mismo_dia(self):
+        ref = datetime(2026, 9, 15, 15, 23)
+        fecha = datetime(2026, 9, 15, 21, 0)
+        assert _sanitize_event_date(fecha, ref) == fecha
+
+    def test_conserva_fecha_de_manana(self):
+        ref = datetime(2026, 9, 15, 23, 0)
+        fecha = datetime(2026, 9, 16, 18, 0)
+        assert _sanitize_event_date(fecha, ref) == fecha
+
+    def test_normaliza_tz_aware_a_naive_utc(self):
+        ref = datetime(2026, 9, 15, 15, 23)
+        aware = datetime(2026, 9, 15, 23, 0, tzinfo=timezone.utc)
+        assert _sanitize_event_date(aware, ref) == datetime(2026, 9, 15, 23, 0)
+
+    def test_sin_fecha_devuelve_none(self):
+        assert _sanitize_event_date(None, datetime(2026, 9, 15)) is None
+
+
+class TestIsSettledTicket:
+    def test_sello_ganador(self):
+        assert _is_settled_ticket("APUESTA GANADOR\nCuota 1.50") is True
+
+    def test_premio_pagado_sin_potencial(self):
+        # Caso real: slip cobrado reposteado ("verde") — "Imp: <x>€" +
+        # "Ganancias <y>€" sin "potenciales" = boleto liquidado, aunque
+        # ponga "CREAR APUESTA" (nombre del mercado bet-builder).
+        text = (
+            "ERROR CUOTA 100%\nCREAR APUESTA 1.70\nMás de 1 goles\n"
+            "Más de 2 tarjetas\nGenoa\nComo\n"
+            "Imp: 30.000,00€\nGanancias 51000,00€"
+        )
+        assert _is_settled_ticket(text) is True
+
+    def test_slip_abierto_con_potenciales_no_es_liquidado(self):
+        # Caso real: slip abierto de bet365 — lleva "Ganancias
+        # potenciales" y "Añadir selección"; no debe rechazarse.
+        text = (
+            "Alavés - Valencia - Total de goles - Más/menos de 1,5\n"
+            "Más 1,5 Goles 1.50\nImporte: €2.000,00\n"
+            "Ganancias potenciales: €3.000,00\nAñadir selección"
+        )
+        assert _is_settled_ticket(text) is False
 
 
 class TestExtractLinea:

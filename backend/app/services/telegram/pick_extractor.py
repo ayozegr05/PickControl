@@ -10,11 +10,16 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+
+from app.core.logging import get_logger
+from app.services.telegram.openai_retry import call_with_retry
+
+logger = get_logger("app.telegram.extractor")
 
 
 class ExtractedPick(BaseModel):
@@ -52,21 +57,25 @@ _MESES_ES = {
     "jul": 7,
     "ago": 8,
     "sep": 9,
-    "set": 9,
     "oct": 10,
     "nov": 11,
     "dic": 12,
 }
 
 
-def _extract_event_date(text: str) -> Optional[datetime]:
+def _extract_event_date(
+    text: str, fecha_referencia: Optional[datetime] = None
+) -> Optional[datetime]:
     """Intenta extraer la fecha/hora del evento con patrones habituales.
 
     Cubre formatos vistos en mensajes/OCR de tipsters, p. ej.:
     - "12.09.2026 14:00" (boletos/capturas de casas de apuestas)
     - "Sáb 12 sep 14:00" (interfaz de casa de apuestas)
     No inventa nada: si no encuentra un patrón claro, devuelve None.
+    Cuando el texto no trae año se usa el de `fecha_referencia` (la fecha
+    real del mensaje); sin referencia, el año actual.
     """
+    anio = (fecha_referencia or datetime.now()).year
     match = re.search(
         r"(\d{1,2})[./](\d{1,2})[./](\d{4})(?:\s+(\d{1,2}):(\d{2}))?", text
     )
@@ -79,8 +88,10 @@ def _extract_event_date(text: str) -> Optional[datetime]:
         except ValueError:
             pass
 
+    # OJO: "set" no se admite como abreviatura de septiembre — en picks de
+    # tenis "en el 1 set"/"2 set" se interpretaba como fecha (1-2 de sep).
     match = re.search(
-        r"\b(\d{1,2})\s+(ene|feb|mar|abr|may|jun|jul|ago|sep|set|oct|nov|dic)"
+        r"\b(\d{1,2})\s+(ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)"
         r"[a-zñ]*\.?(?:\s+(\d{4}))?(?:\s+(\d{1,2}):(\d{2}))?",
         text.lower(),
     )
@@ -88,7 +99,7 @@ def _extract_event_date(text: str) -> Optional[datetime]:
         day, month_abbr, year, hour, minute = match.groups()
         try:
             return datetime(
-                int(year) if year else datetime.now().year,
+                int(year) if year else anio,
                 _MESES_ES[month_abbr],
                 int(day),
                 int(hour or 0),
@@ -98,6 +109,44 @@ def _extract_event_date(text: str) -> Optional[datetime]:
             pass
 
     return None
+
+
+# Margen de plausibilidad de la fecha del evento frente a la del mensaje:
+# un pick abierto no puede ser de un partido ya jugado hace días ni de
+# algo a meses vista. Si el extractor (regex o LLM) devuelve una fecha
+# fuera de margen es un error de lectura — casos reales: el LLM pone el
+# año 2023 a un "15 sep" del OCR, o un slip trae la fecha de emisión del
+# boleto y no la del partido.
+_EVENT_MAX_PAST = timedelta(days=2)
+_EVENT_MAX_FUTURE = timedelta(days=30)
+
+
+def _sanitize_event_date(
+    fecha_evento: Optional[datetime],
+    fecha_referencia: Optional[datetime],
+) -> Optional[datetime]:
+    """Descarta fechas de evento implausibles respecto al mensaje.
+
+    Normaliza datetimes tz-aware a UTC naive (las columnas de BD son
+    TIMESTAMP WITHOUT TIME ZONE) y devuelve None cuando la fecha extraída
+    se desvía demasiado de `fecha_referencia`; el procesador usará
+    entonces la fecha real del mensaje como aproximación.
+    """
+    if fecha_evento is None:
+        return None
+    if fecha_evento.tzinfo is not None:
+        fecha_evento = fecha_evento.astimezone(timezone.utc).replace(tzinfo=None)
+    if fecha_referencia is not None:
+        delta = fecha_evento - fecha_referencia
+        if delta < -_EVENT_MAX_PAST or delta > _EVENT_MAX_FUTURE:
+            logger.warning(
+                "[EXTRACTOR] fecha_evento %s descartada: fuera de margen "
+                "respecto a la fecha del mensaje %s",
+                fecha_evento,
+                fecha_referencia,
+            )
+            return None
+    return fecha_evento
 
 
 def _extract_linea(seleccion: str) -> Optional[float]:
@@ -169,6 +218,23 @@ _NEGATIVE_PATTERNS = [
     r"\benlace\b",
     r"\blink\b",
     r"\bseguidores\b",
+    # Anuncios de casas de apuestas (bonos/supercuotas): el OCR de la
+    # promo "EL SUVIDÓN ... REAL MADRID GANA 1.90 ... SOLO NUEVOS
+    # USUARIOS" generaba un pick fantasma. Un slip real nunca lleva
+    # letra pequeña de promo.
+    r"\bnuevos\s+usuarios\b",
+    r"t&c'?s?\b",
+    r"sujetas\s+a\s+cambios",
+    r"\breg[ií]strate\b",
+    r"cr[eé]ditos\s+de\s+apuesta",
+    r"multiplica\s+tus\s+ganancias",
+    # Celebración de aciertos pasados: "¡OTRO APUESTÓN GANADO!",
+    # "acertando otra vez", "ya lo conseguimos". Son marketing del
+    # tipster, no picks abiertos.
+    r"\bacertad[oa]\b",
+    r"\bganad[oa]\b",
+    r"\bconseguimos\b",
+    r"\bclavamos\b",
 ]
 
 # Señales estructurales fuertes: "cuota"/"stake"/"unidades" seguidas de un
@@ -203,7 +269,9 @@ def _looks_like_bet(text: str) -> bool:
 
 
 def _rule_extract(
-    text: str, informante: Optional[str] = None
+    text: str,
+    informante: Optional[str] = None,
+    fecha_referencia: Optional[datetime] = None,
 ) -> Optional[ExtractedPick]:
     """Extrae por regex de alta confianza. None si no es lo suficientemente claro."""
 
@@ -256,7 +324,7 @@ def _rule_extract(
         cuota=float(cuota_match.group(1).replace(",", ".")),
         stake=float(stake_match.group(1).replace(",", ".")),
         informante=informante,
-        fecha_evento=_extract_event_date(text),
+        fecha_evento=_extract_event_date(text, fecha_referencia),
         linea=_extract_linea(seleccion),
         metodo="rule",
         confianza=0.85,
@@ -284,35 +352,55 @@ Recibirás texto de canales de Telegram de tipsters. Devuelve ÚNICAMENTE un JSO
 
 Reglas:
 - Si no es una apuesta, devuelve es_apuesta = false y el resto null.
-- "seleccion" es lo recomendado (ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5").
-- "evento" es el partido/competición (ej. "Tenis - Challenger Francia - Cassis").
-- "mercado" es el tipo de apuesta: usa siempre una de estas etiquetas si aplica: "ganador", "hándicap asiático", "over/under" (o "over/under goles", "over/under juegos" según el deporte). Si no encaja en ninguna, describe brevemente el mercado.
+- NO son apuestas (es_apuesta = false) aunque mencionen selecciones o cuotas:
+  * Mensajes que celebran aciertos pasados ("acertamos", "ganado", "✅ apuesta acertada", "llevamos X aciertos", "ya lo conseguimos", "ver como ganáis dinero"): son marketing del tipster, no picks abiertos.
+  * Anuncios o promociones de casas de apuestas: bonos de bienvenida, supercuotas ("Suvidón", "supercuota", "multiplica tus ganancias"), "solo nuevos usuarios", "T&C", "créditos de apuesta", "regístrate".
+  * Boletos ya liquidados reposteados como prueba: sello "GANADOR"/"GANADA" o "Ganancias <importe>" SIN la palabra "potenciales" (en un slip abierto siempre pone "Ganancias potenciales").
+  Una apuesta abierta real es una recomendación de algo que AÚN no se ha jugado.
+- "seleccion" es lo recomendado (ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5"). Si es una combinada/"crear apuesta" (varias selecciones en un mismo boleto), únelas con " + " (ej. "Más de 1 gol + Más de 2 tarjetas").
+- "evento" es el partido/competición (ej. "Tenis - Challenger Francia - Cassis"). Si el texto muestra un "EquipoA - EquipoB" o "EquipoA vs EquipoB", usa ese formato completo con ambos equipos — nunca solo uno.
+- "mercado" es el tipo de apuesta: usa siempre una de estas etiquetas si aplica: "ganador", "hándicap asiático", "over/under" (o "over/under goles", "over/under juegos" según el deporte). Si es una combinada/"crear apuesta" con varias selecciones, usa "combinada". Si no encaja en ninguna, describe brevemente el mercado.
 - "deporte" debe ser una palabra normalizada y simple: "fútbol", "tenis", "baloncesto", etc.
 - "linea" es el valor numérico de la línea cuando el mercado es hándicap asiático u over/under (ej. 1.5, -1.5, 2.5). Con signo si es hándicap (+1.5 a favor del equipo de "seleccion", -1.5 en contra). Sin signo si es over/under. Si el mercado no tiene línea (p. ej. "ganador"), déjalo null.
 - Extrae "cuota" solo si aparece un número claramente asociado a la cuota/odds de la selección.
 - Extrae "stake" ÚNICAMENTE si el texto menciona explícitamente la palabra "stake" o "unidades" seguida de un número (normalmente entre 1 y 10).
 - NUNCA uses como "stake" importes en euros/dólares que aparezcan en capturas de pantalla del boleto de una casa de apuestas (p. ej. "Importe", "Imp:", "Ganancias", "Cerrar apuesta", saldo, importe apostado, importe a pagar). Esos son cantidades de dinero del boleto del tipster, no el sistema de unidades de stake. Si no hay mención explícita de "stake" o "unidades", deja "stake" = null.
-- "fecha_evento" es la fecha (y hora si aparece) del partido/evento, en formato ISO 8601 (ej. "2026-09-12T14:00:00"). Solo si aparece explícitamente en el texto. Si no hay fecha, null.
+- "fecha_evento" es la fecha (y hora si aparece) del partido/evento, en formato ISO 8601 (ej. "2026-09-12T14:00:00"). Solo si aparece explícitamente en el texto. Si el texto da día y mes pero NO año (p. ej. "15 sep 21:00"), usa EXACTAMENTE el año de la fecha del mensaje indicada en la cabecera — nunca otro año. Si la fecha que aparece es ANTERIOR a la fecha del mensaje, devuelve null: seguramente es la fecha de emisión del boleto u otra cosa, no la del partido. OJO: en tenis, "1 set"/"2 set" NO son fechas, son sets del partido. Si no hay fecha, null.
 - No inventes ni deduzcas valores (cuota, stake, casa, fecha, línea, etc.) que no estén explícitamente en el texto. Ante la duda, usa null.
 - No añadas markdown, solo el JSON.
 """
 
 
 async def _llm_extract(
-    text: str, api_key: str, informante: Optional[str] = None
+    text: str,
+    api_key: str,
+    informante: Optional[str] = None,
+    fecha_referencia: Optional[datetime] = None,
 ) -> Optional[ExtractedPick]:
     client = AsyncOpenAI(api_key=api_key)
-    response = await client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": f"Canal: {informante or 'desconocido'}\n\nMensaje:\n{text}",
-            },
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.0,
+    fecha_str = (
+        fecha_referencia.strftime("%Y-%m-%d %H:%M")
+        if fecha_referencia
+        else "desconocida"
+    )
+    response = await call_with_retry(
+        lambda: client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Canal: {informante or 'desconocido'}\n"
+                        f"Fecha del mensaje: {fecha_str}\n\n"
+                        f"Mensaje:\n{text}"
+                    ),
+                },
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.0,
+        ),
+        f"extracción LLM ({informante or 'desconocido'})",
     )
 
     content = response.choices[0].message.content
@@ -325,23 +413,96 @@ async def _llm_extract(
     pick.confianza = 0.75 if pick.es_apuesta else 0.0
     pick.informante = pick.informante or informante
     if pick.fecha_evento is None:
-        pick.fecha_evento = _extract_event_date(text)
+        pick.fecha_evento = _extract_event_date(text, fecha_referencia)
     if pick.linea is None and pick.seleccion:
         pick.linea = _extract_linea(pick.seleccion)
     return pick
 
 
+# Marcadores de boleto ya LIQUIDADO: el OCR de un slip liquidado lleva el
+# sello "GANADOR"/"GANADA" en mayúsculas (p. ej. fotos de "verdes" que el
+# tipster reposte a como prueba). No es una apuesta abierta aunque traiga
+# selección y cuota. Se busca sobre el texto original SIN pasar a
+# minúsculas para no confundir el sello con el mercado "ganador" de un
+# pick real.
+_SETTLED_TICKET_PATTERN = re.compile(r"\bGANADOR\b|\bGANADA\b|APUESTA\s+GANADA")
+
+# Boleto cobrado SIN el sello (el OCR a veces lo pierde): la línea de
+# premio pagado es "<importe>€ Ganancias" — importe DELANTE de la
+# palabra. En un slip abierto es al revés ("Ganancias 3.570,00€" o
+# "Ganancias potenciales") y además lleva "Cerrar apuesta"/"Añadir
+# selección"/"hoja de apuestas", así que esos marcadores descartan el
+# caso abierto (p. ej. "Imp: 100,00€ Ganancias ... Cerrar apuesta").
+# El "$" multilínea evita falsos positivos con "Imp: 100€ Ganancias 180€"
+# (importe seguido del premio): solo casa cuando "Ganancias" cierra la
+# línea, p. ej. el payout final "23333,33€ Ganancias" del slip cobrado.
+_SETTLED_PAYOUT_PATTERN = re.compile(r"\d[\d.,]*\s*€\s*Ganancias\s*$", re.MULTILINE)
+_OPEN_SLIP_PATTERN = re.compile(
+    r"Cerrar apuesta|Añadir selecci[oó]n|potencial|Crear apuesta|"
+    r"Reutilizar|hoja de apuestas|Compartir",
+    re.IGNORECASE,
+)
+
+
+def _is_settled_ticket(text: str) -> bool:
+    """True si el texto parece un boleto YA liquidado/cobrado."""
+    if _SETTLED_TICKET_PATTERN.search(text):
+        return True
+    low = text.lower()
+    # Premio pagado sin "potencial": en slips ABIERTOS de bet365 el premio
+    # siempre es "Ganancias potenciales"; la pareja "Imp:/Importe: <x>€" +
+    # "Ganancias <y>€" a secas es la vista de un boleto ya cobrado que el
+    # tipster repostea como prueba ("verdes"). "Crear apuesta" no vale
+    # como marcador de abierto aquí porque también es el nombre del
+    # mercado bet-builder en slips liquidados.
+    if (
+        re.search(r"\bimp(?:orte)?:", low)
+        and re.search(r"\bganancias\s*:?\s*€?\s*\d", low)
+        and "potencial" not in low
+        and not re.search(r"cerrar apuesta|añadir selecci[oó]n", low)
+    ):
+        return True
+    return bool(_SETTLED_PAYOUT_PATTERN.search(text)) and not bool(
+        _OPEN_SLIP_PATTERN.search(text)
+    )
+
+
 async def extract_pick(
-    text: str, api_key: str, informante: Optional[str] = None
+    text: str,
+    api_key: str,
+    informante: Optional[str] = None,
+    fecha_referencia: Optional[datetime] = None,
 ) -> Optional[ExtractedPick]:
-    """Extractor híbrido."""
+    """Extractor híbrido.
+
+    `fecha_referencia` es la fecha real del mensaje de Telegram: sirve de
+    ancla para resolver fechas sin año ("15 sep 21:00") tanto en reglas
+    como en el LLM.
+    """
+    if _is_settled_ticket(text):
+        return ExtractedPick(
+            es_apuesta=False, informante=informante, metodo="rejected", confianza=0.95
+        )
+
     if not _looks_like_bet(text):
         return ExtractedPick(
             es_apuesta=False, informante=informante, metodo="rejected", confianza=0.95
         )
 
-    rule_result = _rule_extract(text, informante=informante)
+    rule_result = _rule_extract(
+        text, informante=informante, fecha_referencia=fecha_referencia
+    )
     if rule_result:
+        rule_result.fecha_evento = _sanitize_event_date(
+            rule_result.fecha_evento, fecha_referencia
+        )
         return rule_result
 
-    return await _llm_extract(text, api_key, informante=informante)
+    llm_result = await _llm_extract(
+        text, api_key, informante=informante, fecha_referencia=fecha_referencia
+    )
+    if llm_result is not None:
+        llm_result.fecha_evento = _sanitize_event_date(
+            llm_result.fecha_evento, fecha_referencia
+        )
+    return llm_result
