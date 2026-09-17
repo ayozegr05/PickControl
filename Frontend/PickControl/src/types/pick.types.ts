@@ -20,6 +20,9 @@ export interface PickItem {
   evento?: string | null;
   /** Solo picks de Telegram: apuesta de "reto" del tipster (sección aparte). */
   esReto?: boolean;
+  /** Apuestas creadas desde un pick de Telegram ("Yo también la jugué"):
+   * id del parsed_pick de origen. Ausente en apuestas dadas de alta a mano. */
+  parsedPickId?: number | null;
 }
 
 export interface PickCreatePayload {

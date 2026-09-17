@@ -53,5 +53,11 @@ class Pick(PickBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     usuario_id: int = Field(foreign_key="users.id")
     informante_id: int = Field(foreign_key="informantes.id")
+    # Enlace al pick de Telegram del que nació esta apuesta ("Yo también la
+    # jugué"): permite saber qué parsed_picks ya tiene registrados el usuario
+    # y auditar la cuota/stake real conseguida frente a la del tipster.
+    parsed_pick_id: Optional[int] = Field(
+        default=None, foreign_key="parsed_picks.id", index=True
+    )
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

@@ -169,8 +169,15 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 - [ ] **Pantalla de análisis global**: ROI/yield por canal y por deporte,
       comparativa "tipster vs tú" agregada — es el valor real del proyecto
       (auditar si un tipster es rentable de verdad).
-- [ ] **"Yo también la jugué"**: registrar apuesta manual desde un pick de
-      Telegram con un tap, copiando cuota/stake/mercado.
+- [x] **"Yo también la jugué"** (hecho): `POST /telegram/parsed-picks/{id}/jugar`
+      crea una apuesta del usuario (`picks`) copiando selección/mercado/cuota/
+      stake/casa del pick, enlazada con `picks.parsed_pick_id` (FK nueva,
+      migración `d4e5f6a7b8c9`). El modal del pick del tipster tiene botón +
+      mini-formulario: cantidad obligatoria, cuota y casa pre-rellenadas y
+      editables — la cuota real conseguida puede diferir de la publicada, que
+      es justo lo que habilita comparar "yield tipster vs yield tuyo".
+      Idempotente: un doble tap devuelve la apuesta ya creada, no duplica.
+      Si ya existe, el modal muestra "✓ Ya la tienes registrada".
 - [ ] **Notificaciones push** cuando llega un pick nuevo.
 - [ ] **CRUD de canales en BD**: añadir/quitar canales monitorizados desde la
       app en vez de editar `TELEGRAM_TARGET_CHANNEL` y reiniciar.

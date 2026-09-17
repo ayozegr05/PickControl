@@ -9,6 +9,7 @@ import {
   TouchableOpacity,
   Alert,
   Platform,
+  TextInput,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams } from "expo-router"; // Obtener los parámetros de búsqueda
@@ -20,7 +21,10 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { getInformanteStats } from "@/src/api/informantes.api";
 import { deletePick, updatePick } from "@/src/api/picks.api";
-import { updateParsedPickAcierto } from "@/src/api/parsed-picks.api";
+import {
+  updateParsedPickAcierto,
+  jugarParsedPick,
+} from "@/src/api/parsed-picks.api";
 import { ApiError } from "@/src/api/client";
 import { InformanteStats } from "@/src/types/informante.types";
 import { PickItem, Acierto } from "@/src/types/pick.types";
@@ -44,6 +48,14 @@ export default function InformantDetail() {
     useState<PickItem | null>(null);
   const [selectedTelegramPick, setSelectedTelegramPick] =
     useState<PickItem | null>(null);
+  // "Yo también la jugué": mini-formulario para registrar la apuesta real
+  // del usuario (cantidad, cuota y casa conseguidas pueden diferir de las
+  // publicadas por el tipster).
+  const [jugarModalVisible, setJugarModalVisible] = useState(false);
+  const [jugarCantidad, setJugarCantidad] = useState("");
+  const [jugarCuota, setJugarCuota] = useState("");
+  const [jugarCasa, setJugarCasa] = useState("");
+  const [jugando, setJugando] = useState(false);
   const [periodoSeleccionado, setPeriodoSeleccionado] = useState("semana");
 
   const router = useRouter();
@@ -406,6 +418,54 @@ export default function InformantDetail() {
   const handleFechaPress = (apuesta: PickItem) => {
     setSelectedApuestaToUpdate(apuesta);
     setShowDatePicker(true);
+  };
+
+  // "Yo también la jugué": abre el formulario pre-rellenado con los
+  // datos del pick del tipster (cuota/stake/casa), editables porque la
+  // cuota real conseguida puede ser distinta de la publicada.
+  const abrirModalJugar = (pick: PickItem) => {
+    setJugarCantidad("");
+    setJugarCuota(pick.cuota ? String(Number(pick.cuota)) : "");
+    setJugarCasa(pick.casa || "");
+    setJugarModalVisible(true);
+  };
+
+  const confirmarJugarPick = async () => {
+    if (!selectedTelegramPick) return;
+    const cantidad = Number(jugarCantidad.replace(",", "."));
+    if (!cantidad || cantidad <= 0) {
+      Alert.alert("Error", "Introduce la cantidad apostada.");
+      return;
+    }
+    const cuota = jugarCuota ? Number(jugarCuota.replace(",", ".")) : 0;
+    if (jugarCuota && (!cuota || cuota <= 1)) {
+      Alert.alert("Error", "La cuota debe ser mayor que 1.");
+      return;
+    }
+    try {
+      setJugando(true);
+      await jugarParsedPick(selectedTelegramPick.id, {
+        cantidadApostada: cantidad,
+        cuota: cuota > 1 ? cuota : undefined,
+        casa: jugarCasa.trim() || undefined,
+      });
+      setJugarModalVisible(false);
+      setSelectedTelegramPick(null);
+      await fetchInformanteData();
+      Alert.alert(
+        "Apuesta registrada",
+        "Se ha añadido a tus apuestas de este tipster."
+      );
+    } catch (error) {
+      console.error("Error al registrar la apuesta:", error);
+      const message =
+        error instanceof ApiError
+          ? error.message
+          : "No se pudo registrar la apuesta.";
+      Alert.alert("Error", message);
+    } finally {
+      setJugando(false);
+    }
   };
 
   const handleDateChange = async (event: any, selectedDate?: Date) => {
@@ -1081,6 +1141,23 @@ export default function InformantDetail() {
                     ) : null}
                   </View>
 
+                  {apuestas.some(
+                    (a) => a.parsedPickId === selectedTelegramPick.id
+                  ) ? (
+                    <Text style={styles.jugadaText}>
+                      ✓ Ya la tienes registrada en tus apuestas
+                    </Text>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.jugarButton}
+                      onPress={() => abrirModalJugar(selectedTelegramPick)}
+                    >
+                      <Text style={styles.jugarButtonText}>
+                        Yo también la jugué
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+
                   <Text style={styles.modalText}>Corregir resultado:</Text>
                   <View style={styles.detailButtons}>
                     <TouchableOpacity
@@ -1127,6 +1204,75 @@ export default function InformantDetail() {
                   </View>
                 </>
               )}
+            </View>
+          </View>
+        </Modal>
+
+        {/* "Yo también la jugué": registra la apuesta real del usuario */}
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={jugarModalVisible}
+          onRequestClose={() => setJugarModalVisible(false)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <TouchableOpacity
+                style={styles.closeButton}
+                onPress={() => setJugarModalVisible(false)}
+              >
+                <Text style={styles.closeButtonText}>
+                  <MaterialCommunityIcons
+                    name="close"
+                    size={26}
+                    color="white"
+                  />
+                </Text>
+              </TouchableOpacity>
+
+              <Text style={styles.modalTitle}>Yo también la jugué</Text>
+              <Text style={styles.jugarHint}>
+                Cantidad, cuota y casa reales — pueden diferir de las del
+                tipster y así se compara el yield publicado con el tuyo.
+              </Text>
+
+              <TextInput
+                style={styles.jugarInput}
+                placeholder="Cantidad apostada (obligatorio)"
+                placeholderTextColor="#888"
+                keyboardType="numeric"
+                value={jugarCantidad}
+                onChangeText={setJugarCantidad}
+              />
+              <TextInput
+                style={styles.jugarInput}
+                placeholder="Cuota conseguida (opcional)"
+                placeholderTextColor="#888"
+                keyboardType="numeric"
+                value={jugarCuota}
+                onChangeText={setJugarCuota}
+              />
+              <TextInput
+                style={styles.jugarInput}
+                placeholder="Casa (opcional)"
+                placeholderTextColor="#888"
+                value={jugarCasa}
+                onChangeText={setJugarCasa}
+              />
+
+              <TouchableOpacity
+                style={[styles.jugarButton, jugando && { opacity: 0.6 }]}
+                onPress={confirmarJugarPick}
+                disabled={jugando}
+              >
+                {jugando ? (
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <Text style={styles.jugarButtonText}>
+                    Registrar apuesta
+                  </Text>
+                )}
+              </TouchableOpacity>
             </View>
           </View>
         </Modal>
@@ -1254,6 +1400,44 @@ const styles = StyleSheet.create({
     color: "white",
     fontSize: 13,
     fontWeight: "bold",
+  },
+  jugarButton: {
+    backgroundColor: "#ff9f1c",
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginTop: 6,
+    marginBottom: 4,
+    alignSelf: "center",
+  },
+  jugarButtonText: {
+    color: "#0d0d0d",
+    fontSize: 15,
+    fontWeight: "bold",
+  },
+  jugadaText: {
+    color: "#4caf50",
+    fontSize: 14,
+    fontWeight: "bold",
+    marginTop: 6,
+    marginBottom: 4,
+    alignSelf: "center",
+  },
+  jugarHint: {
+    color: "#aaa",
+    fontSize: 12,
+    textAlign: "center",
+    marginBottom: 12,
+  },
+  jugarInput: {
+    alignSelf: "stretch",
+    height: 44,
+    backgroundColor: "white",
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    marginVertical: 6,
+    fontSize: 15,
+    color: "#000",
   },
   modalButtons: {
     flexDirection: "row",
