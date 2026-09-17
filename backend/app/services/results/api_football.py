@@ -40,9 +40,16 @@ def _similar(a: str, b: str) -> float:
 class ApiFootballProvider:
     """Consulta API-Football por partidos finalizados de una fecha."""
 
+    SUPPORTED_SPORTS = frozenset({"futbol"})
+
     def __init__(self, api_key: str, api_host: str) -> None:
         self._api_key = api_key
         self._api_host = api_host
+        # Caché de fixtures por fecha (vive solo durante una pasada del
+        # verificador): varios picks del mismo día reutilizan la misma
+        # respuesta en vez de repetir la llamada. El plan gratuito da
+        # 100 req/día y antes se repetía la descarga por cada pick.
+        self._fixtures_cache: dict[str, list] = {}
 
     def _headers(self) -> dict[str, str]:
         if "rapidapi" in self._api_host:
@@ -63,6 +70,8 @@ class ApiFootballProvider:
         return f"https://{self._api_host}/fixtures"
 
     async def _fetch_fixtures(self, client: httpx.AsyncClient, date_str: str) -> list:
+        if date_str in self._fixtures_cache:
+            return self._fixtures_cache[date_str]
         try:
             response = await client.get(
                 self._fixtures_url(),
@@ -73,7 +82,9 @@ class ApiFootballProvider:
         except httpx.HTTPError as exc:
             logger.warning("[API-Football] Error de API (%s): %s", date_str, exc)
             return []
-        return response.json().get("response", [])
+        fixtures = response.json().get("response", [])
+        self._fixtures_cache[date_str] = fixtures
+        return fixtures
 
     async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:
         best_match = None

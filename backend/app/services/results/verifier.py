@@ -20,7 +20,7 @@ Estrategia (mercados soportados: ganador, hándicap asiático, over/under):
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Optional
 
@@ -32,8 +32,11 @@ from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
 from app.services.results.api_football import ApiFootballProvider
+from app.services.results.api_tennis import ApiTennisProvider
 from app.services.results.base import MatchResult, ResultsProvider
 from app.services.results.football_data import FootballDataProvider
+from app.services.results.rapidapi_tennis import RapidApiTennisProvider
+from app.services.results.tennisapi1 import TennisApi1Provider
 
 logger = get_logger("app.results.verifier")
 
@@ -48,6 +51,72 @@ _NO_VERB_WIN_MARKETS = [
     "moneyline",
 ]
 _MIN_TEAM_SIMILARITY = 0.6
+
+# Alias de `deporte` a su nombre canónico (minúsculas, sin tilde). Cada
+# proveedor declara los canónicos que cubre en `SUPPORTED_SPORTS`. Un
+# pick de tenis/baloncesto nunca se consulta contra APIs de fútbol: con
+# la similitud laxa de nombres podría "verificarse" contra un partido
+# que nada tiene que ver (falso positivo real ya detectado). Si ningún
+# proveedor cubre el deporte, el pick queda pendiente de revisión manual.
+_SPORT_ALIASES = {
+    "fútbol": "futbol",
+    "futbol": "futbol",
+    "football": "futbol",
+    "soccer": "futbol",
+    "fútbol sala": "futbol",
+    "futsal": "futbol",
+    "tenis": "tenis",
+    "tennis": "tenis",
+    "atp": "tenis",
+    "wta": "tenis",
+    "itf": "tenis",
+    "challenger": "tenis",
+    "baloncesto": "baloncesto",
+    "basketball": "baloncesto",
+    "basket": "baloncesto",
+    "nba": "baloncesto",
+    "acb": "baloncesto",
+    "euroliga": "baloncesto",
+    "euroleague": "baloncesto",
+}
+
+# Edad máxima del evento para seguir intentando la verificación
+# automática. Un pick que lleva más de este tiempo sin resolverse (liga
+# no cubierta, nombre irreconocible, mercado no soportado) se reintentaba
+# en cada ciclo quemando llamadas a las APIs para nada; pasada esta
+# ventana queda pendiente de corrección manual.
+_MAX_VERIFICATION_AGE = timedelta(days=14)
+
+
+def _normalize_sport(deporte: Optional[str]) -> Optional[str]:
+    """Deporte canónico del pick, o None si no hay deporte informado."""
+    if not deporte:
+        return None
+    return _SPORT_ALIASES.get(deporte.strip().lower())
+
+
+def _providers_for_sport(
+    deporte: Optional[str], providers: list[ResultsProvider]
+) -> list[ResultsProvider]:
+    """Proveedores que cubren el deporte del pick.
+
+    - Deporte reconocido: solo los proveedores que lo declaran en
+      `SUPPORTED_SPORTS`. Si ninguno lo cubre (o no hay key configurada),
+      la lista sale vacía y el pick queda pendiente.
+    - Deporte desconocido: lista vacía — nunca se consulta a ciegas.
+    - Sin deporte: todos los proveedores en su orden de configuración
+      (los de fútbol van primero, así que un pick de tenis sin deporte
+      solo llega a la API de tenis si los de fútbol no lo encontraron).
+    """
+    if not deporte:
+        return list(providers)
+    sport = _SPORT_ALIASES.get(deporte.strip().lower())
+    if sport is None:
+        return []
+    return [
+        p for p in providers if sport in getattr(p, "SUPPORTED_SPORTS", frozenset())
+    ]
+
 
 _MARKDOWN_NOISE = re.compile(r"[*_~`]+")
 _NON_TEAM_CHARS = re.compile(r"[^\w\sÁÉÍÓÚÑáéíóúñ.'-]", re.UNICODE)
@@ -192,6 +261,26 @@ async def _get_providers() -> list[ResultsProvider]:
         providers.append(
             ApiFootballProvider(settings.api_football_key, settings.api_football_host)
         )
+    # Tenis va después de los de fútbol: sin `deporte` informado solo se
+    # consulta si los de fútbol no encontraron el partido. Y dentro de
+    # tenis, TheSportsDB (gratis) primero y RapidAPI (cuota limitada) de
+    # último recurso para Challenger/ITF.
+    if settings.api_tennis_key:
+        providers.append(ApiTennisProvider(settings.api_tennis_key))
+    if settings.rapidapi_tennis_key:
+        providers.append(
+            RapidApiTennisProvider(
+                settings.rapidapi_tennis_key, settings.rapidapi_tennis_host
+            )
+        )
+        # Último nivel: tennisapi1 (Sofascore). Misma key de cuenta; su
+        # cuota diaria es independiente y solo se gasta si los dos
+        # anteriores no encontraron el partido o agotaron la suya.
+        providers.append(
+            TennisApi1Provider(
+                settings.rapidapi_tennis_key, settings.rapidapi_tennisapi1_host
+            )
+        )
     return providers
 
 
@@ -227,16 +316,27 @@ async def verify_pick(
     if not pick.fecha_evento or not pick.seleccion:
         return None, False
 
+    providers_for_sport = _providers_for_sport(pick.deporte, providers)
+    if not providers_for_sport:
+        return None, False
+
+    sport = _normalize_sport(pick.deporte)
     mercado_low = (pick.mercado or "").lower()
     es_handicap = "hándicap" in mercado_low or "handicap" in mercado_low
     es_over_under = "over" in mercado_low or "under" in mercado_low
+
+    if sport == "tenis" and (es_handicap or es_over_under):
+        # En tenis los proveedores devuelven sets ganados, no juegos:
+        # un "Más de 20.5 juegos" o un hándicap de juegos no se puede
+        # resolver con esos números. Solo el mercado "ganador" aplica.
+        return None, False
 
     if es_handicap and pick.linea is not None:
         team_hint = _extract_handicap_team(pick.seleccion)
         if not team_hint:
             return None, False
         match = await _find_match_across_providers(
-            pick.fecha_evento, team_hint, providers, pick.id
+            pick.fecha_evento, team_hint, providers_for_sport, pick.id
         )
         if not match:
             return None, False
@@ -256,7 +356,7 @@ async def verify_pick(
         if not team_hint:
             return None, False
         match = await _find_match_across_providers(
-            pick.fecha_evento, team_hint, providers, pick.id
+            pick.fecha_evento, team_hint, providers_for_sport, pick.id
         )
         if not match:
             return None, False
@@ -272,7 +372,7 @@ async def verify_pick(
     es_mercado_sin_empate = "resultado sin empate" in mercado_low
 
     match = await _find_match_across_providers(
-        pick.fecha_evento, predicted_team, providers, pick.id
+        pick.fecha_evento, predicted_team, providers_for_sport, pick.id
     )
     if not match:
         return None, False
@@ -314,6 +414,7 @@ async def verify_pending_picks() -> int:
             .where(ParsedPick.anulada == False)  # noqa: E712
             .where(ParsedPick.fecha_evento != None)  # noqa: E711
             .where(ParsedPick.fecha_evento < now)
+            .where(ParsedPick.fecha_evento >= now - _MAX_VERIFICATION_AGE)
         )
         pending = list(result.all())
 

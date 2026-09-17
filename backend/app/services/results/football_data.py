@@ -33,26 +33,37 @@ def _similar(a: str, b: str) -> float:
 class FootballDataProvider:
     """Consulta football-data.org por partidos finalizados cerca de una fecha."""
 
+    SUPPORTED_SPORTS = frozenset({"futbol"})
+
     def __init__(self, api_key: str) -> None:
         self._api_key = api_key
+        # Caché de partidos por ventana de fechas (vive solo durante una
+        # pasada del verificador): picks del mismo día comparten la misma
+        # respuesta en vez de repetir la llamada.
+        self._matches_cache: dict[tuple[str, str], list] = {}
 
     async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:
         date_from = (date - _DATE_WINDOW).strftime("%Y-%m-%d")
         date_to = (date + _DATE_WINDOW).strftime("%Y-%m-%d")
+        cache_key = (date_from, date_to)
 
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
-                response = await client.get(
-                    f"{_BASE_URL}/matches",
-                    params={"dateFrom": date_from, "dateTo": date_to},
-                    headers={"X-Auth-Token": self._api_key},
-                )
-                response.raise_for_status()
-            except httpx.HTTPError as exc:
-                logger.warning("[football-data.org] Error de API: %s", exc)
-                return None
+        if cache_key in self._matches_cache:
+            matches = self._matches_cache[cache_key]
+        else:
+            async with httpx.AsyncClient(timeout=15) as client:
+                try:
+                    response = await client.get(
+                        f"{_BASE_URL}/matches",
+                        params={"dateFrom": date_from, "dateTo": date_to},
+                        headers={"X-Auth-Token": self._api_key},
+                    )
+                    response.raise_for_status()
+                except httpx.HTTPError as exc:
+                    logger.warning("[football-data.org] Error de API: %s", exc)
+                    return None
 
-        matches = response.json().get("matches", [])
+            matches = response.json().get("matches", [])
+            self._matches_cache[cache_key] = matches
 
         best_match = None
         best_score = 0.0
