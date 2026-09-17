@@ -1,0 +1,71 @@
+# ControlPick — guía rápida para agentes
+
+Auditoría de tipsters: ingiere picks de canales de Telegram (texto + foto + OCR + LLM),
+los deduplica, verifica resultados contra APIs deportivas y compara la rentabilidad
+publicada del tipster con la real del usuario.
+
+Ver `ROADMAP_MIGRACION.md` para estado de fases y próximos hitos.
+
+## Arquitectura
+
+- **Backend** `backend/` — FastAPI + SQLModel + PostgreSQL + Alembic.
+  - `app/services/telegram/` — Telethon (cuenta de usuario): `client.py`,
+    `handlers.py` (NewMessage + Album), `catchup.py` (rellena huecos al arrancar),
+    `processor.py` (persistencia + dedup), `pick_extractor.py` (pre-filtro →
+    reglas → LLM `gpt-4o-mini`), `ocr.py` (OpenAI vision).
+  - `app/services/results/` — verificador de resultados por deporte:
+    fútbol (football-data.org → API-Football fallback), tenis (TheSportsDB →
+    RapidAPI ATP-WTA-ITF → tennisapi1).
+- **Frontend** `Frontend/PickControl/` — Expo + React Native + TypeScript,
+  Expo Router (`app/screens/`, `app/dynamic-routes/`), cliente en `src/api/`.
+
+## Comandos
+
+```powershell
+# Backend (desde backend/) — usar SIEMPRE uno de estos dos:
+.\scripts\run_dev.ps1
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --reload --reload-dir app
+.\.venv\Scripts\python.exe -m pytest tests/ -x -q
+.\.venv\Scripts\python.exe -m black app/ --check
+.\.venv\Scripts\python.exe -m ruff check app/
+.\.venv\Scripts\python.exe -m alembic upgrade head
+
+# Frontend (desde Frontend/PickControl/)
+npx tsc --noEmit
+```
+
+> `--reload-dir app` es OBLIGATORIO: sin él uvicorn vigila `.venv/` y reinicia
+> en cada escritura de Telethon, matando el login y el catch-up.
+
+Scripts útiles en `backend/scripts/` (`inspect_picks.py`, `reprocess_raw.py`,
+`reclassify_rejected.py`, `telegram_login_complete.py`…).
+
+## Reglas de negocio clave (no romper)
+
+- **`created_at` ≠ `fecha_evento`**: la primera es cuándo se importó; la segunda
+  es la fecha real del mensaje/partido. La UI muestra `fecha_evento`.
+- **Dedup solo dentro del mismo canal** — el mismo pick en dos canales cuenta
+  dos veces a propósito (stats independientes por canal).
+- Ventana de duplicados por **`received_at` del mensaje** (±6 h), no `created_at`;
+  si `linea` difiere, nunca se fusionan.
+- **Boletos liquidados** (sello GANADOR / línea de premio pagado) se rechazan:
+  son marketing del tipster, no picks abiertos.
+- **Retos** (`parsed_picks.es_reto`): tabla y stats aparte.
+- Los raws (`telegram_raw_messages`) NUNCA se borran: son la auditoría.
+- Catch-up: máx. 300 mensajes Y tope 7 días, orden nuevo→viejo.
+
+## Canales monitorizados
+
+Configurados en `TELEGRAM_TARGET_CHANNEL` (`.env`, no commitear): Dm7 GRATUITO,
+Dm7 Allsports, AllSportsPicks, CopetePicks, Bet Fran, Lady Bets.
+Sesión Telethon: `TELEGRAM_SESSION_NAME=controlpick_telegram`;
+media en `backend/media/telegram/`.
+
+## Convenciones del proyecto
+
+- Tipado estricto: Pydantic/SQLModel en backend, TypeScript en frontend.
+- Explicar brevemente en español antes de tocar archivos; resumen por archivo
+  al terminar (ver `.windsurfrules`).
+- Windows: cuidado con CP1252 al imprimir emojis en consola
+  (`sys.stdout.reconfigure(encoding='utf-8')`).
+- Los errores 429 de OpenAI (TPM) dejan raws sin OCR — el retry está en roadmap.
