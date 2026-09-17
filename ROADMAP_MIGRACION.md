@@ -52,6 +52,29 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 
 ## Próximos hitos
 
+### Vista completa (resumen)
+
+| # | Hito | Estado | Esfuerzo |
+|---|---|---|---|
+| 1 | Combinadas como sección propia | Pendiente | Alto — modelo, extractor, verificador, UI |
+| 2 | Fútbol: primera parte/descanso | Pendiente — sin datos en proveedores | Alto (proveedor nuevo) |
+| 3 | Fútbol: partidos parados (SUSP/ABD/INT) | Manual a propósito | — |
+| 4 | Cuota tipster vs cuota real de mercado | Pendiente | Alto + API de odds (probablemente de pago) |
+| 5 | Baloncesto | Aparcado | Medio |
+| 6 | Álbumes Telegram | Implementado — falta probar con álbum real | Trivial |
+| 7 | Pantalla de análisis global | Hecho | — |
+| 8 | "Yo también la jugué" | Hecho | — |
+| 9 | Notificaciones push | Pendiente | Medio |
+| 10 | CRUD de canales desde la app | Pendiente | Medio |
+| 11 | Deploy real (servidor + PostgreSQL + HTTPS) | Pendiente | Medio-alto |
+| 12 | Backups: script `backup_db.py` | Hecho | — |
+| 13 | Backups programados diarios | Pendiente (va con el deploy) | Trivial |
+| 14 | Tests del pipeline Telegram | Hecho | — |
+| 15 | Limpieza de usuarios (test@a.com) | Pendiente | Trivial |
+
+Aparcados fuera de la lista: verificación live/en juego, torneos sin
+cobertura de proveedor, hándicap sin sujeto en zona ambigua |línea| 2-3.
+
 ### 1. Core: verificación de resultados
 
 - [x] **Proveedor de resultados para tenis.** Implementado con cadena
@@ -190,15 +213,16 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 
 - [ ] **Deploy real**: backend en servidor + PostgreSQL gestionada + HTTPS
       (hoy todo corre en local: Uvicorn + Expo en red local).
-- [x] **Backups de PostgreSQL** (hecho): `backend/scripts/backup_db.py`
+- [x] **Backups de PostgreSQL — script** (hecho): `backend/scripts/backup_db.py`
       genera dumps comprimidos (`pg_dump -Fc`) en `backend/backups/` con
       timestamp, retención de 14 días (`BACKUP_RETENTION_DAYS`) y
       localiza `pg_dump` en PATH o en `Program Files\PostgreSQL`. El
       directorio está en `.gitignore`. Restaurar:
-      `pg_restore -d controlpick backups/<dump>.dump`.
-      **Pendiente: programarlo diario** (Task Scheduler/cron — comandos
-      en la docstring del script). En local basta ejecución manual antes
-      de migraciones o reprocesos; el diario se activa al desplegar.
+      `pg_restore -d controlpick backups/<dump>.dump`. En local basta
+      ejecución manual antes de migraciones o reprocesos.
+- [ ] **Backups programados diarios** (pendiente): crear la tarea en Task
+      Scheduler / cron para que `backup_db.py` corra solo cada día
+      (comandos en la docstring del script). Se activa junto al deploy.
 - [x] **Tests del pipeline de Telegram** (hecho): `catchup.py` (marca de
       agua, huecos por debajo de la marca, raw vacío/`processed=False`
       reprocesado, raw con pick vinculado no se toca, corte por 7 días,
