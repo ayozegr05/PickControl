@@ -42,7 +42,7 @@ from typing import Optional
 import httpx
 
 from app.core.logging import get_logger
-from app.services.results.api_tennis import _player_similar
+from app.services.results.api_tennis import _pair_similar
 from app.services.results.base import (
     MatchResult,
     is_missed,
@@ -73,7 +73,10 @@ def _parse_event(event: dict) -> Optional[MatchResult]:
     status = (event.get("status") or {}).get("type")
     home = (event.get("homeTeam") or {}).get("name") or ""
     away = (event.get("awayTeam") or {}).get("name") or ""
-    if not home or not away or "/" in home or "/" in away:
+    # Los dobles ya no se descartan aquí: `_pair_similar` exige que la
+    # pista case con TODOS los miembros de la pareja, así que un pick
+    # individual nunca se resuelve contra un dobles (ni al revés).
+    if not home or not away:
         return None
     if status in ("retired", "walkover"):
         # Retirada/walkover: el partido no terminó por la vía normal.
@@ -185,8 +188,8 @@ class TennisApi1Provider:
                         if not match:
                             continue
                         score = max(
-                            _player_similar(team_hint, match.home_team),
-                            _player_similar(team_hint, match.away_team),
+                            _pair_similar(team_hint, match.home_team),
+                            _pair_similar(team_hint, match.away_team),
                         )
                         if score > best_score:
                             best_score = score

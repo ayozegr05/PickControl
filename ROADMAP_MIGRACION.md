@@ -239,10 +239,12 @@ importados). "Push" (líneas enteras) y aplazados/cancelados >72 h se marcan
   amistosos, Primera Federación...): solo resolubles dentro de la ventana de
   API-Football; fuera de ella, corrección manual.
 - **Tenis** resuelve ganador, marcador exacto en sets, over/under y hándicap
-  de juegos y de sets — también por set concreto —, ganador de set individual
-  y tiebreak sí/no (vía `MatchResult.sets`). RET/W-O → anulada automática.
+  de juegos y de sets — también por set concreto —, ganador de set individual,
+  tiebreak sí/no (vía `MatchResult.sets`) y **dobles** (matching por parejas:
+  exige todos los miembros en la pista, y una pista de dobles no casa con un
+  individual). RET/W-O → anulada automática.
   Pendiente a propósito: hándicap "-1.5" sin sujeto (ambiguo entre sets y
-  juegos), dobles y combinadas.
+  juegos) y combinadas.
 - **Baloncesto** sin proveedor (API-Basketball de api-sports.io sería el
   candidato).
 - Futuro: plan de pago de API-Football eliminaría la restricción de fechas.

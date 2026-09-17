@@ -31,7 +31,7 @@ from urllib.parse import quote
 import httpx
 
 from app.core.logging import get_logger
-from app.services.results.api_tennis import _player_similar
+from app.services.results.api_tennis import _pair_similar
 from app.services.results.base import (
     MatchResult,
     is_missed,
@@ -149,7 +149,10 @@ class RapidApiTennisProvider:
                     "[RapidAPI-Tennis] Error de API (%s): %s", player_name, exc
                 )
             return []
-        matches = response.json().get("singles") or []
+        data = response.json()
+        # El endpoint separa individuales y dobles del jugador; nos
+        # interesan ambos (el matching por parejas filtra después).
+        matches = (data.get("singles") or []) + (data.get("doubles") or [])
         self._matches_cache[cache_key] = matches
         return matches
 
@@ -166,8 +169,16 @@ class RapidApiTennisProvider:
         best_match: Optional[MatchResult] = None
         best_score = 0.0
 
+        # El endpoint busca el historial de UN jugador: si la pista es
+        # un evento ("Alcaraz - Sinner") o una pareja de dobles
+        # ("Alcaraz / Munar"), se consulta por el primer nombre.
+        lookup_name = (
+            re.split(r"[/+&]|\s+-\s+|\s+vs\.?\s+", team_hint, maxsplit=1)[0].strip()
+            or team_hint
+        )
+
         async with httpx.AsyncClient(timeout=15) as client:
-            for match in await self._fetch_matches(client, team_hint, date.year):
+            for match in await self._fetch_matches(client, lookup_name, date.year):
                 winner = (match.get("player1") or {}).get("name")
                 loser = (match.get("player2") or {}).get("name")
                 played = _parse_match_date(match.get("date") or "")
@@ -176,8 +187,8 @@ class RapidApiTennisProvider:
                 if abs(played - date) > _DATE_TOLERANCE:
                     continue
                 score = max(
-                    _player_similar(team_hint, winner),
-                    _player_similar(team_hint, loser),
+                    _pair_similar(team_hint, winner),
+                    _pair_similar(team_hint, loser),
                 )
                 if score <= best_score:
                     continue

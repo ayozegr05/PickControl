@@ -112,7 +112,8 @@ class TestProvidersForSport:
 
 class _StubTennisProvider:
     """Proveedor de tenis que devuelve sets ganados en home/away_score y,
-    opcionalmente, los juegos de cada set en `sets`."""
+    opcionalmente, los juegos de cada set en `sets`. Filtra la pista con
+    `_pair_similar` como hacen los proveedores reales (dobles incluidos)."""
 
     SUPPORTED_SPORTS = frozenset({"tenis"})
 
@@ -122,10 +123,12 @@ class _StubTennisProvider:
         away_sets: int,
         sets: list[tuple[int, int]] | None = None,
         status: str | None = None,
+        home: str = "Carlos Alcaraz",
+        away: str = "Jannik Sinner",
     ):
         self._match = MatchResult(
-            home_team="Carlos Alcaraz",
-            away_team="Jannik Sinner",
+            home_team=home,
+            away_team=away,
             home_score=home_sets,
             away_score=away_sets,
             sets=sets,
@@ -133,7 +136,13 @@ class _StubTennisProvider:
         )
 
     async def find_match(self, date, team_hint):
-        return self._match
+        from app.services.results.api_tennis import _pair_similar
+
+        score = max(
+            _pair_similar(team_hint, self._match.home_team),
+            _pair_similar(team_hint, self._match.away_team),
+        )
+        return self._match if score >= 0.6 else None
 
 
 def _pick_tenis(seleccion: str, mercado: str | None = "ganador") -> ParsedPick:
@@ -363,6 +372,69 @@ class TestTennisMarkets:
         acierto, _ = await verify_pick(pick, [provider])
         assert acierto is True
 
+    async def test_dobles_ganan(self):
+        provider = _StubTennisProvider(
+            2,
+            0,
+            sets=[(6, 4), (6, 3)],
+            home="Alcaraz / Munar",
+            away="Sinner / Berrettini",
+        )
+        pick = _pick_tenis("Alcaraz / Munar ganan")
+        pick.evento = "Alcaraz / Munar - Sinner / Berrettini"
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_dobles_pierden(self):
+        provider = _StubTennisProvider(
+            0, 2, home="Alcaraz / Munar", away="Sinner / Berrettini"
+        )
+        pick = _pick_tenis("Alcaraz / Munar ganan")
+        pick.evento = "Alcaraz / Munar - Sinner / Berrettini"
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_dobles_orden_invertido_pareja(self):
+        # La pareja puede venir en otro orden que en la API.
+        provider = _StubTennisProvider(
+            2, 0, home="Alcaraz / Munar", away="Sinner / Berrettini"
+        )
+        pick = _pick_tenis("Munar / Alcaraz ganan")
+        pick.evento = "Munar / Alcaraz - Sinner / Berrettini"
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_individual_no_casa_con_dobles(self):
+        # Pick individual sobre un dobles del mismo jugador: la pista
+        # no casa con la pareja -> el partido no se encuentra.
+        provider = _StubTennisProvider(
+            2, 0, home="Alcaraz / Munar", away="Sinner / Berrettini"
+        )
+        acierto, anulada = await verify_pick(_pick_tenis("Alcaraz gana"), [provider])
+        assert (acierto, anulada) == (None, False)
+
+    async def test_dobles_no_casa_con_individual(self):
+        # Pick de dobles contra un partido individual del jugador.
+        provider = _StubTennisProvider(2, 0)
+        pick = _pick_tenis("Alcaraz / Munar ganan")
+        pick.evento = "Alcaraz / Munar - Sinner / Berrettini"
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+
+    async def test_dobles_over_juegos(self):
+        provider = _StubTennisProvider(
+            2,
+            0,
+            sets=[(6, 4), (6, 3)],
+            home="Alcaraz / Munar",
+            away="Sinner / Berrettini",
+        )
+        pick = _pick_tenis("Alcaraz / Munar más de 11.5 juegos", "más de")
+        pick.linea = 11.5
+        pick.evento = "Alcaraz / Munar - Sinner / Berrettini"
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True  # 6+6 = 12 > 11.5
+
     async def test_gana_20_con_20_real_acierta(self):
         provider = _StubTennisProvider(2, 0)
         acierto, _ = await verify_pick(_pick_tenis("Alcaraz gana 2-0"), [provider])
@@ -485,6 +557,19 @@ class TestTennisProviderSets:
         assert _RETIREMENT_PATTERN.search("6-1 2-0 RET")
         assert _RETIREMENT_PATTERN.search("W/O")
         assert not _RETIREMENT_PATTERN.search("6-1 6-2")
+
+    def test_pair_similar_dobles(self):
+        from app.services.results.api_tennis import _pair_similar
+
+        # Pareja vs pareja: todos los miembros deben casar (orden libre).
+        assert _pair_similar("Alcaraz / Munar", "Carlos Alcaraz / Jaume Munar") >= 0.6
+        assert _pair_similar("Munar / Alcaraz", "Carlos Alcaraz / Jaume Munar") >= 0.6
+        # Individual vs pareja: no casa (falta el segundo miembro).
+        assert _pair_similar("Alcaraz", "Carlos Alcaraz / Jaume Munar") < 0.6
+        # Pareja vs individual: penalizado.
+        assert _pair_similar("Alcaraz / Munar", "Carlos Alcaraz") < 0.6
+        # Individual vs individual: sin cambios.
+        assert _pair_similar("Alcaraz", "Carlos Alcaraz") >= 0.6
 
     def test_tennisapi1_retired_status(self):
         from app.services.results.tennisapi1 import _parse_event
