@@ -1030,17 +1030,54 @@ async def _verify_tennis_pick(
         bet_no = bool(re.search(r"\bno\b|\bsin\b", seleccion, re.IGNORECASE))
         return had_tiebreak != bet_no, False
 
-    if pick.linea is None:
-        return None
+    # "X gana un set" / "gana al menos un set": el jugador/pareja gana
+    # al menos un set del partido.
+    if re.search(r"\bgana\w*\s+(?:al\s+menos\s+)?un\s+set\b", seleccion, re.I):
+        player = _extract_tennis_player_name(
+            re.sub(r"\bgana\w*.*$", "", seleccion, flags=re.I)
+        )
+        team_hint = pick.evento or player
+        if not team_hint:
+            return None, False
+        match = await _find_match_across_providers(
+            pick.fecha_evento, team_hint, providers, pick.id
+        )
+        if not match:
+            return None, False
+        if match.status in _TENNIS_VOID_STATUSES:
+            return None, True
+        if not player:
+            return None, False
+        scores = _tennis_scores(match, player)
+        if scores is None:
+            return None, False
+        return scores[0] >= 1, False
 
+    # Línea escrita como "21+" o "20 o más" = over N-0.5.
+    linea = pick.linea
     direction = _detect_over_under_direction(seleccion) or _detect_over_under_direction(
         pick.mercado or ""
     )
+    if linea is None:
+        plus = re.search(r"(\d+(?:[.,]\d+)?)\s*\+", seleccion)
+        o_mas = re.search(r"(\d+(?:[.,]\d+)?)\s+o\s+m[aá]s", seleccion, re.I)
+        for mm in (plus, o_mas):
+            if mm:
+                linea = float(mm.group(1).replace(",", ".")) - 0.5
+                direction = direction or "over"
+                break
+    if linea is None:
+        return None
+
     if direction:
         # Sin sujeto explícito la línea desambigua: los juegos totales
         # nunca bajan de ~12, las líneas de sets son <= 4.5.
-        subject = _tennis_subject(text) or ("games" if pick.linea >= 6 else "sets")
+        subject = _tennis_subject(text) or ("games" if linea >= 6 else "sets")
         player = _extract_team_total_team(seleccion)
+        if player and player[0].isdigit():
+            # "20 o más juegos" parte en "más" dejando "20 o" — no es un
+            # jugador, es la línea.
+            player = None
         team_hint = player or pick.evento
         if not team_hint:
             return None, False
@@ -1060,27 +1097,27 @@ async def _verify_tennis_pick(
                 in_set = _player_games_in_set(match, player, set_idx)
                 if in_set is None:
                     return None, False
-                return _compare_over_under(in_set[0], direction, pick.linea)
+                return _compare_over_under(in_set[0], direction, linea)
             set_total = sum(match.sets[set_idx])
-            return _compare_over_under(set_total, direction, pick.linea)
+            return _compare_over_under(set_total, direction, linea)
         if subject == "sets":
             if player:
                 scores = _tennis_scores(match, player)
                 if scores is None:
                     return None, False
-                return _compare_over_under(scores[0], direction, pick.linea)
+                return _compare_over_under(scores[0], direction, linea)
             return _compare_over_under(
-                match.home_score + match.away_score, direction, pick.linea
+                match.home_score + match.away_score, direction, linea
             )
         if player:
             totals = _player_games(match, player)
             if totals is None:
                 return None, False
-            return _compare_over_under(totals[0], direction, pick.linea)
+            return _compare_over_under(totals[0], direction, linea)
         if not match.sets:
             return None, False
         total_games = sum(h + a for h, a in match.sets)
-        return _compare_over_under(total_games, direction, pick.linea)
+        return _compare_over_under(total_games, direction, linea)
 
     # Línea sin dirección over/under -> hándicap. Si el mercado pinta
     # over/under pero no se detecta el lado (p. ej. mercado
@@ -1088,10 +1125,17 @@ async def _verify_tennis_pick(
     # como hándicap sería un resultado inventado.
     if _OVER_PATTERN.search(text) or _UNDER_PATTERN.search(text):
         return None, False
-    # Exige sujeto explícito: "-1.5" a secas es ambiguo entre sets y
-    # juegos.
+    # Sujeto del hándicap: explícito ("sets"/"juegos") o por magnitud
+    # siguiendo la convención de las casas — |línea| <= 1.5 suele ser
+    # sets, >= 3.5 juegos. El rango intermedio es ambiguo -> pendiente.
     player = _extract_tennis_player_name(seleccion)
     subject = _tennis_subject(text)
+    if subject is None:
+        magnitude = abs(linea)
+        if magnitude <= 1.5:
+            subject = "sets"
+        elif magnitude >= 3.5:
+            subject = "games"
     if not player or subject is None:
         return None, False
     match = await _find_match_across_providers(
@@ -1106,16 +1150,16 @@ async def _verify_tennis_pick(
         in_set = _player_games_in_set(match, player, set_idx)
         if in_set is None:
             return None, False
-        return _handicap_result(in_set[0], in_set[1], pick.linea)
+        return _handicap_result(in_set[0], in_set[1], linea)
     if subject == "sets":
         scores = _tennis_scores(match, player)
         if scores is None:
             return None, False
-        return _handicap_result(scores[0], scores[1], pick.linea)
+        return _handicap_result(scores[0], scores[1], linea)
     totals = _player_games(match, player)
     if totals is None:
         return None, False
-    return _handicap_result(totals[0], totals[1], pick.linea)
+    return _handicap_result(totals[0], totals[1], linea)
 
 
 def _extract_tennis_sets_prediction(

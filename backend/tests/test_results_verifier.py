@@ -244,13 +244,54 @@ class TestTennisMarkets:
         acierto, anulada = await verify_pick(pick, [provider])
         assert (acierto, anulada) == (None, True)
 
-    async def test_handicap_sin_sujeto_pendiente(self):
-        # "-1.5" a secas es ambiguo entre sets y juegos -> pendiente.
+    async def test_handicap_sin_sujeto_linea_baja_es_sets(self):
+        # Convención de casas: |línea| <= 1.5 sin sujeto -> sets.
         provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])
         pick = _pick_tenis("Alcaraz -1.5", "hándicap")
         pick.linea = -1.5
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_handicap_sin_sujeto_linea_alta_es_juegos(self):
+        # |línea| >= 3.5 sin sujeto -> juegos (15 vs 12: -4.5 pierde).
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        pick = _pick_tenis("Alcaraz -4.5", "hándicap")
+        pick.linea = -4.5
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_handicap_sin_sujeto_zona_ambigua_pendiente(self):
+        # |línea| entre 2 y 3 sin sujeto: ambiguo sets/juegos.
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])
+        pick = _pick_tenis("Alcaraz -2.5", "hándicap")
+        pick.linea = -2.5
         acierto, anulada = await verify_pick(pick, [provider])
         assert (acierto, anulada) == (None, False)
+
+    async def test_gana_un_set(self):
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        acierto, _ = await verify_pick(_pick_tenis("Alcaraz gana un set"), [provider])
+        assert acierto is True
+
+    async def test_gana_un_set_pierde_0_2(self):
+        provider = _StubTennisProvider(0, 2, sets=[(4, 6), (2, 6)])
+        acierto, _ = await verify_pick(_pick_tenis("Alcaraz gana un set"), [provider])
+        assert acierto is False
+
+    async def test_over_juegos_linea_plus(self):
+        # "21+ juegos" = over 20.5; 6-4 6-4 = 20 juegos -> falla.
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])
+        acierto, _ = await verify_pick(
+            _pick_tenis("21+ juegos", "total juegos"), [provider]
+        )
+        assert acierto is False
+
+    async def test_over_juegos_o_mas(self):
+        # "20 o más juegos" = over 19.5; 6-4 6-4 = 20 -> acierta.
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])
+        pick = _pick_tenis("20 o más juegos", "total juegos")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
 
     async def test_over_under_sin_direccion_pendiente(self):
         # Mercado "over/under juegos" + selección sin lado -> pendiente,

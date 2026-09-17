@@ -237,3 +237,15 @@ class TestExtractLinea:
 
     def test_sin_linea_devuelve_none(self):
         assert _extract_linea("Real Madrid gana") is None
+
+    def test_linea_con_mas_final(self):
+        # "21+ juegos" = over 20.5
+        assert _extract_linea("21+ juegos") == 20.5
+
+    def test_linea_o_mas(self):
+        # "20 o más juegos" = over 19.5
+        assert _extract_linea("20 o más juegos") == 19.5
+
+    def test_mas_final_no_pisa_handicap(self):
+        # El hándicap con signo tiene prioridad sobre el "+" final.
+        assert _extract_linea("Alcaraz -1.5 sets") == -1.5
