@@ -278,6 +278,44 @@ class TestTennisMarkets:
         acierto, _ = await verify_pick(_pick_tenis("Alcaraz gana un set"), [provider])
         assert acierto is False
 
+    async def test_correct_score_juegos_acierta(self):
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 2)])
+        acierto, _ = await verify_pick(_pick_tenis("Alcaraz gana 6-4 6-2"), [provider])
+        assert acierto is True
+
+    async def test_correct_score_juegos_falla_otro_marcador(self):
+        # 6-3 en el segundo set no es 6-2.
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 3)])
+        acierto, _ = await verify_pick(_pick_tenis("Alcaraz gana 6-4 6-2"), [provider])
+        assert acierto is False
+
+    async def test_correct_score_juegos_falla_numero_sets(self):
+        # El partido fue a 3 sets: el "6-4 6-2" exacto es imposible.
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        acierto, _ = await verify_pick(_pick_tenis("Alcaraz gana 6-4 6-2"), [provider])
+        assert acierto is False
+
+    async def test_correct_score_juegos_via_mercado(self):
+        # Marcador en orden del evento "Alcaraz - Sinner".
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 2)])
+        pick = _pick_tenis("Sinner", "resultado exacto 6-4 6-2")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_correct_score_sin_desglose_pendiente(self):
+        provider = _StubTennisProvider(2, 0)
+        acierto, anulada = await verify_pick(
+            _pick_tenis("Alcaraz gana 6-4 6-2"), [provider]
+        )
+        assert (acierto, anulada) == (None, False)
+
+    async def test_correct_score_retirada_anulada(self):
+        provider = _StubTennisProvider(1, 0, sets=[(6, 4)], status="retired")
+        acierto, anulada = await verify_pick(
+            _pick_tenis("Alcaraz gana 6-4 6-2"), [provider]
+        )
+        assert (acierto, anulada) == (None, True)
+
     async def test_over_juegos_linea_plus(self):
         # "21+ juegos" = over 20.5; 6-4 6-4 = 20 juegos -> falla.
         provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])

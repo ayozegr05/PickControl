@@ -93,6 +93,9 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
         ≥3.5 → juegos, en medio pendiente); "gana un set" y líneas
         "21+"/"20 o más" (= over N-0.5) soportadas en verificador y
         extractor.
+      - ~~Correct score en juegos~~ — **hecho**: "gana 6-4 6-2" compara
+        el desglose set a set (orientado al jugador o al orden del
+        evento); exige mismo número de sets.
 - [x] **Amortizar el límite de API-Football** (implementado): caché de
       fixtures por fecha + caché de stats/events/players por fixture,
       pendientes ordenados por `fecha_evento` DESC (los picks que caducan
@@ -250,10 +253,11 @@ importados). "Push" (líneas enteras) y aplazados/cancelados >72 h se marcan
   ganador de set individual, tiebreak sí/no (vía `MatchResult.sets`) y
   **dobles** (matching por parejas: exige todos los miembros en la pista, y
   una pista de dobles no casa con un individual). RET/W-O → anulada
-  automática. Líneas "21+"/"N o más" y hándicap sin sujeto (convención:
-  ≤1.5 sets, ≥3.5 juegos, en medio pendiente) soportadas.
-  Pendiente a propósito: combinadas (sección propia) y correct score en
-  juegos, mercado casi inexistente en los canales.
+  automática, correct score en juegos ("gana 6-4 6-2"). Líneas
+  "21+"/"N o más" y hándicap sin sujeto (convención: ≤1.5 sets,
+  ≥3.5 juegos, en medio pendiente) soportadas.
+  Pendiente a propósito: combinadas (sección propia) y hándicap sin
+  sujeto en la zona ambigua |línea| 2-3.
 - **Baloncesto** sin proveedor (API-Basketball de api-sports.io sería el
   candidato).
 - Futuro: plan de pago de API-Football eliminaría la restricción de fechas.

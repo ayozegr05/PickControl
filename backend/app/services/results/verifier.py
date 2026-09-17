@@ -951,6 +951,42 @@ async def _verify_tennis_pick(
     seleccion = pick.seleccion or ""
     text = f"{seleccion} {pick.mercado or ''}"
 
+    # Correct score en juegos ("gana 6-4 6-2"): va ANTES del marcador de
+    # sets — si no, "6-4" se leería como un marcador de sets imposible.
+    games_pred = _extract_tennis_games_prediction(seleccion, pick.mercado)
+    if games_pred:
+        team, pred_pairs, player_oriented = games_pred
+        team_hint = pick.evento or team
+        match = await _find_match_across_providers(
+            pick.fecha_evento, team_hint, providers, pick.id
+        )
+        if not match:
+            return None, False
+        if match.status in _TENNIS_VOID_STATUSES:
+            return None, True
+        if not match.sets:
+            return None, False
+        player_side = _tennis_side(match, team)
+        if player_side is None:
+            return None, False
+        # El marcador exacto exige mismo número de sets.
+        if len(match.sets) != len(pred_pairs):
+            return False, False
+        reversed_order = bool(pick.evento) and match_reversed(
+            pick.evento, match.home_team, match.away_team
+        )
+        player_first_in_event = (player_side == 0) != reversed_order
+        for i, (a, b) in enumerate(pred_pairs):
+            if player_oriented:
+                pred_p, pred_o = a, b
+            else:
+                pred_p, pred_o = (a, b) if player_first_in_event else (b, a)
+            home_g, away_g = match.sets[i]
+            act_p, act_o = (home_g, away_g) if player_side == 0 else (away_g, home_g)
+            if (act_p, act_o) != (pred_p, pred_o):
+                return False, False
+        return True, False
+
     sets_pred = _extract_tennis_sets_prediction(seleccion, pick.mercado)
     if sets_pred:
         team, s1, s2, player_oriented = sets_pred
@@ -1160,6 +1196,36 @@ async def _verify_tennis_pick(
     if totals is None:
         return None, False
     return _handicap_result(totals[0], totals[1], linea)
+
+
+def _extract_tennis_games_prediction(
+    seleccion: str, mercado: Optional[str]
+) -> Optional[tuple[str, list[tuple[int, int]], bool]]:
+    """(jugador, [(juegos_a, juegos_b) por set], player_oriented) para un
+    correct score EN JUEGOS ("Alcaraz gana 6-4 6-2").
+
+    Se distingue del marcador de sets por el número de pares: >=2 pares
+    "N-M" son juegos por set; un solo par es el marcador de sets (lo
+    maneja `_extract_tennis_sets_prediction`). Orientación igual que en
+    sets: con verbo ("gana") el marcador va con el jugador; vía mercado
+    "resultado exacto" describe el partido en orden del evento.
+    """
+    sel = seleccion or ""
+    m = _TENNIS_SETS_AFTER_VERB.search(sel)
+    if m:
+        pairs = _SCORELINE.findall(sel[m.start() :])
+        if len(pairs) >= 2:
+            team = _clean_team_name(sel[: m.start()])
+            if team:
+                return team, [(int(a), int(b)) for a, b in pairs], True
+    if mercado and _EXACT_SCORE_MARKET.search(mercado):
+        src = mercado if len(_SCORELINE.findall(mercado)) >= 2 else sel
+        pairs = _SCORELINE.findall(src)
+        if len(pairs) >= 2:
+            team = _clean_team_name(sel)
+            if team:
+                return team, [(int(a), int(b)) for a, b in pairs], False
+    return None
 
 
 def _extract_tennis_sets_prediction(
