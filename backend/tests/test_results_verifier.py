@@ -6,6 +6,8 @@ predicho y la resolución del ganador a partir de un marcador.
 
 from datetime import datetime
 
+import pytest
+
 import app.services.results.api_football as api_football
 import app.services.results.football_data as football_data
 from app.models.parsed_pick import ParsedPick
@@ -24,6 +26,14 @@ from app.services.results.verifier import (
     _should_attempt_verification,
     verify_pick,
 )
+
+
+@pytest.fixture(autouse=True)
+def _api_football_sin_limite(monkeypatch):
+    """`provider_state.json` real puede tener api-football marcado como
+    sin cuota "hoy" (lo escribe el backend en marcha). En tests siempre
+    hay cuota salvo que el propio test lo pise con otro monkeypatch."""
+    monkeypatch.setattr(api_football, "is_rate_limited", lambda name: False)
 
 
 class TestExtractPredictedTeam:
@@ -738,6 +748,59 @@ class _RoutingClient:
         if "statistics" in url:
             return _FakeResponse(self._stats)
         return _FakeResponse(self._fixtures)
+
+
+class TestApiFootballRateLimit:
+    """API-Football devuelve el límite diario como HTTP 200 con
+    `errors` en el JSON — hay que detectarlo y dejar de llamar."""
+
+    async def test_request_limit_se_detecta_y_para(self, monkeypatch):
+        calls = []
+        limited: list[str] = []
+        monkeypatch.setattr(api_football, "is_rate_limited", lambda name: bool(limited))
+        monkeypatch.setattr(
+            api_football,
+            "mark_rate_limited",
+            lambda name: limited.append(name),
+        )
+        payload = {
+            "response": [],
+            "errors": {"requests": "You have reached the request limit for the day"},
+        }
+        monkeypatch.setattr(
+            api_football.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient(calls, payload),
+        )
+        provider = ApiFootballProvider("key", "v3.football.api-sports.io")
+
+        assert await provider.find_match(datetime(2026, 9, 16), "Levante") is None
+        assert limited == ["api-football"]
+        # Tras detectar la cuota agotada, los otros offsets ni se piden.
+        assert len(calls) == 1
+
+    async def test_error_de_plan_no_marca_cuota(self, monkeypatch):
+        calls = []
+        limited: list[str] = []
+        monkeypatch.setattr(api_football, "is_rate_limited", lambda name: bool(limited))
+        monkeypatch.setattr(
+            api_football,
+            "mark_rate_limited",
+            lambda name: limited.append(name),
+        )
+        payload = {
+            "response": [],
+            "errors": {"plan": "Free plans do not have access to this date"},
+        }
+        monkeypatch.setattr(
+            api_football.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient(calls, payload),
+        )
+        provider = ApiFootballProvider("key", "v3.football.api-sports.io")
+
+        assert await provider.find_match(datetime(2026, 9, 15), "Levante") is None
+        assert limited == []  # fecha fuera de ventana no es falta de cuota
 
 
 class TestApiFootballStats:

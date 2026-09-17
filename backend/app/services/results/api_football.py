@@ -20,7 +20,13 @@ from typing import Optional
 import httpx
 
 from app.core.logging import get_logger
-from app.services.results.base import MatchResult, MatchStats, match_score
+from app.services.results.base import (
+    MatchResult,
+    MatchStats,
+    is_rate_limited,
+    mark_rate_limited,
+    match_score,
+)
 
 logger = get_logger("app.results.api_football")
 
@@ -83,9 +89,28 @@ class ApiFootballProvider:
             return f"https://{self._api_host}/v3/fixtures/statistics"
         return f"https://{self._api_host}/fixtures/statistics"
 
+    def _check_errors(self, data: dict, context: str) -> None:
+        """API-Football devuelve los fallos de plan/cuota como HTTP 200
+        con un objeto `errors` dentro del JSON — sin este check se
+        interpretaría como "sin fixtures" y seguiría quemando llamadas."""
+        errors = data.get("errors") or {}
+        if not errors:
+            return
+        if any("request limit" in str(v).lower() for v in errors.values()):
+            logger.warning(
+                "[API-Football] Cuota diaria agotada (%s); se salta hasta mañana.",
+                context,
+            )
+            mark_rate_limited("api-football")
+        elif any("plan" in str(k).lower() for k in errors):
+            # Fecha fuera de la ventana del plan gratis: normal, no cuota.
+            logger.debug("[API-Football] %s fuera de la ventana del plan.", context)
+
     async def _fetch_fixtures(self, client: httpx.AsyncClient, date_str: str) -> list:
         if date_str in self._fixtures_cache:
             return self._fixtures_cache[date_str]
+        if is_rate_limited("api-football"):
+            return []
         try:
             response = await client.get(
                 self._fixtures_url(),
@@ -96,7 +121,9 @@ class ApiFootballProvider:
         except httpx.HTTPError as exc:
             logger.warning("[API-Football] Error de API (%s): %s", date_str, exc)
             return []
-        fixtures = response.json().get("response", [])
+        data = response.json()
+        self._check_errors(data, f"fixtures {date_str}")
+        fixtures = data.get("response", [])
         self._fixtures_cache[date_str] = fixtures
         return fixtures
 
@@ -105,6 +132,8 @@ class ApiFootballProvider:
     ) -> list:
         if fixture_id in self._stats_cache:
             return self._stats_cache[fixture_id]
+        if is_rate_limited("api-football"):
+            return []
         try:
             response = await client.get(
                 self._statistics_url(),
@@ -119,7 +148,9 @@ class ApiFootballProvider:
                 exc,
             )
             return []
-        stats = response.json().get("response", [])
+        data = response.json()
+        self._check_errors(data, f"stats fixture {fixture_id}")
+        stats = data.get("response", [])
         self._stats_cache[fixture_id] = stats
         return stats
 
