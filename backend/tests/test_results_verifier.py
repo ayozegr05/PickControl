@@ -5,7 +5,7 @@ predicho y la resolución del ganador a partir de un marcador.
 """
 
 from datetime import date as date_type
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -16,7 +16,9 @@ from app.services.results.api_football import ApiFootballProvider
 from app.services.results.api_tennis import ApiTennisProvider
 from app.services.results.base import (
     MatchEvents,
+    MatchPlayers,
     MatchResult,
+    MatchState,
     MatchStats,
     match_score,
 )
@@ -316,6 +318,7 @@ def _pick(
     mercado: str | None,
     linea: float | None = None,
     evento: str | None = "Levante - Real Betis",
+    fecha_evento: datetime | None = None,
 ) -> ParsedPick:
     return ParsedPick(
         raw_message_id=1,
@@ -324,7 +327,7 @@ def _pick(
         seleccion=seleccion,
         linea=linea,
         evento=evento,
-        fecha_evento=datetime(2026, 9, 15, 21, 0),
+        fecha_evento=fecha_evento or datetime(2026, 9, 15, 21, 0),
     )
 
 
@@ -424,13 +427,19 @@ class TestStatOverUnder:
 
 
 class _StubEventsProvider:
-    """Proveedor con eventos de partido (goles, tarjetas, cambios)."""
+    """Proveedor con eventos de partido (goles, tarjetas, cambios).
+
+    `players` simula `/fixtures/players` (quién disputó minutos): solo
+    se consulta cuando el jugador no aparece en ningún evento.
+    """
 
     SUPPORTED_SPORTS = frozenset({"futbol"})
 
-    def __init__(self, events: MatchEvents | None):
+    def __init__(self, events: MatchEvents | None, players: MatchPlayers | None = None):
         self._events = events
+        self._players = players
         self.calls = 0
+        self.players_calls = 0
 
     async def find_match(self, date, team_hint):
         return None
@@ -438,6 +447,10 @@ class _StubEventsProvider:
     async def find_match_events(self, date, team_hint):
         self.calls += 1
         return self._events
+
+    async def find_match_players(self, date, team_hint):
+        self.players_calls += 1
+        return self._players
 
 
 def _events(
@@ -458,6 +471,10 @@ def _events(
         booked=booked,
         participants=participants,
     )
+
+
+def _players(played: list[str]) -> MatchPlayers:
+    return MatchPlayers(home_team="Barcelona", away_team="Al Ahly Cairo", played=played)
 
 
 class TestPlayerMarkets:
@@ -516,6 +533,143 @@ class TestPlayerMarkets:
         pick = _pick("Iñigo Martínez recibe tarjeta", "tarjetas jugador")
         acierto, _ = await verify_pick(pick, [provider])
         assert acierto is True
+
+    async def test_jugador_que_no_jugo_es_anulada(self):
+        # No aparece en eventos y la lista de jugadores con minutos
+        # confirma que no disputó el partido: la casa devuelve.
+        provider = _StubEventsProvider(
+            _events(scorers=["Lamine Yamal"]),
+            players=_players(["Lamine Yamal", "Lewandowski", "Pedri"]),
+        )
+        pick = _pick("Raphinha marca gol", None)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, True)
+        assert provider.players_calls == 1
+
+    async def test_jugo_sin_eventos_es_fallo(self):
+        # Jugó 90' sin generar ningún evento: no aparece en events pero
+        # sí en la lista de jugadores con minutos -> fallo, no anulada.
+        provider = _StubEventsProvider(
+            _events(scorers=["Lamine Yamal"]),
+            players=_players(["Lamine Yamal", "Raphinha Dias"]),
+        )
+        pick = _pick("Raphinha marca gol", None)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (False, False)
+
+    async def test_sin_datos_de_jugadores_sigue_pendiente(self):
+        # El endpoint de players no devolvió datos fiables: no se
+        # asume que no jugó.
+        provider = _StubEventsProvider(_events(scorers=["Lamine Yamal"]), players=None)
+        pick = _pick("Raphinha marca gol", None)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+        assert provider.players_calls == 1
+
+    async def test_no_consulta_players_si_eventos_ya_resuelven(self):
+        # El jugador marcó: no hace falta la llamada extra a players.
+        provider = _StubEventsProvider(
+            _events(scorers=["Raphinha"]), players=_players(["Raphinha"])
+        )
+        pick = _pick("Raphinha marca gol", None)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+        assert provider.players_calls == 0
+
+
+class _StubPostponedProvider:
+    """Proveedor que localiza partidos aplazados/cancelados."""
+
+    SUPPORTED_SPORTS = frozenset({"futbol"})
+
+    def __init__(self, state: MatchState | None):
+        self._state = state
+        self.calls = 0
+        self.postponed_calls = 0
+
+    async def find_match(self, date, team_hint):
+        self.calls += 1
+        return None
+
+    async def find_postponed_match(self, date, team_hint):
+        self.postponed_calls += 1
+        return self._state
+
+
+class TestPostponedVoid:
+    """Partido aplazado/cancelado fuera de la ventana de la casa
+    (~72 h) -> la apuesta se devuelve (anulada), sea cual sea el
+    mercado. Los parados a mitad (SUSP/ABD) no entran aquí."""
+
+    def _postponed(self) -> MatchState:
+        return MatchState(
+            home_team="Levante", away_team="Real Betis", status="postponed"
+        )
+
+    async def test_aplazado_viejo_es_anulada(self):
+        provider = _StubPostponedProvider(self._postponed())
+        pick = _pick(
+            "Levante gana",
+            "ganador",
+            fecha_evento=datetime(2020, 1, 1, 21, 0),
+        )
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, True)
+        assert provider.calls == 0  # ni siquiera llega al marcador
+
+    async def test_aplazado_reciente_sigue_pendiente(self):
+        # Dentro de la ventana de reprogramación de la casa: aún puede
+        # jugarse -> pendiente, ni se consulta el estado de aplazado.
+        provider = _StubPostponedProvider(self._postponed())
+        pick = _pick(
+            "Levante gana",
+            "ganador",
+            fecha_evento=datetime.now() - timedelta(hours=1),
+        )
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+        assert provider.postponed_calls == 0
+
+    async def test_partido_jugado_sigue_su_curso(self):
+        # find_postponed no encuentra nada (el partido se disputó):
+        # la verificación continúa por el camino normal.
+        provider = _StubPostponedProvider(None)
+
+        async def find_match(date, team_hint):
+            return _match(2, 0)
+
+        provider.find_match = find_match
+        pick = _pick(
+            "Levante gana",
+            "ganador",
+            fecha_evento=datetime(2020, 1, 1, 21, 0),
+        )
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_sin_evento_no_consulta_aplazados(self):
+        provider = _StubPostponedProvider(self._postponed())
+        pick = _pick(
+            "Levante gana",
+            "ganador",
+            evento=None,
+            fecha_evento=datetime(2020, 1, 1, 21, 0),
+        )
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+        assert provider.postponed_calls == 0
+
+    async def test_tambien_anula_mercados_de_stats(self):
+        # El aplazamiento aplica a cualquier mercado (córners, jugador...).
+        provider = _StubPostponedProvider(self._postponed())
+        pick = _pick(
+            "Más de 8.0 córners",
+            "over/under",
+            linea=8.0,
+            fecha_evento=datetime(2020, 1, 1, 21, 0),
+        )
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, True)
 
 
 class TestDoubleChance:
@@ -837,11 +991,19 @@ class _RoutingClient:
     """Como _CountingClient pero devuelve distinto payload según la URL
     (fixtures vs fixtures/statistics vs fixtures/events)."""
 
-    def __init__(self, calls, fixtures_payload, stats_payload, events_payload=None):
+    def __init__(
+        self,
+        calls,
+        fixtures_payload,
+        stats_payload,
+        events_payload=None,
+        players_payload=None,
+    ):
         self._calls = calls
         self._fixtures = fixtures_payload
         self._stats = stats_payload
         self._events = events_payload or {"response": []}
+        self._players = players_payload or {"response": []}
 
     async def __aenter__(self):
         return self
@@ -855,6 +1017,8 @@ class _RoutingClient:
             return _FakeResponse(self._stats)
         if "events" in url:
             return _FakeResponse(self._events)
+        if "players" in url:
+            return _FakeResponse(self._players)
         return _FakeResponse(self._fixtures)
 
 
@@ -1101,3 +1265,200 @@ class TestApiFootballEvents:
         # Todos los que aparecen en algún evento son "participantes".
         assert "Pau Cubarsí" in events.participants
         assert "Ansu Fati" in events.participants
+
+
+class TestApiFootballPostponed:
+    """Fixtures aplazados/cancelados: sirven para anular el pick."""
+
+    async def test_fixture_aplazado_devuelve_match_state(self, monkeypatch):
+        calls = []
+        fixture = {
+            "fixture": {"id": 77, "status": {"short": "PST"}},
+            "teams": {
+                "home": {"id": 10, "name": "Levante UD"},
+                "away": {"id": 20, "name": "Athletic Club"},
+            },
+            "goals": {"home": None, "away": None},
+        }
+        monkeypatch.setattr(
+            api_football.httpx,
+            "AsyncClient",
+            lambda **kw: _RoutingClient(
+                calls, {"response": [fixture]}, {"response": []}
+            ),
+        )
+        provider = ApiFootballProvider("key", "v3.football.api-sports.io")
+
+        state = await provider.find_postponed_match(
+            datetime(2026, 9, 16), "Levante - Athletic"
+        )
+        assert state is not None
+        assert state.status == "postponed"
+        assert state.home_team == "Levante UD"
+        # Y ese mismo fixture no se ofrece como resultado finalizado.
+        assert (
+            await provider.find_match(datetime(2026, 9, 16), "Levante - Athletic")
+            is None
+        )
+
+    async def test_fixture_suspendido_no_es_aplazado(self, monkeypatch):
+        # SUSP (parado a mitad) no anula: con marcador parcial algunos
+        # mercados ya están decididos y la casa los paga.
+        calls = []
+        fixture = {
+            "fixture": {"id": 78, "status": {"short": "SUSP"}},
+            "teams": {
+                "home": {"id": 10, "name": "Levante UD"},
+                "away": {"id": 20, "name": "Athletic Club"},
+            },
+            "goals": {"home": 1, "away": 0},
+        }
+        monkeypatch.setattr(
+            api_football.httpx,
+            "AsyncClient",
+            lambda **kw: _RoutingClient(
+                calls, {"response": [fixture]}, {"response": []}
+            ),
+        )
+        provider = ApiFootballProvider("key", "v3.football.api-sports.io")
+        state = await provider.find_postponed_match(
+            datetime(2026, 9, 16), "Levante - Athletic"
+        )
+        assert state is None
+
+
+class TestApiFootballPlayers:
+    """/fixtures/players: quién disputó minutos (anulada si no jugó)."""
+
+    async def test_parsea_jugadores_con_minutos(self, monkeypatch):
+        calls = []
+        fixture = {
+            "fixture": {"id": 55, "status": {"short": "FT"}},
+            "teams": {
+                "home": {"id": 10, "name": "Barcelona"},
+                "away": {"id": 20, "name": "Al Ahly Cairo"},
+            },
+            "goals": {"home": 3, "away": 0},
+        }
+        players_payload = {
+            "response": [
+                {
+                    "team": {"id": 10, "name": "Barcelona"},
+                    "players": [
+                        {
+                            "player": {"name": "Lamine Yamal"},
+                            "statistics": [{"games": {"minutes": 90}}],
+                        },
+                        {
+                            # Convocado pero no entró: 0 minutos.
+                            "player": {"name": "Marc Bernal"},
+                            "statistics": [{"games": {"minutes": 0}}],
+                        },
+                        {
+                            "player": {"name": "Ferran Torres"},
+                            "statistics": [{"games": {"minutes": 25}}],
+                        },
+                    ],
+                }
+            ]
+        }
+        monkeypatch.setattr(
+            api_football.httpx,
+            "AsyncClient",
+            lambda **kw: _RoutingClient(
+                calls,
+                {"response": [fixture]},
+                {"response": []},
+                players_payload=players_payload,
+            ),
+        )
+        provider = ApiFootballProvider("key", "v3.football.api-sports.io")
+
+        players = await provider.find_match_players(
+            datetime(2026, 9, 15), "Barcelona - Al Ahly"
+        )
+        assert players is not None
+        assert players.played == ["Lamine Yamal", "Ferran Torres"]
+
+    async def test_sin_datos_devuelve_none(self, monkeypatch):
+        calls = []
+        fixture = {
+            "fixture": {"id": 55, "status": {"short": "FT"}},
+            "teams": {
+                "home": {"id": 10, "name": "Barcelona"},
+                "away": {"id": 20, "name": "Al Ahly Cairo"},
+            },
+            "goals": {"home": 3, "away": 0},
+        }
+        monkeypatch.setattr(
+            api_football.httpx,
+            "AsyncClient",
+            lambda **kw: _RoutingClient(
+                calls, {"response": [fixture]}, {"response": []}
+            ),
+        )
+        provider = ApiFootballProvider("key", "v3.football.api-sports.io")
+        players = await provider.find_match_players(
+            datetime(2026, 9, 15), "Barcelona - Al Ahly"
+        )
+        assert players is None
+
+
+class TestFootballDataPostponed:
+    """football-data: POSTPONED/CANCELLED -> MatchState (con histórico,
+    cubre también partidos viejos fuera de la ventana de API-Football)."""
+
+    async def test_partido_aplazado_devuelve_match_state(self, monkeypatch):
+        calls = []
+        payload = {
+            "matches": [
+                {
+                    "status": "POSTPONED",
+                    "homeTeam": {"name": "Levante UD"},
+                    "awayTeam": {"name": "Athletic Club"},
+                    "score": {"fullTime": {"home": None, "away": None}},
+                },
+                {
+                    "status": "FINISHED",
+                    "homeTeam": {"name": "Real Madrid"},
+                    "awayTeam": {"name": "Getafe CF"},
+                    "score": {"fullTime": {"home": 2, "away": 0}},
+                },
+            ]
+        }
+        monkeypatch.setattr(
+            football_data.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient(calls, payload),
+        )
+        provider = FootballDataProvider("key")
+
+        state = await provider.find_postponed_match(
+            datetime(2026, 9, 16), "Levante - Athletic"
+        )
+        assert state is not None
+        assert state.status == "postponed"
+        assert state.home_team == "Levante UD"
+
+    async def test_partido_jugado_no_es_aplazado(self, monkeypatch):
+        calls = []
+        payload = {
+            "matches": [
+                {
+                    "status": "FINISHED",
+                    "homeTeam": {"name": "Levante UD"},
+                    "awayTeam": {"name": "Athletic Club"},
+                    "score": {"fullTime": {"home": 1, "away": 0}},
+                }
+            ]
+        }
+        monkeypatch.setattr(
+            football_data.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient(calls, payload),
+        )
+        provider = FootballDataProvider("key")
+        state = await provider.find_postponed_match(
+            datetime(2026, 9, 16), "Levante - Athletic"
+        )
+        assert state is None

@@ -110,6 +110,14 @@ _MAX_VERIFICATION_AGE = timedelta(days=14)
 # par de ciclos bastan para resolverlos o descartarlos.
 _RECENTLY_CREATED_GRACE = timedelta(hours=6)
 
+# Si el partido quedó aplazado/cancelado, la casa devuelve la apuesta
+# cuando no se reprograma dentro de su ventana (~24-72 h según la casa;
+# usamos la más conservadora). Solo cuenta el aplazamiento "limpio"
+# (POSTPONED/CANCELLED): un partido parado a mitad (SUSP/ABD) puede
+# tener mercados ya decididos que la casa paga igualmente — esos
+# siguen pendientes.
+_POSTPONED_VOID_AFTER = timedelta(hours=72)
+
 
 def _should_attempt_verification(pick: ParsedPick, now: datetime) -> bool:
     """True si el pick merece un intento de verificación en esta pasada.
@@ -483,9 +491,10 @@ def _resolve_btts(match: MatchResult, yes: bool) -> tuple[bool, bool]:
 #
 # Se resuelven con los eventos del partido (API-Football
 # /fixtures/events). Regla de las casas: si el jugador no participa la
-# apuesta se anula — como los eventos no dicen explícitamente quién
-# jugó, solo se marca fallo cuando el jugador aparece en ALGÚN evento
-# (cambio, tarjeta, gol...); si no consta, queda pendiente.
+# apuesta se anula — por eso, cuando el jugador no consta en ningún
+# evento, se consulta además /fixtures/players (lista de los que
+# disputaron minutos): consta que jugó -> fallo; consta que no jugó ->
+# anulada; sin datos fiables -> pendiente (nunca se asume que no jugó).
 _PLAYER_SCORER_PATTERN = re.compile(
     r"\bmarca\b|\banotar?[áa]?\b|goleador|scorer", re.IGNORECASE
 )
@@ -543,9 +552,19 @@ def _player_name_matches(hint: str, name: str) -> bool:
 
 
 def _resolve_player_market(
-    events: MatchEvents, player: str, mode: str
+    events: MatchEvents,
+    player: str,
+    mode: str,
+    played: Optional[list[str]] = None,
 ) -> tuple[Optional[bool], bool]:
-    """Resuelve "X marca" / "X marca o asiste" / "X recibe tarjeta"."""
+    """Resuelve "X marca" / "X marca o asiste" / "X recibe tarjeta".
+
+    `played` es la lista de jugadores que disputaron minutos
+    (/fixtures/players), si el proveedor la tiene: con ella se
+    distingue "jugó sin acertar el mercado" (fallo) de "no jugó"
+    (anulada — la casa devuelve). Sin ella, un jugador sin eventos
+    queda pendiente.
+    """
 
     def hit(names: list[str]) -> bool:
         return any(_player_name_matches(player, n) for n in names)
@@ -558,10 +577,12 @@ def _resolve_player_market(
     elif mode == "booked" and hit(events.booked):
         return True, False
 
-    # No acertó: solo se marca fallo si consta que participó (si no,
-    # la casa anula y no podemos saberlo -> pendiente).
+    # No acertó: fallo si consta que participó (evento o minutos);
+    # anulada si consta que no jugó; pendiente si no hay dato fiable.
     if hit(events.participants):
         return False, False
+    if played is not None:
+        return (False, False) if hit(played) else (None, True)
     return None, False
 
 
@@ -670,6 +691,59 @@ async def _find_events_across_providers(
     return None
 
 
+async def _find_players_across_providers(
+    date: datetime,
+    team_hint: str,
+    providers: list[ResultsProvider],
+    pick_id: Optional[int],
+):
+    """Jugadores con minutos disputados: solo los proveedores que
+    implementan `find_match_players` (hoy API-Football)."""
+    for provider in providers:
+        finder = getattr(provider, "find_match_players", None)
+        if finder is None:
+            continue
+        try:
+            players = await finder(date, team_hint)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[RESULTS_VERIFIER] Error consultando players para pick id=%s: %s",
+                pick_id,
+                exc,
+            )
+            continue
+        if players:
+            return players
+    return None
+
+
+async def _find_postponed_across_providers(
+    date: datetime,
+    team_hint: str,
+    providers: list[ResultsProvider],
+    pick_id: Optional[int],
+):
+    """Partido aplazado/cancelado: solo los proveedores que implementan
+    `find_postponed_match` (football-data y API-Football). Reusa las
+    listas de fixtures ya cacheadas — no cuesta llamadas extra."""
+    for provider in providers:
+        finder = getattr(provider, "find_postponed_match", None)
+        if finder is None:
+            continue
+        try:
+            state = await finder(date, team_hint)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[RESULTS_VERIFIER] Error consultando aplazados para pick id=%s: %s",
+                pick_id,
+                exc,
+            )
+            continue
+        if state:
+            return state
+    return None
+
+
 async def verify_pick(
     pick: ParsedPick, providers: list[ResultsProvider]
 ) -> tuple[Optional[bool], bool]:
@@ -705,6 +779,24 @@ async def verify_pick(
         # "ganador" solo comprobaría la primera y daría un falso
         # resultado. Manual hasta modelar las selecciones sueltas.
         return None, False
+
+    if pick.evento and pick.fecha_evento < utc_now() - _POSTPONED_VOID_AFTER:
+        # Pasada la ventana de reprogramación de la casa (~72 h) y el
+        # partido consta aplazado/cancelado: la apuesta se devuelve,
+        # sea cual sea el mercado. Si se jugó, esto no encuentra nada
+        # y la verificación sigue su curso normal.
+        state = await _find_postponed_across_providers(
+            pick.fecha_evento, pick.evento, providers_for_sport, pick.id
+        )
+        if state:
+            logger.info(
+                "[RESULTS_VERIFIER] Pick id=%s anulado: partido %s (%s vs %s).",
+                pick.id,
+                state.status,
+                state.home_team,
+                state.away_team,
+            )
+            return None, True
 
     # Mercados de fútbol que se resuelven solo con el marcador final.
     combined = f"{pick.mercado or ''} {pick.seleccion or ''}"
@@ -830,7 +922,19 @@ async def verify_pick(
         )
         if not events:
             return None, False
-        return _resolve_player_market(events, player, mode)
+        result = _resolve_player_market(events, player, mode)
+        if result != (None, False):
+            return result
+        # El jugador no consta en ningún evento: consultar quién
+        # disputó minutos para distinguir fallo (jugó sin acertar) de
+        # anulada (no jugó -> la casa devuelve). Solo se llama en este
+        # caso ambiguo — si el endpoint no da datos, pendiente.
+        players = await _find_players_across_providers(
+            pick.fecha_evento, pick.evento, providers_for_sport, pick.id
+        )
+        if players is None:
+            return None, False
+        return _resolve_player_market(events, player, mode, players.played)
 
     # Mercado "ganador" simple (o "resultado sin empate" con selección =
     # solo el nombre del equipo).

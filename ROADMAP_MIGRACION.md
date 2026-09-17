@@ -98,17 +98,21 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
       pierden (el plan de pago lo arreglaría). También los **mercados de
       jugador** con `/fixtures/events` ("X marca", "X marca o asiste",
       "X recibe tarjeta"; gol en propia y penalti fallado no cuentan;
-      si el jugador no consta en ningún evento queda pendiente porque
-      la casa anularía). Pendiente aún: **primera parte/descanso** y
-      **combinadas** (hay que modelar cada selección por separado; hasta
-      entonces quedan manuales — nunca se verifican contra una sola
-      selección, eso sería un falso resultado).
-- [ ] **Partidos aplazados/suspendidos → anulada**: hoy solo se aceptan
-      fixtures `FINISHED`/`FT`, así que un aplazado (p. ej. Levante-Athletic
-      por lluvia) queda pendiente indefinidamente hasta que se juegue.
-      Falta la política: si el fixture sigue `SUSP`/`POSTPONED`/`CANCELLED`
-      pasadas X horas (las casas suelen devolver si no se disputa en
-      24-72 h), marcar el pick como `anulada` en vez de esperarlo.
+      y si el jugador no consta en ningún evento se consulta además
+      `/fixtures/players`: consta que no disputó minutos → `anulada`
+      (la casa devuelve), sin datos fiables → pendiente). Pendiente
+      aún: **primera parte/descanso** y **combinadas** (hay que modelar
+      cada selección por separado; hasta entonces quedan manuales —
+      nunca se verifican contra una sola selección, eso sería un falso
+      resultado).
+- [x] **Partidos aplazados/cancelados → anulada**: implementado. Si el
+      fixture consta `POSTPONED`/`CANCELLED` (football-data) o
+      `PST`/`CANC` (API-Football) y la `fecha_evento` lleva más de 72 h
+      pasada, el pick se marca `anulada` (la casa devuelve fuera de su
+      ventana de reprogramación). Reusa las listas de fixtures ya
+      cacheadas — no cuesta llamadas extra. Quedan fuera a propósito
+      los parados a mitad (`SUSP`/`ABD`/`INT`): con marcador parcial
+      hay mercados ya decididos que la casa paga — siguen pendientes.
 - [ ] **Comparar cuota del tipster vs cuota real de mercado**: contrastar la
       cuota publicada por el informante contra la cuota disponible en APIs de
       apuestas (The Odds API, Pinnacle, Betfair...) en el momento de la
