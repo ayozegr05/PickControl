@@ -23,7 +23,9 @@ import httpx
 from app.core.logging import get_logger
 from app.services.results.base import (
     MatchEvents,
+    MatchPlayers,
     MatchResult,
+    MatchState,
     MatchStats,
     is_rate_limited,
     mark_rate_limited,
@@ -42,6 +44,14 @@ _DATE_OFFSETS = (0, -1, 1)
 # ("Free plans do not have access to this date"). Pedir fuera de esa
 # ventana quema cuota para nada (~100 req/día): se salta sin llamar.
 _FREE_DATE_RADIUS = 1
+
+# Estados que anulan la apuesta si el partido no se reprograma a tiempo:
+# aplazado (PST) y cancelado (CANC). Los parados a mitad de juego
+# (SUSP, INT, ABD) se dejan fuera a propósito: con marcador parcial hay
+# mercados ya decididos que la casa paga igualmente.
+_FINISHED_STATUS = frozenset({"FT"})
+_VOIDED_STATUSES = frozenset({"PST", "CANC"})
+_VOIDED_STATUS_NAMES = {"PST": "postponed", "CANC": "cancelled"}
 
 
 def _within_free_window(day: date_type) -> bool:
@@ -78,6 +88,9 @@ class ApiFootballProvider:
         self._stats_cache: dict[int, list] = {}
         # Ídem para eventos (goles con jugador/asistente, tarjetas...).
         self._events_cache: dict[int, list] = {}
+        # Ídem para jugadores con minutos (mercados de jugador: sirve
+        # para distinguir "jugó sin marcar" de "no jugó" -> anulada).
+        self._players_cache: dict[int, list] = {}
 
     def _headers(self) -> dict[str, str]:
         if "rapidapi" in self._api_host:
@@ -106,6 +119,11 @@ class ApiFootballProvider:
         if "rapidapi" in self._api_host:
             return f"https://{self._api_host}/v3/fixtures/events"
         return f"https://{self._api_host}/fixtures/events"
+
+    def _players_url(self) -> str:
+        if "rapidapi" in self._api_host:
+            return f"https://{self._api_host}/v3/fixtures/players"
+        return f"https://{self._api_host}/fixtures/players"
 
     def _check_errors(self, data: dict, context: str) -> None:
         """API-Football devuelve los fallos de plan/cuota como HTTP 200
@@ -197,8 +215,39 @@ class ApiFootballProvider:
         self._events_cache[fixture_id] = events
         return events
 
-    async def _find_fixture(self, date: datetime, team_hint: str) -> Optional[dict]:
-        """El fixture FT que mejor casa con el hint, o None."""
+    async def _fetch_players(self, client: httpx.AsyncClient, fixture_id: int) -> list:
+        if fixture_id in self._players_cache:
+            return self._players_cache[fixture_id]
+        if is_rate_limited("api-football"):
+            return []
+        try:
+            response = await client.get(
+                self._players_url(),
+                params={"fixture": fixture_id},
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "[API-Football] Error de API players (fixture %s): %s",
+                fixture_id,
+                exc,
+            )
+            return []
+        data = response.json()
+        self._check_errors(data, f"players fixture {fixture_id}")
+        players = data.get("response", [])
+        self._players_cache[fixture_id] = players
+        return players
+
+    async def _find_fixture(
+        self,
+        date: datetime,
+        team_hint: str,
+        statuses: frozenset = _FINISHED_STATUS,
+    ) -> Optional[dict]:
+        """El fixture con alguno de los estados dados que mejor casa
+        con el hint, o None."""
         best_match = None
         best_score = 0.0
         best_teams: tuple[str, str] | None = None
@@ -218,7 +267,7 @@ class ApiFootballProvider:
                     status_short = (
                         fixture.get("fixture", {}).get("status", {}).get("short")
                     )
-                    if status_short != "FT":
+                    if status_short not in statuses:
                         continue
                     home = fixture["teams"]["home"]["name"]
                     away = fixture["teams"]["away"]["name"]
@@ -356,4 +405,70 @@ class ApiFootballProvider:
             assisters=assisters,
             booked=booked,
             participants=participants,
+        )
+
+    async def find_postponed_match(
+        self, date: datetime, team_hint: str
+    ) -> Optional[MatchState]:
+        """Fixture aplazado/cancelado que casa con el hint, o None.
+
+        Mismo matching que `find_match` pero sobre los estados que la
+        casa anula cuando el partido no se reprograma a tiempo (PST,
+        CANC). Los parados a mitad (SUSP/INT/ABD) no entran: con
+        marcador parcial algunos mercados ya están decididos.
+        """
+        fixture = await self._find_fixture(date, team_hint, statuses=_VOIDED_STATUSES)
+        if fixture is None:
+            return None
+        status_short = fixture["fixture"]["status"]["short"]
+        return MatchState(
+            home_team=fixture["teams"]["home"]["name"],
+            away_team=fixture["teams"]["away"]["name"],
+            status=_VOIDED_STATUS_NAMES.get(status_short, "postponed"),
+        )
+
+    async def find_match_players(
+        self, date: datetime, team_hint: str
+    ) -> Optional[MatchPlayers]:
+        """Jugadores que disputaron minutos en el partido.
+
+        `/fixtures/players` lista a los que participaron con sus
+        estadísticas; sirve para decidir si un mercado de jugador es
+        fallo (jugó sin marcar/recibir tarjeta) o anulada (no jugó —
+        la casa devuelve). None si el endpoint no da datos fiables.
+        """
+        fixture = await self._find_fixture(date, team_hint)
+        if fixture is None:
+            return None
+        fixture_id = fixture.get("fixture", {}).get("id")
+        if fixture_id is None:
+            return None
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            raw_players = await self._fetch_players(client, fixture_id)
+
+        played: list[str] = []
+        for team_entry in raw_players:
+            for entry in team_entry.get("players", []):
+                name = (entry.get("player") or {}).get("name")
+                stats = entry.get("statistics") or []
+                minutes = next(
+                    (
+                        (s.get("games") or {}).get("minutes")
+                        for s in stats
+                        if (s.get("games") or {}).get("minutes") is not None
+                    ),
+                    None,
+                )
+                # Con estadísticas el jugador participó; minutes=0
+                # explícito significa convocado sin entrar.
+                if name and stats and minutes != 0 and name not in played:
+                    played.append(name)
+
+        if not played:
+            return None
+        return MatchPlayers(
+            home_team=fixture["teams"]["home"]["name"],
+            away_team=fixture["teams"]["away"]["name"],
+            played=played,
         )

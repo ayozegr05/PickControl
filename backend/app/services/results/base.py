@@ -124,6 +124,38 @@ class MatchStats:
     values: dict[str, tuple[int, int]]
 
 
+@dataclass
+class MatchState:
+    """Fixture localizado que NO llegó a jugarse (aplazado/cancelado).
+
+    Sirve para anular picks: si el partido no se disputa dentro de la
+    ventana que da la casa (~24-72 h según la casa), la apuesta se
+    devuelve. `status` va normalizado a "postponed" | "cancelled".
+    Los parados a mitad de juego (suspended/abandoned/interrupted) NO
+    entran aquí: con marcador parcial algunos mercados ya quedan
+    decididos y la casa los paga igualmente — esos siguen pendientes.
+    """
+
+    home_team: str
+    away_team: str
+    status: str
+
+
+@dataclass
+class MatchPlayers:
+    """Jugadores que disputaron minutos en un partido.
+
+    Lo devuelve `/fixtures/players` de API-Football: en mercados de
+    jugador permite distinguir "jugó sin hacer nada reseñable" (fallo)
+    de "no jugó" (la casa anula). Si el proveedor no da este dato, un
+    jugador sin eventos queda pendiente — nunca se asume que no jugó.
+    """
+
+    home_team: str
+    away_team: str
+    played: list[str]
+
+
 class ResultsProvider(Protocol):
     """Un proveedor de resultados deportivos (football-data.org, API-Football...)."""
 
