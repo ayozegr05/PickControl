@@ -45,9 +45,11 @@ from app.services.results.api_football import ApiFootballProvider
 from app.services.results.api_tennis import ApiTennisProvider
 from app.services.results.base import (
     MatchEvents,
+    MatchPlayers,
     MatchResult,
     MatchStats,
     ResultsProvider,
+    match_reversed,
 )
 from app.services.results.football_data import FootballDataProvider
 from app.services.results.rapidapi_tennis import RapidApiTennisProvider
@@ -328,6 +330,16 @@ def _resolve_winner(match: MatchResult) -> Optional[str]:
     return match.home_team if match.home_score > match.away_score else match.away_team
 
 
+def _handicap_outcome(team_score: int, opponent_score: int, linea: float) -> str:
+    """ "win" | "lose" | "push" de aplicar la línea al equipo."""
+    adjusted = team_score + linea
+    if adjusted > opponent_score:
+        return "win"
+    if adjusted < opponent_score:
+        return "lose"
+    return "push"
+
+
 def _resolve_asian_handicap(
     match: MatchResult, predicted_team: str, linea: float
 ) -> tuple[Optional[bool], bool]:
@@ -335,6 +347,13 @@ def _resolve_asian_handicap(
 
     Devuelve (acierto, anulada). Con líneas enteras puede haber "push"
     (empate técnico tras aplicar la línea) → (None, True).
+
+    Cuartos de línea (±0.25, ±0.75): la casa la parte en dos medias
+    apuestas (p. ej. +0.25 = mitad a 0, mitad a +0.5). Combinando:
+    win+win → acierto, lose+lose → fallo, win+push → acierto (media
+    ganada + media devuelta), lose+push → fallo (media perdida + media
+    devuelta). El modelo binario no expresa "media apuesta", así que se
+    aproxima al signo del resultado neto.
     """
     home_similarity = _similar(predicted_team, match.home_team)
     away_similarity = _similar(predicted_team, match.away_team)
@@ -347,12 +366,22 @@ def _resolve_asian_handicap(
     else:
         team_score, opponent_score = match.away_score, match.home_score
 
-    adjusted = team_score + linea
-    if adjusted > opponent_score:
+    # Cuarto de línea -> dos medias apuestas linea±0.25.
+    if int(round(linea * 4)) % 2 == 1:
+        lines = (linea - 0.25, linea + 0.25)
+    else:
+        lines = (linea,)
+    outcomes = [_handicap_outcome(team_score, opponent_score, ln) for ln in lines]
+
+    if all(o == "win" for o in outcomes):
         return True, False
-    if adjusted < opponent_score:
+    if all(o == "lose" for o in outcomes):
         return False, False
-    return None, True  # push: apuesta anulada/devuelta
+    if all(o == "push" for o in outcomes):
+        return None, True
+    # Mezcla posible solo win+push o lose+push (win+lose es imposible:
+    # las medias difieren en 0.5).
+    return ("win" in outcomes), False
 
 
 def _compare_over_under(
@@ -584,6 +613,153 @@ def _resolve_player_market(
     if played is not None:
         return (False, False) if hit(played) else (None, True)
     return None, False
+
+
+# --- Props de jugador con número ("X más de 1.5 tiros a puerta") ------
+#
+# Se resuelven con /fixtures/players de API-Football (estadísticas por
+# jugador). Sujeto -> claves aplanadas de la API; el orden importa
+# ("tiro a puerta" antes que "tiro", "gol" al final porque "goles" es
+# muy genérico). Si el jugador no disputó minutos -> anulada (la casa
+# devuelve); stat ausente -> 0.
+_PLAYER_PROP_SUBJECTS: tuple[tuple[re.Pattern, tuple[str, ...]], ...] = (
+    (
+        re.compile(
+            r"tiro[s]?\s+a\s+(?:puerta|porter[ií]a)|on\s+target|a\s+porter[ií]a",
+            re.IGNORECASE,
+        ),
+        ("shots.on",),
+    ),
+    (re.compile(r"tiro|disparo|shot", re.IGNORECASE), ("shots.total",)),
+    (re.compile(r"falta|foul", re.IGNORECASE), ("fouls.committed",)),
+    (re.compile(r"tarjeta|card", re.IGNORECASE), ("cards.yellow", "cards.red")),
+    (re.compile(r"asist", re.IGNORECASE), ("goals.assists",)),
+    (re.compile(r"gol", re.IGNORECASE), ("goals.total",)),
+)
+# "2 o más tiros" = total >= 2 = over 1.5.
+_AT_LEAST_PATTERN = re.compile(r"(\d+)\s*o\s+m[aá]s", re.IGNORECASE)
+_LINE_TEXT_PATTERN = re.compile(
+    r"(?:m[aá]s|menos|over|under)\s+de\s+(\d+(?:[.,]\d+)?)", re.IGNORECASE
+)
+# Relleno que no forma parte del nombre del jugador en un prop.
+_PROP_NOISE = re.compile(
+    r"\d+\s*o\s+m[aá]s|m[aá]s\s+de|menos\s+de|\bover\b|\bunder\b|"
+    r"\d+(?:[.,]\d+)?|tiro[s]?|a\s+(?:puerta|porter[ií]a)|dispar\w*|"
+    r"falta[s]?|tarjeta[s]?|gol(?:es)?|asistenc\w*|cometid\w*|recibid\w*|"
+    r"total\s+de|que\s+(?:marca|anota|recibe)|jugador|\by\b|\be\b|\bo\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_prop_player_name(seleccion: str) -> Optional[str]:
+    """Nombre del jugador en un prop con número.
+
+    Dos formatos: "Ante Budimir más de 1.5 tiros" (nombre delante) y
+    "2 o más tiros a portería - Ante Budimir" (nombre tras guion). Se
+    limpia cada trozo separado por "-", ":" o "+" y se devuelve el más
+    largo que quede.
+    """
+    candidates = []
+    for chunk in re.split(r"[-:+]", seleccion):
+        name = _clean_team_name(_PROP_NOISE.sub(" ", chunk))
+        if name:
+            candidates.append(name)
+    return max(candidates, key=len) if candidates else None
+
+
+def _detect_player_prop(
+    seleccion: str,
+    mercado: Optional[str],
+    linea: Optional[float],
+    evento: Optional[str],
+) -> Optional[tuple[str, tuple[str, ...], str, float]]:
+    """(jugador, stat_keys, direction, linea) si la selección es un
+    prop de jugador con número; None si no lo es.
+
+    Guarda anti-falso-positivo: si el "jugador" extraído son tokens del
+    propio evento ("Real Madrid más de 1.5 tiros"), es una apuesta de
+    equipo mal clasificada — no un prop.
+    """
+    text = f"{seleccion or ''} {mercado or ''}"
+    stat_keys = next(
+        (keys for pattern, keys in _PLAYER_PROP_SUBJECTS if pattern.search(text)),
+        None,
+    )
+    if not stat_keys:
+        return None
+
+    # La dirección se mira primero en la selección: el mercado suele
+    # ser "over/under ..." y contiene las dos palabras (ambiguo).
+    direction = _detect_over_under_direction(
+        seleccion or ""
+    ) or _detect_over_under_direction(mercado or "")
+    resolved_linea = linea
+    at_least = _AT_LEAST_PATTERN.search(text)
+    if at_least:
+        direction = "over"
+        if resolved_linea is None:
+            resolved_linea = int(at_least.group(1)) - 0.5
+    if resolved_linea is None:
+        m = _LINE_TEXT_PATTERN.search(text)
+        if m:
+            resolved_linea = float(m.group(1).replace(",", "."))
+    if direction is None or resolved_linea is None:
+        return None
+
+    player = _extract_prop_player_name(seleccion or "")
+    if not player:
+        return None
+    if evento:
+        player_tokens = set(re.findall(r"\w+", player.lower()))
+        evento_tokens = set(re.findall(r"\w+", evento.lower()))
+        if player_tokens and player_tokens <= evento_tokens:
+            return None
+    return (player, stat_keys, direction, resolved_linea)
+
+
+def _resolve_player_prop(
+    players: MatchPlayers,
+    player: str,
+    stat_keys: tuple[str, ...],
+    direction: str,
+    linea: float,
+) -> tuple[Optional[bool], bool]:
+    """Over/under sobre una estadística del jugador. Si no disputó
+    minutos -> anulada (la casa devuelve). Stat ausente -> 0."""
+    name = next((n for n in players.played if _player_name_matches(player, n)), None)
+    if name is None:
+        return None, True
+    total = sum(players.stats.get(name, {}).get(k, 0) for k in stat_keys)
+    return _compare_over_under(total, direction, linea)
+
+
+# --- Resultado exacto ("2-1", "marcador exacto 0-0") -----------------
+#
+# La selección es el marcador, no un equipo. El orden importa: si el
+# evento del pick va al revés que el del proveedor ("Betis - Levante"),
+# el marcador predicho también va al revés.
+_EXACT_SCORE_MARKET = re.compile(
+    r"resultado\s+exacto|marcador\s+(?:exacto|correcto)|correct\s+score",
+    re.IGNORECASE,
+)
+_BARE_SCORELINE = re.compile(r"^\s*\d+\s*[-:]\s*\d+\s*$")
+_SCORELINE = re.compile(r"(\d+)\s*[-:]\s*(\d+)")
+
+
+def _extract_exact_score(
+    seleccion: str, mercado: Optional[str]
+) -> Optional[tuple[int, int]]:
+    """(goles_local, goles_visitante) predichos, o None si no es un
+    pick de resultado exacto."""
+    text = f"{seleccion or ''} {mercado or ''}"
+    explicit = _EXACT_SCORE_MARKET.search(text)
+    bare = _BARE_SCORELINE.match(seleccion or "")
+    if not explicit and not bare:
+        return None
+    m = _SCORELINE.search(seleccion or "") or _SCORELINE.search(mercado or "")
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2))
 
 
 async def _get_providers() -> list[ResultsProvider]:
@@ -844,6 +1020,24 @@ async def verify_pick(
                 return None, False
             return _resolve_btts(match, yes=bool(btts_yes) and not btts_no)
 
+        # Resultado exacto ("2-1", "marcador exacto 0-0"): la selección
+        # es el marcador; el evento da la orientación local/visitante.
+        exact = _extract_exact_score(pick.seleccion or "", pick.mercado)
+        if exact:
+            if not pick.evento:
+                return None, False
+            match = await _find_match_across_providers(
+                pick.fecha_evento, pick.evento, providers_for_sport, pick.id
+            )
+            if not match:
+                return None, False
+            pred_home, pred_away = exact
+            if match_reversed(pick.evento, match.home_team, match.away_team):
+                pred_home, pred_away = pred_away, pred_home
+            return (
+                match.home_score == pred_home and match.away_score == pred_away
+            ), False
+
     if es_handicap and pick.linea is not None:
         team_hint = _extract_handicap_team(pick.seleccion)
         if not team_hint:
@@ -883,18 +1077,32 @@ async def verify_pick(
             # pero API-Football sí tiene /fixtures/statistics (solo
             # dentro de la ventana de fechas del plan gratis).
             stat_keys = _stat_keys_for(ou_text)
-            if not stat_keys:
-                # Sujeto sin estadística equivalente (juegos, sets,
-                # coches...): pendiente.
-                return None, False
-            stats = await _find_stats_across_providers(
-                pick.fecha_evento, team_hint, providers_for_sport, pick.id
+            if stat_keys:
+                stats = await _find_stats_across_providers(
+                    pick.fecha_evento, team_hint, providers_for_sport, pick.id
+                )
+                if stats:
+                    result = _resolve_stat_over_under(
+                        stats, stat_keys, team_total_team, direction, pick.linea
+                    )
+                    if result != (None, False):
+                        return result
+            # Sujeto sin stat de equipo, o el "equipo" no casó con
+            # ninguno: quizá es un prop de jugador ("Budimir más de
+            # 1.5 tiros a puerta").
+            prop = _detect_player_prop(
+                pick.seleccion or "", pick.mercado, pick.linea, pick.evento
             )
-            if not stats:
-                return None, False
-            return _resolve_stat_over_under(
-                stats, stat_keys, team_total_team, direction, pick.linea
-            )
+            if prop and pick.evento:
+                player, prop_keys, prop_dir, prop_linea = prop
+                players = await _find_players_across_providers(
+                    pick.fecha_evento, pick.evento, providers_for_sport, pick.id
+                )
+                if players is not None:
+                    return _resolve_player_prop(
+                        players, player, prop_keys, prop_dir, prop_linea
+                    )
+            return None, False
         if pick.linea >= _AMBIGUOUS_LINE_MIN and not _GOALS_PATTERN.search(ou_text):
             # Línea alta sin la palabra "gol": en fútbol casi seguro son
             # córners, no goles. Mejor pendiente que mal verificado.
@@ -935,6 +1143,22 @@ async def verify_pick(
         if players is None:
             return None, False
         return _resolve_player_market(events, player, mode, players.played)
+
+    # Props de jugador con número pero mercado sin over/under (p. ej.
+    # mercado="tiros a portería", seleccion="2 o más - Ante Budimir").
+    prop = _detect_player_prop(
+        pick.seleccion or "", pick.mercado, pick.linea, pick.evento
+    )
+    if prop:
+        if not pick.evento:
+            return None, False
+        player, prop_keys, prop_dir, prop_linea = prop
+        players = await _find_players_across_providers(
+            pick.fecha_evento, pick.evento, providers_for_sport, pick.id
+        )
+        if players is None:
+            return None, False
+        return _resolve_player_prop(players, player, prop_keys, prop_dir, prop_linea)
 
     # Mercado "ganador" simple (o "resultado sin empate" con selección =
     # solo el nombre del equipo).

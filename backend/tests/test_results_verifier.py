@@ -473,8 +473,45 @@ def _events(
     )
 
 
-def _players(played: list[str]) -> MatchPlayers:
-    return MatchPlayers(home_team="Barcelona", away_team="Al Ahly Cairo", played=played)
+def _players(
+    played: list[str], stats: dict[str, dict[str, int]] | None = None
+) -> MatchPlayers:
+    return MatchPlayers(
+        home_team="Barcelona",
+        away_team="Al Ahly Cairo",
+        played=played,
+        stats=stats or {},
+    )
+
+
+class _StubPropProvider:
+    """Proveedor con estadísticas de equipo Y de jugador.
+
+    Simula API-Football completo: `find_match_stats` para props de
+    equipo (córners...) y `find_match_players` para props de jugador
+    ("X más de 1.5 tiros").
+    """
+
+    SUPPORTED_SPORTS = frozenset({"futbol"})
+
+    def __init__(
+        self,
+        stats: MatchStats | None = None,
+        players: MatchPlayers | None = None,
+    ):
+        self._stats = stats
+        self._players = players
+        self.players_calls = 0
+
+    async def find_match(self, date, team_hint):
+        return None
+
+    async def find_match_stats(self, date, team_hint):
+        return self._stats
+
+    async def find_match_players(self, date, team_hint):
+        self.players_calls += 1
+        return self._players
 
 
 class TestPlayerMarkets:
@@ -670,6 +707,181 @@ class TestPostponedVoid:
         )
         acierto, anulada = await verify_pick(pick, [provider])
         assert (acierto, anulada) == (None, True)
+
+
+class TestQuarterHandicap:
+    """Cuartos de línea asiáticos (±0.25, ±0.75): la casa parte la
+    apuesta en dos medias (linea-0.25 y linea+0.5)."""
+
+    async def test_mas_025_con_empate_es_medio_acierto(self):
+        # +0.25 -> mitad a 0 (push con 1-1) + mitad a +0.5 (gana).
+        provider = _StubProvider(_match(1, 1))
+        pick = _pick("Levante hándicap asiático +0.25", "hándicap asiático", 0.25)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (True, False)
+
+    async def test_mas_025_con_derrota_falla(self):
+        provider = _StubProvider(_match(0, 1))
+        pick = _pick("Levante hándicap asiático +0.25", "hándicap asiático", 0.25)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_menos_075_con_victoria_por_uno_es_medio_acierto(self):
+        # -0.75 -> mitad a -0.5 (gana con 1-0) + mitad a -1.0 (push).
+        provider = _StubProvider(_match(1, 0))
+        pick = _pick("Levante hándicap asiático -0.75", "hándicap asiático", -0.75)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (True, False)
+
+    async def test_menos_025_con_empate_es_medio_fallo(self):
+        # -0.25 -> mitad a -0.5 (pierde con 1-1) + mitad a 0 (push).
+        provider = _StubProvider(_match(1, 1))
+        pick = _pick("Levante hándicap asiático -0.25", "hándicap asiático", -0.25)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (False, False)
+
+    async def test_linea_entera_sigue_con_push(self):
+        provider = _StubProvider(_match(1, 0))
+        pick = _pick("Levante hándicap asiático -1", "hándicap asiático", -1.0)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, True)
+
+
+class TestExactScore:
+    """Resultado exacto: la selección es el marcador ("2-1")."""
+
+    async def test_resultado_exacto_acierta(self):
+        provider = _StubProvider(_match(2, 1))
+        pick = _pick("2-1", "resultado exacto")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_resultado_exacto_falla(self):
+        provider = _StubProvider(_match(1, 1))
+        pick = _pick("2-1", "resultado exacto")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_scoreline_pelado_sin_mercado(self):
+        provider = _StubProvider(_match(0, 0))
+        pick = _pick("0-0", None)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_evento_al_reves_invierte_el_marcador(self):
+        # El tipster escribió "Betis - Levante" pero el fixture es
+        # Levante-Betis: su "1-2" significa Levante 2, Betis 1.
+        provider = _StubProvider(_match(2, 1))
+        pick = _pick("1-2", "resultado exacto", evento="Real Betis - Levante")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+
+class TestPlayerProps:
+    """Props de jugador con número ("Budimir más de 1.5 tiros a
+    puerta"): /fixtures/players por jugador."""
+
+    def test_detecta_prop_formato_prefijo(self):
+        from app.services.results.verifier import _detect_player_prop
+
+        result = _detect_player_prop(
+            "Ante Budimir más de 1.5 tiros a puerta", None, 1.5, "Osasuna - Levante"
+        )
+        assert result == ("Ante Budimir", ("shots.on",), "over", 1.5)
+
+    def test_detecta_prop_formato_sufijo(self):
+        from app.services.results.verifier import _detect_player_prop
+
+        result = _detect_player_prop(
+            "2 o más tiros a portería - Ante Budimir", None, None, "Osasuna - Levante"
+        )
+        assert result == ("Ante Budimir", ("shots.on",), "over", 1.5)
+
+    def test_equipo_en_lugar_de_jugador_no_es_prop(self):
+        from app.services.results.verifier import _detect_player_prop
+
+        result = _detect_player_prop(
+            "Levante más de 1.5 tiros", None, 1.5, "Levante - Real Betis"
+        )
+        assert result is None
+
+    async def test_prop_tiro_a_puerta_acierta(self):
+        players = _players(
+            played=["Ante Budimir", "Rubén García"],
+            stats={
+                "Ante Budimir": {"shots.total": 3, "shots.on": 2},
+                "Rubén García": {"shots.total": 1, "shots.on": 0},
+            },
+        )
+        provider = _StubPropProvider(players=players)
+        pick = _pick(
+            "Ante Budimir más de 1.5 tiros a puerta",
+            "tiros a puerta",
+            linea=1.5,
+            evento="Osasuna - Levante",
+        )
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_prop_falla_si_no_llega(self):
+        players = _players(
+            played=["Ante Budimir"],
+            stats={"Ante Budimir": {"shots.total": 1, "shots.on": 0}},
+        )
+        provider = _StubPropProvider(players=players)
+        pick = _pick(
+            "Ante Budimir más de 1.5 tiros a puerta",
+            "tiros a puerta",
+            linea=1.5,
+            evento="Osasuna - Levante",
+        )
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (False, False)
+
+    async def test_prop_jugador_no_jugo_es_anulada(self):
+        players = _players(
+            played=["Rubén García"], stats={"Rubén García": {"shots.total": 2}}
+        )
+        provider = _StubPropProvider(players=players)
+        pick = _pick(
+            "Ante Budimir más de 1.5 tiros",
+            "tiros",
+            linea=1.5,
+            evento="Osasuna - Levante",
+        )
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, True)
+
+    async def test_prop_via_fallback_over_under(self):
+        # Mercado "over/under" + nombre que no casa con ningún equipo:
+        # cae al fallback de prop de jugador.
+        players = _players(
+            played=["Ante Budimir"],
+            stats={"Ante Budimir": {"shots.on": 3}},
+        )
+        provider = _StubPropProvider(
+            stats=_stats({"Shots on Goal": 4}, {"Shots on Goal": 2}),
+            players=players,
+        )
+        pick = _pick(
+            "Ante Budimir más de 1.5",
+            "over/under tiros a puerta",
+            linea=1.5,
+            evento="Osasuna - Levante",
+        )
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True  # 3 > 1.5 (suyos, no los 6 del partido)
+
+    async def test_prop_sin_datos_players_queda_pendiente(self):
+        provider = _StubPropProvider(players=None)
+        pick = _pick(
+            "Ante Budimir más de 1.5 tiros",
+            "tiros",
+            linea=1.5,
+            evento="Osasuna - Levante",
+        )
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
 
 
 class TestDoubleChance:
@@ -1347,7 +1559,12 @@ class TestApiFootballPlayers:
                     "players": [
                         {
                             "player": {"name": "Lamine Yamal"},
-                            "statistics": [{"games": {"minutes": 90}}],
+                            "statistics": [
+                                {
+                                    "games": {"minutes": 90},
+                                    "shots": {"total": 4, "on": 2},
+                                }
+                            ],
                         },
                         {
                             # Convocado pero no entró: 0 minutos.
@@ -1379,6 +1596,9 @@ class TestApiFootballPlayers:
         )
         assert players is not None
         assert players.played == ["Lamine Yamal", "Ferran Torres"]
+        # Stats aplanadas para props de jugador.
+        assert players.stats["Lamine Yamal"]["shots.on"] == 2
+        assert players.stats["Lamine Yamal"]["games.minutes"] == 90
 
     async def test_sin_datos_devuelve_none(self, monkeypatch):
         calls = []

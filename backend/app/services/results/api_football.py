@@ -448,21 +448,30 @@ class ApiFootballProvider:
             raw_players = await self._fetch_players(client, fixture_id)
 
         played: list[str] = []
+        player_stats: dict[str, dict[str, int]] = {}
         for team_entry in raw_players:
             for entry in team_entry.get("players", []):
                 name = (entry.get("player") or {}).get("name")
                 stats = entry.get("statistics") or []
-                minutes = next(
-                    (
-                        (s.get("games") or {}).get("minutes")
-                        for s in stats
-                        if (s.get("games") or {}).get("minutes") is not None
-                    ),
-                    None,
-                )
+                if not name:
+                    continue
+                # Aplana "shots": {"total": 3, "on": 1} ->
+                # {"shots.total": 3, "shots.on": 1} para props.
+                flat: dict[str, int] = {}
+                for section in stats:
+                    for group, values in section.items():
+                        if not isinstance(values, dict):
+                            continue
+                        for key, value in values.items():
+                            if isinstance(value, bool):
+                                continue
+                            if isinstance(value, (int, float)):
+                                flat[f"{group}.{key}"] = int(value)
+                player_stats[name] = flat
+                minutes = flat.get("games.minutes")
                 # Con estadísticas el jugador participó; minutes=0
                 # explícito significa convocado sin entrar.
-                if name and stats and minutes != 0 and name not in played:
+                if stats and minutes != 0 and name not in played:
                     played.append(name)
 
         if not played:
@@ -471,4 +480,5 @@ class ApiFootballProvider:
             home_team=fixture["teams"]["home"]["name"],
             away_team=fixture["teams"]["away"]["name"],
             played=played,
+            stats=player_stats,
         )

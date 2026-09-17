@@ -79,6 +79,22 @@ def match_score(team_hint: str, home_team: str, away_team: str) -> float:
     return max(direct, cross)
 
 
+def match_reversed(team_hint: str, home_team: str, away_team: str) -> bool:
+    """True si el hint casa mejor con el fixture en orden inverso.
+
+    Sirve para mercados donde el orden local/visitante importa
+    (resultado exacto "2-1"): si el tipster escribió el evento al
+    revés ("Betis - Levante"), el marcador predicho va también al
+    revés respecto al del proveedor.
+    """
+    parts = split_team_hint(team_hint)
+    if len(parts) < 2:
+        return False
+    direct = min(_part_score(parts[0], home_team), _part_score(parts[1], away_team))
+    cross = min(_part_score(parts[0], away_team), _part_score(parts[1], home_team))
+    return cross > direct
+
+
 @dataclass
 class MatchResult:
     """Resultado final de un partido, ya normalizado entre proveedores."""
@@ -149,11 +165,20 @@ class MatchPlayers:
     jugador permite distinguir "jugó sin hacer nada reseñable" (fallo)
     de "no jugó" (la casa anula). Si el proveedor no da este dato, un
     jugador sin eventos queda pendiente — nunca se asume que no jugó.
+
+    `stats` mapea nombre de jugador -> estadísticas aplanadas de la API
+    ("shots.total", "shots.on", "fouls.committed", "goals.total"...):
+    sirve para props de jugador con número ("X más de 1.5 tiros").
     """
 
     home_team: str
     away_team: str
     played: list[str]
+    stats: dict[str, dict[str, int]] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.stats is None:
+            self.stats = {}
 
 
 class ResultsProvider(Protocol):
