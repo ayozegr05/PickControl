@@ -14,6 +14,7 @@ Soporta dos formas de acceso, según cómo te hayas registrado:
 
 from __future__ import annotations
 
+from datetime import date as date_type
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -36,6 +37,15 @@ _MIN_TEAM_SIMILARITY = 0.6
 # fixtures solo acepta un día por petición, así que probamos el día
 # indicado y el anterior/siguiente (3 peticiones en total).
 _DATE_OFFSETS = (0, -1, 1)
+# El plan gratis solo permite consultar fechas dentro de [ayer, mañana]
+# ("Free plans do not have access to this date"). Pedir fuera de esa
+# ventana quema cuota para nada (~100 req/día): se salta sin llamar.
+_FREE_DATE_RADIUS = 1
+
+
+def _within_free_window(day: date_type) -> bool:
+    """El plan gratis solo sirve fechas en [ayer, mañana] respecto a hoy."""
+    return abs((day - date_type.today()).days) <= _FREE_DATE_RADIUS
 
 
 def _stat_int(value) -> Optional[int]:
@@ -163,7 +173,12 @@ class ApiFootballProvider:
 
         async with httpx.AsyncClient(timeout=15) as client:
             for offset in _DATE_OFFSETS:
-                date_str = (date + timedelta(days=offset)).strftime("%Y-%m-%d")
+                day = (date + timedelta(days=offset)).date()
+                if not _within_free_window(day):
+                    # Fuera de la ventana del plan gratis: la API
+                    # devolvería errors.plan — llamada desperdiciada.
+                    continue
+                date_str = day.strftime("%Y-%m-%d")
                 fixtures = await self._fetch_fixtures(client, date_str)
 
                 for fixture in fixtures:

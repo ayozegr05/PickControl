@@ -4,6 +4,7 @@ No llaman a ninguna API externa: cubren la extracción del equipo
 predicho y la resolución del ganador a partir de un marcador.
 """
 
+from datetime import date as date_type
 from datetime import datetime
 
 import pytest
@@ -31,9 +32,12 @@ from app.services.results.verifier import (
 @pytest.fixture(autouse=True)
 def _api_football_sin_limite(monkeypatch):
     """`provider_state.json` real puede tener api-football marcado como
-    sin cuota "hoy" (lo escribe el backend en marcha). En tests siempre
-    hay cuota salvo que el propio test lo pise con otro monkeypatch."""
+    sin cuota "hoy" (lo escribe el backend en marcha) y las fechas de
+    test son fijas mientras la ventana del plan gratis se mueve con la
+    fecha real. En tests siempre hay cuota y toda fecha es consultable,
+    salvo que el propio test lo pise con otro monkeypatch."""
     monkeypatch.setattr(api_football, "is_rate_limited", lambda name: False)
+    monkeypatch.setattr(api_football, "_within_free_window", lambda day: True)
 
 
 class TestExtractPredictedTeam:
@@ -801,6 +805,48 @@ class TestApiFootballRateLimit:
 
         assert await provider.find_match(datetime(2026, 9, 15), "Levante") is None
         assert limited == []  # fecha fuera de ventana no es falta de cuota
+
+
+class TestApiFootballFreeWindow:
+    """El plan gratis solo consulta [ayer, mañana]: fechas más viejas
+    se saltan sin llamar para no quemar la cuota de ~100 req/día."""
+
+    async def test_fecha_vieja_no_gasta_llamadas(self, monkeypatch):
+        calls = []
+        # Ventana real con "hoy" fijado en 2026-09-17.
+        monkeypatch.setattr(
+            api_football,
+            "_within_free_window",
+            lambda day: abs((day - date_type(2026, 9, 17)).days) <= 1,
+        )
+        monkeypatch.setattr(
+            api_football.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient(calls, {"response": []}),
+        )
+        provider = ApiFootballProvider("key", "v3.football.api-sports.io")
+
+        # 10/09: ni el día ni sus offsets ±1 entran en la ventana.
+        match = await provider.find_match(datetime(2026, 9, 10), "Levante")
+        assert match is None
+        assert calls == []
+
+    async def test_fecha_ayer_si_consulta(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            api_football,
+            "_within_free_window",
+            lambda day: abs((day - date_type(2026, 9, 17)).days) <= 1,
+        )
+        monkeypatch.setattr(
+            api_football.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient(calls, {"response": []}),
+        )
+        provider = ApiFootballProvider("key", "v3.football.api-sports.io")
+
+        await provider.find_match(datetime(2026, 9, 16), "Levante")
+        assert len(calls) == 2  # solo 16 y 17 están en ventana (16-18)
 
 
 class TestApiFootballStats:
