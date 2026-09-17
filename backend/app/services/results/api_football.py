@@ -22,6 +22,7 @@ import httpx
 
 from app.core.logging import get_logger
 from app.services.results.base import (
+    MatchEvents,
     MatchResult,
     MatchStats,
     is_rate_limited,
@@ -75,6 +76,8 @@ class ApiFootballProvider:
         # Caché de estadísticas por fixture id: varios picks del mismo
         # partido (córners + tarjetas + tiros...) comparten la llamada.
         self._stats_cache: dict[int, list] = {}
+        # Ídem para eventos (goles con jugador/asistente, tarjetas...).
+        self._events_cache: dict[int, list] = {}
 
     def _headers(self) -> dict[str, str]:
         if "rapidapi" in self._api_host:
@@ -98,6 +101,11 @@ class ApiFootballProvider:
         if "rapidapi" in self._api_host:
             return f"https://{self._api_host}/v3/fixtures/statistics"
         return f"https://{self._api_host}/fixtures/statistics"
+
+    def _events_url(self) -> str:
+        if "rapidapi" in self._api_host:
+            return f"https://{self._api_host}/v3/fixtures/events"
+        return f"https://{self._api_host}/fixtures/events"
 
     def _check_errors(self, data: dict, context: str) -> None:
         """API-Football devuelve los fallos de plan/cuota como HTTP 200
@@ -163,6 +171,31 @@ class ApiFootballProvider:
         stats = data.get("response", [])
         self._stats_cache[fixture_id] = stats
         return stats
+
+    async def _fetch_events(self, client: httpx.AsyncClient, fixture_id: int) -> list:
+        if fixture_id in self._events_cache:
+            return self._events_cache[fixture_id]
+        if is_rate_limited("api-football"):
+            return []
+        try:
+            response = await client.get(
+                self._events_url(),
+                params={"fixture": fixture_id},
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "[API-Football] Error de API events (fixture %s): %s",
+                fixture_id,
+                exc,
+            )
+            return []
+        data = response.json()
+        self._check_errors(data, f"events fixture {fixture_id}")
+        events = data.get("response", [])
+        self._events_cache[fixture_id] = events
+        return events
 
     async def _find_fixture(self, date: datetime, team_hint: str) -> Optional[dict]:
         """El fixture FT que mejor casa con el hint, o None."""
@@ -271,4 +304,56 @@ class ApiFootballProvider:
             home_team=fixture["teams"]["home"]["name"],
             away_team=fixture["teams"]["away"]["name"],
             values=values,
+        )
+
+    async def find_match_events(
+        self, date: datetime, team_hint: str
+    ) -> Optional[MatchEvents]:
+        """Eventos del partido (goles con jugador/asistente, tarjetas,
+        cambios): sirve para mercados de jugador. Mismo matching +
+        llamada a `/fixtures/events` cacheada por fixture.
+        """
+        fixture = await self._find_fixture(date, team_hint)
+        if fixture is None:
+            return None
+        fixture_id = fixture.get("fixture", {}).get("id")
+        if fixture_id is None:
+            return None
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            raw_events = await self._fetch_events(client, fixture_id)
+
+        scorers: list[str] = []
+        assisters: list[str] = []
+        booked: list[str] = []
+        participants: list[str] = []
+        for event in raw_events:
+            player = (event.get("player") or {}).get("name")
+            assist = (event.get("assist") or {}).get("name")
+            for name in (player, assist):
+                if name and name not in participants:
+                    participants.append(name)
+            etype = event.get("type")
+            detail = str(event.get("detail") or "").lower()
+            if etype == "Goal":
+                # En propia puerta no cuenta como gol del jugador; un
+                # penalti fallado tampoco es gol.
+                if "own goal" in detail or "missed" in detail:
+                    continue
+                if player and player not in scorers:
+                    scorers.append(player)
+                if assist and assist not in assisters:
+                    assisters.append(assist)
+            elif etype == "Card" and player and player not in booked:
+                booked.append(player)
+
+        if not participants:
+            return None
+        return MatchEvents(
+            home_team=fixture["teams"]["home"]["name"],
+            away_team=fixture["teams"]["away"]["name"],
+            scorers=scorers,
+            assisters=assisters,
+            booked=booked,
+            participants=participants,
         )

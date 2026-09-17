@@ -95,11 +95,14 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
       fueras de juego**, tanto total del partido como por equipo —
       **pero solo para partidos dentro de la ventana ±1 día del plan
       gratis**: los picks de stats se verifican al día siguiente o se
-      pierden (el plan de pago lo arreglaría). Pendiente aún:
-      **primera parte/descanso**, "jugador marca" y **combinadas** (hay
-      que modelar cada selección por separado; hasta entonces quedan
-      manuales — nunca se verifican contra una sola selección, eso
-      sería un falso resultado).
+      pierden (el plan de pago lo arreglaría). También los **mercados de
+      jugador** con `/fixtures/events` ("X marca", "X marca o asiste",
+      "X recibe tarjeta"; gol en propia y penalti fallado no cuentan;
+      si el jugador no consta en ningún evento queda pendiente porque
+      la casa anularía). Pendiente aún: **primera parte/descanso** y
+      **combinadas** (hay que modelar cada selección por separado; hasta
+      entonces quedan manuales — nunca se verifican contra una sola
+      selección, eso sería un falso resultado).
 - [ ] **Partidos aplazados/suspendidos → anulada**: hoy solo se aceptan
       fixtures `FINISHED`/`FT`, así que un aplazado (p. ej. Levante-Athletic
       por lluvia) queda pendiente indefinidamente hasta que se juegue.

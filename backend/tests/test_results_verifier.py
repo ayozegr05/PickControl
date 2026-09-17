@@ -14,10 +14,16 @@ import app.services.results.football_data as football_data
 from app.models.parsed_pick import ParsedPick
 from app.services.results.api_football import ApiFootballProvider
 from app.services.results.api_tennis import ApiTennisProvider
-from app.services.results.base import MatchResult, MatchStats, match_score
+from app.services.results.base import (
+    MatchEvents,
+    MatchResult,
+    MatchStats,
+    match_score,
+)
 from app.services.results.football_data import FootballDataProvider
 from app.services.results.verifier import (
     _detect_over_under_direction,
+    _detect_player_market,
     _extract_handicap_team,
     _extract_predicted_team,
     _providers_for_sport,
@@ -417,6 +423,101 @@ class TestStatOverUnder:
         assert provider.calls == 0
 
 
+class _StubEventsProvider:
+    """Proveedor con eventos de partido (goles, tarjetas, cambios)."""
+
+    SUPPORTED_SPORTS = frozenset({"futbol"})
+
+    def __init__(self, events: MatchEvents | None):
+        self._events = events
+        self.calls = 0
+
+    async def find_match(self, date, team_hint):
+        return None
+
+    async def find_match_events(self, date, team_hint):
+        self.calls += 1
+        return self._events
+
+
+def _events(
+    scorers: list[str],
+    assisters: list[str] | None = None,
+    booked: list[str] | None = None,
+    participants: list[str] | None = None,
+) -> MatchEvents:
+    assisters = assisters or []
+    booked = booked or []
+    if participants is None:
+        participants = scorers + assisters + booked
+    return MatchEvents(
+        home_team="Barcelona",
+        away_team="Al Ahly Cairo",
+        scorers=scorers,
+        assisters=assisters,
+        booked=booked,
+        participants=participants,
+    )
+
+
+class TestPlayerMarkets:
+    """Mercados de jugador ("X marca", "X marca o asiste", "X recibe
+    tarjeta") resueltos con los eventos del partido."""
+
+    def test_detecta_marca_o_asiste(self):
+        result = _detect_player_market("Raphinha: Jugador que Marca o Asiste", None)
+        assert result == ("scorer_or_assist", "Raphinha")
+
+    def test_detecta_marca_gol(self):
+        assert _detect_player_market("Isak: Marca gol", "goleador") == (
+            "scorer",
+            "Isak",
+        )
+
+    def test_no_detecta_mercado_de_equipo(self):
+        assert _detect_player_market("Levante gana", "ganador") is None
+
+    async def test_jugador_marca_acierta(self):
+        provider = _StubEventsProvider(_events(scorers=["Raphinha"]))
+        pick = _pick("Raphinha: Jugador que Marca o Asiste", None)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (True, False)
+
+    async def test_marca_o_asiste_cuenta_la_asistencia(self):
+        provider = _StubEventsProvider(
+            _events(scorers=["Lamine Yamal"], assisters=["Raphinha"])
+        )
+        pick = _pick("Raphinha marca o asiste", None)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_jugo_y_no_marco_es_fallo(self):
+        # Aparece en eventos (cambio) pero no marcó ni asistió.
+        provider = _StubEventsProvider(
+            _events(
+                scorers=["Lamine Yamal"],
+                participants=["Lamine Yamal", "Raphinha"],
+            )
+        )
+        pick = _pick("Raphinha marca gol", None)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_jugador_sin_constancia_queda_pendiente(self):
+        # No aparece en ningún evento: no sabemos si jugó (la casa
+        # anularía si no participó) -> pendiente, no fallo.
+        provider = _StubEventsProvider(_events(scorers=["Lamine Yamal"]))
+        pick = _pick("Raphinha marca gol", None)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+
+    async def test_jugador_recibe_tarjeta(self):
+        provider = _StubEventsProvider(_events(scorers=[], booked=["Iñigo Martínez"]))
+        pick = _pick("Iñigo Martínez recibe tarjeta", "tarjetas jugador")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+
 class TestDoubleChance:
     async def test_equipo_y_empate_acierta_con_empate(self):
         provider = _StubProvider(_match(1, 1))
@@ -734,12 +835,13 @@ class TestApiFootballMatchFinding:
 
 class _RoutingClient:
     """Como _CountingClient pero devuelve distinto payload según la URL
-    (fixtures vs fixtures/statistics)."""
+    (fixtures vs fixtures/statistics vs fixtures/events)."""
 
-    def __init__(self, calls, fixtures_payload, stats_payload):
+    def __init__(self, calls, fixtures_payload, stats_payload, events_payload=None):
         self._calls = calls
         self._fixtures = fixtures_payload
         self._stats = stats_payload
+        self._events = events_payload or {"response": []}
 
     async def __aenter__(self):
         return self
@@ -751,6 +853,8 @@ class _RoutingClient:
         self._calls.append(url)
         if "statistics" in url:
             return _FakeResponse(self._stats)
+        if "events" in url:
+            return _FakeResponse(self._events)
         return _FakeResponse(self._fixtures)
 
 
@@ -928,3 +1032,72 @@ class TestApiFootballStats:
         await provider.find_match_stats(datetime(2026, 9, 15), "Levante")
         stats_calls = [u for u in calls if "statistics" in u]
         assert len(stats_calls) == 1  # segunda vez servida desde caché
+
+
+class TestApiFootballEvents:
+    """/fixtures/events: goleadores, asistentes, tarjetas y
+    participantes (para mercados de jugador)."""
+
+    async def test_parsea_goles_asistencias_y_tarjetas(self, monkeypatch):
+        calls = []
+        fixture = {
+            "fixture": {"id": 55, "status": {"short": "FT"}},
+            "teams": {
+                "home": {"id": 10, "name": "Barcelona"},
+                "away": {"id": 20, "name": "Al Ahly Cairo"},
+            },
+            "goals": {"home": 3, "away": 0},
+        }
+        events_payload = {
+            "response": [
+                {
+                    "type": "Goal",
+                    "detail": "Normal Goal",
+                    "player": {"name": "Raphinha"},
+                    "assist": {"name": "Lamine Yamal"},
+                },
+                {
+                    "type": "Goal",
+                    "detail": "Own Goal",
+                    "player": {"name": "Pau Cubarsí"},
+                    "assist": {"name": None},
+                },
+                {
+                    "type": "Goal",
+                    "detail": "Missed Penalty",
+                    "player": {"name": "Lewandowski"},
+                    "assist": {"name": None},
+                },
+                {
+                    "type": "Card",
+                    "detail": "Yellow Card",
+                    "player": {"name": "Iñigo Martínez"},
+                },
+                {
+                    "type": "subst",
+                    "detail": "Substitution 1",
+                    "player": {"name": "Ferran Torres"},
+                    "assist": {"name": "Ansu Fati"},
+                },
+            ]
+        }
+        monkeypatch.setattr(
+            api_football.httpx,
+            "AsyncClient",
+            lambda **kw: _RoutingClient(
+                calls, {"response": [fixture]}, {"response": []}, events_payload
+            ),
+        )
+        provider = ApiFootballProvider("key", "v3.football.api-sports.io")
+
+        events = await provider.find_match_events(
+            datetime(2026, 9, 15), "Barcelona - Al Ahly"
+        )
+        assert events is not None
+        # Gol normal cuenta; propia puerta y penalti fallado no.
+        assert events.scorers == ["Raphinha"]
+        assert events.assisters == ["Lamine Yamal"]
+        assert events.booked == ["Iñigo Martínez"]
+        # Todos los que aparecen en algún evento son "participantes".
+        assert "Pau Cubarsí" in events.participants
+        assert "Ansu Fati" in events.participants
