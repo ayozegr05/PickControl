@@ -242,12 +242,21 @@ def _extract_handicap_team(seleccion: str) -> Optional[str]:
     return team or None
 
 
+# La dirección se detecta por palabra completa: "under" es subcadena
+# de "over/under" (valor típico del campo `mercado`), así que un match
+# de subcadena convertía cualquier "más de" en under. Y si el texto
+# contiene las dos ("over/under goles"), no dice la dirección: None.
+_UNDER_PATTERN = re.compile(r"\bunder\b|\bmenos\b", re.IGNORECASE)
+_OVER_PATTERN = re.compile(r"\bover\b|\bm[aá]s\b", re.IGNORECASE)
+
+
 def _detect_over_under_direction(text: str) -> Optional[str]:
     """Detecta si una selección/mercado de over-under es "over" o "under"."""
-    low = text.lower()
-    if "under" in low or "menos de" in low:
+    has_under = _UNDER_PATTERN.search(text) is not None
+    has_over = _OVER_PATTERN.search(text) is not None
+    if has_under and not has_over:
         return "under"
-    if "over" in low or "más de" in low or "mas de" in low:
+    if has_over and not has_under:
         return "over"
     return None
 

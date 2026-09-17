@@ -7,9 +7,11 @@ un partido concreto, sin conocer nada de `ParsedPick` ni de picks.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import date as date_type
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional, Protocol
 
@@ -18,6 +20,63 @@ import httpx
 from app.core.logging import get_logger
 
 logger = get_logger("app.results.base")
+
+
+# --- Parecido entre la pista de equipo del pick y nombres reales ------
+#
+# El hint puede ser un equipo suelto ("Alavés"), ambos ("Alavés -
+# Valencia", "Elche vs Real Madrid") o texto con ruido. La comparación
+# usa similitud de cadenas más un bonus cuando las palabras de una parte
+# son subconjunto del nombre real ("alavés" ⊂ "deportivo alavés"), que
+# es justo lo que hace fallar una similitud global estricta.
+_WORD_PATTERN = re.compile(r"\w+")
+_HINT_SEPARATORS = re.compile(r"\s[-–—/|]\s|\s+vs?\.?\s+", re.IGNORECASE)
+_SCORE_SUBSET = 0.85
+_SCORE_SUPSET = 0.75
+
+
+def _similar(a: str, b: str) -> float:
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+
+def _tokens(text: str) -> set[str]:
+    return set(_WORD_PATTERN.findall(text.lower()))
+
+
+def _part_score(part: str, team: str) -> float:
+    score = _similar(part, team)
+    part_tokens = _tokens(part)
+    team_tokens = _tokens(team)
+    if part_tokens and part_tokens <= team_tokens:
+        # "alavés" ⊂ "deportivo alavés" (subset total).
+        score = max(score, _SCORE_SUBSET)
+    elif team_tokens and team_tokens <= part_tokens:
+        # El hint lleva el nombre entero más ruido ("valencia cf 21:00").
+        score = max(score, _SCORE_SUPSET)
+    return score
+
+
+def split_team_hint(team_hint: str) -> list[str]:
+    """Partes del hint: ["Alavés", "Valencia"] para "Alavés - Valencia"."""
+    parts = [p.strip() for p in _HINT_SEPARATORS.split(team_hint) if p.strip()]
+    return parts or [team_hint.strip()]
+
+
+def match_score(team_hint: str, home_team: str, away_team: str) -> float:
+    """Confianza 0.0-1.0 de que el fixture (home vs away) es el del hint.
+
+    - Una parte: el mejor parecido con cualquiera de los dos equipos.
+    - Dos o más partes: exige que las dos primeras casen cada una con un
+      equipo distinto (min del mejor emparejamiento) — así "Alavés -
+      Valencia" casa con "Deportivo Alavés - Valencia CF" y un nombre
+      suelto no puede colarse en el partido equivocado.
+    """
+    parts = split_team_hint(team_hint)
+    if len(parts) == 1:
+        return max(_part_score(parts[0], home_team), _part_score(parts[0], away_team))
+    direct = min(_part_score(parts[0], home_team), _part_score(parts[1], away_team))
+    cross = min(_part_score(parts[0], away_team), _part_score(parts[1], home_team))
+    return max(direct, cross)
 
 
 @dataclass

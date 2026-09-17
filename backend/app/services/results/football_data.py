@@ -8,13 +8,12 @@ simplicidad, pero no cubre ligas menores ni otros deportes.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from difflib import SequenceMatcher
 from typing import Optional
 
 import httpx
 
 from app.core.logging import get_logger
-from app.services.results.base import MatchResult
+from app.services.results.base import MatchResult, match_score
 
 logger = get_logger("app.results.football_data")
 
@@ -24,10 +23,6 @@ _MIN_TEAM_SIMILARITY = 0.6
 # tipster publicó el pick, no el día exacto del partido), así que
 # buscamos en una pequeña ventana alrededor en vez de un único día.
 _DATE_WINDOW = timedelta(days=1)
-
-
-def _similar(a: str, b: str) -> float:
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
 class FootballDataProvider:
@@ -67,17 +62,30 @@ class FootballDataProvider:
 
         best_match = None
         best_score = 0.0
+        best_teams: tuple[str, str] | None = None
+        ambiguous = False
         for match in matches:
             if match.get("status") != "FINISHED":
                 continue
             home = match["homeTeam"]["name"]
             away = match["awayTeam"]["name"]
-            score = max(_similar(team_hint, home), _similar(team_hint, away))
+            score = match_score(team_hint, home, away)
             if score > best_score:
                 best_score = score
                 best_match = (match, home, away)
+                best_teams = (home, away)
+                ambiguous = False
+            elif (
+                score == best_score
+                and score >= _MIN_TEAM_SIMILARITY
+                and (home, away) != best_teams
+            ):
+                # Dos fixtures distintos empatan (p. ej. hint "Madrid"
+                # con Real Madrid y Atlético jugando el mismo día):
+                # mejor no adivinar.
+                ambiguous = True
 
-        if not best_match or best_score < _MIN_TEAM_SIMILARITY:
+        if not best_match or best_score < _MIN_TEAM_SIMILARITY or ambiguous:
             return None
 
         match, home, away = best_match
