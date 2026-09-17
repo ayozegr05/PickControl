@@ -44,9 +44,9 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
   - **Retos (`es_reto`)**: los mensajes con "reto" se clasifican aparte —
     excluidos de la tabla diaria y de las stats, con sección propia en la
     vista del tipster y en la pantalla de depuración.
-  - **Verificación automática de resultados** (fútbol): football-data.org con
-    fallback a API-Football; mercados ganador / hándicap asiático / over-under.
-    Solo `deporte=fútbol` — otros deportes quedan pendientes por diseño.
+  - **Verificación automática de resultados**: fútbol (football-data.org +
+    API-Football) y tenis (cadena TheSportsDB → ATP-WTA-ITF → tennisapi1).
+    Detalle de mercados en "Próximos hitos" → "Mercados".
   - **Corrección manual** de resultados vía `PATCH /telegram/parsed-picks/{id}`.
 - **Fase 6: Despliegue y Hardening a producción.** (PENDIENTE — ver hitos abajo)
 
@@ -54,9 +54,9 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 
 ### 1. Core: verificación de resultados
 
-- [ ] **Proveedor de resultados para tenis y baloncesto.** Tenis
-      implementado con cadena de 3 niveles gratuita (api-sports.io NO
-      tiene tenis y api-tennis.com solo da trial de 14 días):
+- [x] **Proveedor de resultados para tenis.** Implementado con cadena
+      de 3 niveles gratuita (api-sports.io NO tiene tenis y
+      api-tennis.com solo da trial de 14 días):
       1) `ApiTennisProvider` → **TheSportsDB** (gratis sin registro, key
          pública "3"; ATP/WTA Tour y Grand Slams);
       2) `RapidApiTennisProvider` → **Tennis API - ATP WTA ITF**
@@ -67,10 +67,9 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
       cuota (~50 req/día por suscripción): un 403/429 lo marca como sin
       cuota hasta mañana y el siguiente pick ni lo intenta (ver
       `base.py`). Enrutado por deporte y solo mercado "ganador".
-      **Pendiente de verificar en producción**: ambos fallbacks ya
-      probados en vivo (Alcaraz/Shelton y Bucsa/Udvardy resueltos).
-      Baloncesto: pendiente de empezar cuando se confirme
-      (api-sports.io sí tiene basketball).
+      Ambos fallbacks ya probados en vivo (Alcaraz/Shelton y
+      Bucsa/Udvardy resueltos). Baloncesto: pendiente de empezar cuando
+      se confirme (api-sports.io sí tiene basketball — API-Basketball).
 - [ ] **Mercados de sets/juegos en tenis** (mismo coste de API: los 3
       proveedores ya devuelven el desglose por sets — `strResult`,
       `result`, `homeScore.periodN` — solo falta parsearlo):
@@ -79,37 +78,32 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
         precisión: la apuesta real se perdió. Verificación estricta.
       - Over/under y hándicap de juegos: sumando juegos por set.
       - Decidir política ante RET/W-O (bookies suelen anular).
-- [ ] **Amortizar el límite de API-Football** (implementado, pendiente de
-      verificar que ya no saltan 429): caché de fixtures por fecha en ambos
-      proveedores (una llamada por día en vez de por pick) y ventana de
-      abandono de 14 días en el verificador: los picks irresolubles dejan de
-      reintentarse en cada ciclo y quedan para corrección manual. Si sigue
-      corto: bajar la frecuencia del verificador (hoy cada 3 h) o plan de pago
-      que elimine la restricción de fechas.
-- [ ] **Verificar mercados complejos** (parcial): ya se resuelven con el
-      marcador — ganador, hándicap asiático, over/under goles (total del
-      partido y por equipo), doble oportunidad (1X/X2/12/"equipo y
-      empate"), ambos marcan (sí/no) y empate no válido. Además se
-      resuelven con `/fixtures/statistics` de API-Football: **córners,
-      tarjetas (amarilla+roja), tiros (totales y a puerta), faltas y
-      fueras de juego**, tanto total del partido como por equipo —
-      **pero solo para partidos dentro de la ventana ±1 día del plan
-      gratis**: los picks de stats se verifican al día siguiente o se
-      pierden (el plan de pago lo arreglaría). También los **mercados de
-      jugador** con `/fixtures/events` ("X marca", "X marca o asiste",
-      "X recibe tarjeta"; gol en propia y penalti fallado no cuentan;
-      y si el jugador no consta en ningún evento se consulta además
-      `/fixtures/players`: consta que no disputó minutos → `anulada`
-      (la casa devuelve), sin datos fiables → pendiente). También los
-      **props de jugador con número** ("X más de 1.5 tiros a puerta",
-      "2 o más tiros - Jugador") con las stats por jugador del mismo
-      endpoint, el **resultado exacto** ("2-1", con corrección de
-      orientación si el evento va al revés) y los **cuartos de
-      hándicap** (±0.25/±0.75 → dos medias apuestas). Pendiente aún:
-      **primera parte/descanso** y **combinadas** (hay que modelar
-      cada selección por separado; hasta entonces quedan manuales —
-      nunca se verifican contra una sola selección, eso sería un falso
-      resultado).
+- [x] **Amortizar el límite de API-Football** (implementado): caché de
+      fixtures por fecha + caché de stats/events/players por fixture,
+      pendientes ordenados por `fecha_evento` DESC (los picks que caducan
+      van primero), ventana de abandono de 14 días con gracia de 6 h para
+      recuperados tarde, salto de fechas fuera de la ventana gratis ±1 día
+      y detección de cuota agotada devuelta como HTTP 200 con `errors`
+      (persistente en `provider_state.json`).
+- [ ] **Mercados de fútbol** (casi completo). Resueltos automáticamente:
+      - Con marcador (football-data, histórico ilimitado): ganador,
+        empate no válido, doble oportunidad (1X/X2/12/"equipo y empate"),
+        hándicap asiático **incluidos cuartos de línea** (±0.25/±0.75 →
+        dos medias apuestas), over/under goles (total y por equipo),
+        ambos marcan sí/no, resultado exacto ("2-1", con corrección de
+        orientación si el evento va al revés).
+      - Con `/fixtures/statistics` (API-Football, solo ventana ±1 día):
+        córners, tarjetas, tiros (total y a puerta), faltas, fueras de
+        juego — total del partido y por equipo.
+      - Con `/fixtures/events` + `/fixtures/players` (misma ventana):
+        "X marca", "X marca o asiste", "X recibe tarjeta" (propia puerta
+        y penalti fallado no cuentan; no jugó → `anulada`) y props de
+        jugador con número ("X más de 1.5 tiros a puerta").
+      Pendiente a propósito: **primera parte/descanso** (sin datos en
+      los proveedores actuales), **combinadas** (irán a sección propia
+      como los retos; cada selección se modela aparte) y partidos
+      parados a mitad (`SUSP`/`ABD` — hay mercados ya decididos que la
+      casa paga; quedan manuales).
 - [x] **Partidos aplazados/cancelados → anulada**: implementado. Si el
       fixture consta `POSTPONED`/`CANCELLED` (football-data) o
       `PST`/`CANC` (API-Football) y la `fecha_evento` lleva más de 72 h
@@ -220,10 +214,25 @@ Aplicar el esquema a la nueva base PostgreSQL:
 
 ## Verificación automática de resultados
 
-Implementada para los mercados "ganador" (incl. "resultado sin empate"), hándicap asiático y over/under, usando football-data.org (ligas top) con fallback a API-Football (más cobertura, límite más bajo). Con líneas enteras puede haber "push" (empate técnico), que se marca como `anulada` en vez de acierto/fallo.
+Ver `app/services/results/`. Cadena por deporte: **fútbol** (football-data.org
+→ API-Football) y **tenis** (TheSportsDB → ATP-WTA-ITF → tennisapi1). El
+verificador corre cada 3 h, procesa pendientes recientes primero y deja de
+reintentar picks con `fecha_evento` > 14 días (gracia de 6 h para recién
+importados). "Push" (líneas enteras) y aplazados/cancelados >72 h se marcan
+`anulada`; un jugador que no disputó minutos también → `anulada`.
 
 **Limitaciones conocidas:**
-- El plan gratuito de **API-Football solo permite consultar fechas dentro de una ventana de ±1 día respecto a "hoy"**. Para partidos de hace varios días esta fuente prácticamente no aporta cobertura salvo verificación casi en tiempo real.
-- **Tenis y otros deportes no de fútbol** no están cubiertos: quedan siempre en verificación manual.
-- **Ligas menores** (Primera Federación/Segunda RFEF) no están cubiertas por football-data.org (~12 competiciones top solamente).
-- Futuro: plan de pago de API-Football (elimina la restricción de fechas) o API de tenis.
+- El plan gratuito de **API-Football solo permite consultar fechas dentro de
+  una ventana de ±1 día respecto a "hoy"**: los mercados de estadísticas
+  (córners, tarjetas, tiros...), jugador y props se resuelven al día siguiente
+  o se pierden; los mercados de marcador no la necesitan (football-data tiene
+  histórico ilimitado en sus ~12 ligas top).
+- **Ligas menores / competiciones fuera de football-data** (Süper Lig,
+  amistosos, Primera Federación...): solo resolubles dentro de la ventana de
+  API-Football; fuera de ella, corrección manual.
+- **Tenis solo resuelve "ganador"**: los sets/juegos están en las respuestas
+  pero sin parsear (bug conocido: "gana 2-0" se marca acierto aunque gane 2-1);
+  política RET/W-O sin decidir.
+- **Baloncesto** sin proveedor (API-Basketball de api-sports.io sería el
+  candidato).
+- Futuro: plan de pago de API-Football eliminaría la restricción de fechas.
