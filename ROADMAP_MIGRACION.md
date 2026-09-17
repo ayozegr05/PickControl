@@ -190,8 +190,13 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 
 - [ ] **Deploy real**: backend en servidor + PostgreSQL gestionada + HTTPS
       (hoy todo corre en local: Uvicorn + Expo en red local).
-- [ ] **Backups de PostgreSQL** (`pg_dump` diario): la BD es la fuente de
-      verdad de la auditoría.
+- [x] **Backups de PostgreSQL** (hecho): `backend/scripts/backup_db.py`
+      genera dumps comprimidos (`pg_dump -Fc`) en `backend/backups/` con
+      timestamp, retención de 14 días (`BACKUP_RETENTION_DAYS`) y
+      localiza `pg_dump` en PATH o en `Program Files\PostgreSQL`. El
+      directorio está en `.gitignore`. Programación diaria: Task
+      Scheduler / cron (comandos en la docstring del script). Restaurar:
+      `pg_restore -d controlpick backups/<dump>.dump`.
 - [x] **Tests del pipeline de Telegram** (hecho): `catchup.py` (marca de
       agua, huecos por debajo de la marca, raw vacío/`processed=False`
       reprocesado, raw con pick vinculado no se toca, corte por 7 días,

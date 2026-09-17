@@ -70,3 +70,7 @@ android/.gradle/
 # ============================
 .DS_Store
 *.tsbuildinfo
+
+# Backups de PostgreSQL (pg_dump) — nunca commitear dumps
+backups/
+backend/backups/

@@ -38,7 +38,8 @@ npx tsc --noEmit
 > en cada escritura de Telethon, matando el login y el catch-up.
 
 Scripts útiles en `backend/scripts/` (`inspect_picks.py`, `reprocess_raw.py`,
-`reclassify_rejected.py`, `telegram_login_complete.py`…).
+`reclassify_rejected.py`, `telegram_login_complete.py`, `backup_db.py` — dump
+diario pg_dump a `backend/backups/` con retención 14 días, ignorado por git).
 
 ## Reglas de negocio clave (no romper)
 
