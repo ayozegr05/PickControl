@@ -97,6 +97,12 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
       marca" y **combinadas** (hay que modelar cada selección por
       separado; hasta entonces quedan manuales — nunca se verifican
       contra una sola selección, eso sería un falso resultado).
+- [ ] **Partidos aplazados/suspendidos → anulada**: hoy solo se aceptan
+      fixtures `FINISHED`/`FT`, así que un aplazado (p. ej. Levante-Athletic
+      por lluvia) queda pendiente indefinidamente hasta que se juegue.
+      Falta la política: si el fixture sigue `SUSP`/`POSTPONED`/`CANCELLED`
+      pasadas X horas (las casas suelen devolver si no se disputa en
+      24-72 h), marcar el pick como `anulada` en vez de esperarlo.
 - [ ] **Comparar cuota del tipster vs cuota real de mercado**: contrastar la
       cuota publicada por el informante contra la cuota disponible en APIs de
       apuestas (The Odds API, Pinnacle, Betfair...) en el momento de la
