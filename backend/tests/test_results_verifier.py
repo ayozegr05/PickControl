@@ -11,7 +11,7 @@ import app.services.results.football_data as football_data
 from app.models.parsed_pick import ParsedPick
 from app.services.results.api_football import ApiFootballProvider
 from app.services.results.api_tennis import ApiTennisProvider
-from app.services.results.base import MatchResult
+from app.services.results.base import MatchResult, match_score
 from app.services.results.football_data import FootballDataProvider
 from app.services.results.verifier import (
     _detect_over_under_direction,
@@ -215,6 +215,31 @@ class TestResolveOverUnder:
         acierto, anulada = _resolve_over_under(match, "under", 3.0)
         assert acierto is None
         assert anulada is True
+
+
+class TestMatchScore:
+    """Matching de fixtures: el hint suele ser el evento completo
+    ("Alavés - Valencia") y el proveedor devuelve nombres canónicos
+    ("Deportivo Alavés", "Valencia CF"). Antes se comparaba la cadena
+    entera contra cada equipo y casi nunca superaba el umbral."""
+
+    def test_evento_completo_casa_con_nombres_canonicos(self):
+        score = match_score("Alavés - Valencia", "Deportivo Alavés", "Valencia CF")
+        assert score >= 0.6
+
+    def test_dos_partes_exigen_que_ambas_equipos_casen(self):
+        # Solo casa "Alavés"; "Valencia" no está en el fixture.
+        score = match_score("Alavés - Valencia", "Deportivo Alavés", "Sevilla FC")
+        assert score < 0.6
+
+    def test_equipo_suelto_casa_por_subconjunto(self):
+        # "Alavés" ⊂ "Deportivo Alavés" aunque la similitud global
+        # sea baja (~0.55 < umbral).
+        assert match_score("Alavés", "Deportivo Alavés", "Valencia CF") >= 0.6
+
+    def test_texto_sin_equipos_no_casa(self):
+        score = match_score("Más 1,5 Goles", "Deportivo Alavés", "Valencia CF")
+        assert score < 0.6
 
 
 class _StubProvider:
@@ -500,3 +525,75 @@ class TestProviderFixtureCache:
         await provider.find_match(datetime(2026, 9, 15), "Real Madrid")
         await provider.find_match(datetime(2026, 9, 15), "Barcelona")
         assert len(calls) == 1  # una sola ventana ±1 día, reutilizada
+
+
+def _api_fixture(
+    home: str, away: str, home_goals: int, away_goals: int, status: str = "FT"
+):
+    return {
+        "fixture": {"status": {"short": status}},
+        "teams": {"home": {"name": home}, "away": {"name": away}},
+        "goals": {"home": home_goals, "away": away_goals},
+    }
+
+
+class TestApiFootballMatchFinding:
+    """Regresión del pick Alavés - Valencia: el evento del pick no
+    casaba con los nombres canónicos del proveedor y quedaba pendiente
+    para siempre."""
+
+    async def test_alaves_valencia_se_resuelve_como_derrota_over15(self, monkeypatch):
+        calls = []
+        fixture = _api_fixture("Deportivo Alavés", "Valencia CF", 0, 1)
+        monkeypatch.setattr(
+            api_football.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient(calls, {"response": [fixture]}),
+        )
+        provider = ApiFootballProvider("key", "v3.football.api-sports.io")
+
+        match = await provider.find_match(datetime(2026, 9, 15), "Alavés - Valencia")
+        assert match is not None
+        assert (match.home_score, match.away_score) == (0, 1)
+
+        pick = _pick(
+            "Más 1,5 Goles", "over/under goles", linea=1.5, evento="Alavés - Valencia"
+        )
+        acierto, anulada = await verify_pick(pick, [provider])
+        # 0-1 = 1 gol total < 1.5 -> la apuesta pierde.
+        assert (acierto, anulada) == (False, False)
+
+    async def test_empate_entre_dos_fixtures_no_adivina(self, monkeypatch):
+        # Hint ambiguo: "Madrid" casa igual con ambos equipos que
+        # juegan ese día -> pendiente, no se arriesga.
+        calls = []
+        fixtures = [
+            _api_fixture("Real Madrid", "Getafe CF", 2, 0),
+            _api_fixture("Atlético de Madrid", "Villarreal CF", 1, 0),
+        ]
+        monkeypatch.setattr(
+            api_football.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient(calls, {"response": fixtures}),
+        )
+        provider = ApiFootballProvider("key", "v3.football.api-sports.io")
+
+        match = await provider.find_match(datetime(2026, 9, 15), "Madrid")
+        assert match is None
+
+    async def test_partido_no_finalizado_no_casa(self, monkeypatch):
+        # Un aplazado/suspendido no es FT: queda pendiente aunque el
+        # emparejamiento de nombres sea perfecto.
+        calls = []
+        fixture = _api_fixture("Levante UD", "Athletic Club", 0, 0, status="SUSP")
+        monkeypatch.setattr(
+            api_football.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient(calls, {"response": [fixture]}),
+        )
+        provider = ApiFootballProvider("key", "v3.football.api-sports.io")
+
+        match = await provider.find_match(
+            datetime(2026, 9, 16), "Levante - Athletic de Bilbao"
+        )
+        assert match is None
