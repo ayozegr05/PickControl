@@ -43,7 +43,12 @@ from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
 from app.services.results.api_football import ApiFootballProvider
 from app.services.results.api_tennis import ApiTennisProvider
-from app.services.results.base import MatchResult, MatchStats, ResultsProvider
+from app.services.results.base import (
+    MatchEvents,
+    MatchResult,
+    MatchStats,
+    ResultsProvider,
+)
 from app.services.results.football_data import FootballDataProvider
 from app.services.results.rapidapi_tennis import RapidApiTennisProvider
 from app.services.results.tennisapi1 import TennisApi1Provider
@@ -474,6 +479,92 @@ def _resolve_btts(match: MatchResult, yes: bool) -> tuple[bool, bool]:
     return (both_scored if yes else not both_scored), False
 
 
+# --- Mercados de jugador ("Raphinha marca", "X marca o asiste") -------
+#
+# Se resuelven con los eventos del partido (API-Football
+# /fixtures/events). Regla de las casas: si el jugador no participa la
+# apuesta se anula — como los eventos no dicen explícitamente quién
+# jugó, solo se marca fallo cuando el jugador aparece en ALGÚN evento
+# (cambio, tarjeta, gol...); si no consta, queda pendiente.
+_PLAYER_SCORER_PATTERN = re.compile(
+    r"\bmarca\b|\banotar?[áa]?\b|goleador|scorer", re.IGNORECASE
+)
+_PLAYER_ASSIST_PATTERN = re.compile(r"\basist", re.IGNORECASE)
+_PLAYER_CARD_PATTERN = re.compile(
+    r"recibe\s+tarjeta|recibir[aá]\s+tarjeta|amonestad|sancionad|"
+    r"ver[aá]\s+tarjeta|se\s+le\s+muestra\s+tarjeta|\bcarded\b",
+    re.IGNORECASE,
+)
+# Relleno de los slips que no forma parte del nombre del jugador.
+_PLAYER_MARKET_NOISE = re.compile(
+    r"jugador\s+que|marca\s+o\s+asiste|marca\s+en\s+cualquier\s+momento|"
+    r"marca\s+gol(?:es)?|\bmarca\b|\banotar?[áa]?\b|goleador|scorer|"
+    r"anytime|primer|segundo|[úu]ltimo|recibe|recibir[aá]|amonestad[oa]?|"
+    r"sancionad[oa]?|ver[aá]|se\s+le\s+muestra|\btarjeta\b|en\s+cualquier\s+momento",
+    re.IGNORECASE,
+)
+
+
+def _extract_player_name(seleccion: str) -> Optional[str]:
+    """Nombre del jugador tras quitar el texto del mercado del slip."""
+    cleaned = _PLAYER_MARKET_NOISE.sub(" ", seleccion)
+    cleaned = _clean_team_name(cleaned)
+    return cleaned or None
+
+
+def _detect_player_market(
+    seleccion: str, mercado: Optional[str]
+) -> Optional[tuple[str, str]]:
+    """("scorer"|"scorer_or_assist"|"booked", jugador) si la selección
+    es un mercado de jugador; None si no lo es."""
+    text = f"{seleccion or ''} {mercado or ''}"
+    player = _extract_player_name(seleccion or "")
+    if not player:
+        return None
+    if _PLAYER_CARD_PATTERN.search(text):
+        return ("booked", player)
+    if _PLAYER_SCORER_PATTERN.search(text):
+        mode = "scorer_or_assist" if _PLAYER_ASSIST_PATTERN.search(text) else "scorer"
+        return (mode, player)
+    return None
+
+
+def _player_name_matches(hint: str, name: str) -> bool:
+    """El jugador del pick casa con el nombre del evento.
+
+    Acepta subconjunto de tokens ("Raphinha" ⊂ "Raphinha Dias",
+    "Lewandowski" ⊂ "Robert Lewandowski") además de similitud global.
+    """
+    if _similar(hint, name) >= _MIN_TEAM_SIMILARITY:
+        return True
+    hint_tokens = set(re.findall(r"\w+", hint.lower()))
+    name_tokens = set(re.findall(r"\w+", name.lower()))
+    return bool(hint_tokens) and hint_tokens <= name_tokens
+
+
+def _resolve_player_market(
+    events: MatchEvents, player: str, mode: str
+) -> tuple[Optional[bool], bool]:
+    """Resuelve "X marca" / "X marca o asiste" / "X recibe tarjeta"."""
+
+    def hit(names: list[str]) -> bool:
+        return any(_player_name_matches(player, n) for n in names)
+
+    if mode in ("scorer", "scorer_or_assist"):
+        if hit(events.scorers):
+            return True, False
+        if mode == "scorer_or_assist" and hit(events.assisters):
+            return True, False
+    elif mode == "booked" and hit(events.booked):
+        return True, False
+
+    # No acertó: solo se marca fallo si consta que participó (si no,
+    # la casa anula y no podemos saberlo -> pendiente).
+    if hit(events.participants):
+        return False, False
+    return None, False
+
+
 async def _get_providers() -> list[ResultsProvider]:
     settings = get_settings()
     providers: list[ResultsProvider] = []
@@ -550,6 +641,32 @@ async def _find_stats_across_providers(
             continue
         if stats:
             return stats
+    return None
+
+
+async def _find_events_across_providers(
+    date: datetime,
+    team_hint: str,
+    providers: list[ResultsProvider],
+    pick_id: Optional[int],
+) -> Optional[MatchEvents]:
+    """Eventos del partido (goles/tarjetas/cambios): solo los
+    proveedores que implementan `find_match_events` (hoy API-Football)."""
+    for provider in providers:
+        finder = getattr(provider, "find_match_events", None)
+        if finder is None:
+            continue
+        try:
+            events = await finder(date, team_hint)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[RESULTS_VERIFIER] Error consultando events para pick id=%s: %s",
+                pick_id,
+                exc,
+            )
+            continue
+        if events:
+            return events
     return None
 
 
@@ -700,6 +817,20 @@ async def verify_pick(
                 match, team_total_team, direction, pick.linea
             )
         return _resolve_over_under(match, direction, pick.linea)
+
+    # Mercados de jugador ("Raphinha marca", "X marca o asiste", "X
+    # recibe tarjeta"): se resuelven con los eventos del partido.
+    player_market = _detect_player_market(pick.seleccion or "", pick.mercado)
+    if player_market:
+        mode, player = player_market
+        if not pick.evento:
+            return None, False
+        events = await _find_events_across_providers(
+            pick.fecha_evento, pick.evento, providers_for_sport, pick.id
+        )
+        if not events:
+            return None, False
+        return _resolve_player_market(events, player, mode)
 
     # Mercado "ganador" simple (o "resultado sin empate" con selección =
     # solo el nombre del equipo).

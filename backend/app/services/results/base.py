@@ -90,6 +90,26 @@ class MatchResult:
 
 
 @dataclass
+class MatchEvents:
+    """Eventos del partido ya normalizados (goles, asistencias, tarjetas).
+
+    Sirve para mercados de jugador ("X marca", "X marca o asiste",
+    "X recibe tarjeta"). `participants` son todos los jugadores que
+    aparecen en algún evento (incluidos cambios) — permite distinguir
+    "jugó y no marcó" de "no consta que jugara" (la casa anularía).
+    Solo lo devuelven proveedores con endpoint de eventos (hoy:
+    API-Football `/fixtures/events`).
+    """
+
+    home_team: str
+    away_team: str
+    scorers: list[str]
+    assisters: list[str]
+    booked: list[str]
+    participants: list[str]
+
+
+@dataclass
 class MatchStats:
     """Estadísticas de un partido ya normalizadas (córners, tarjetas...).
 
