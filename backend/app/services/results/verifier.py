@@ -98,6 +98,24 @@ _SPORT_ALIASES = {
 # en cada ciclo quemando llamadas a las APIs para nada; pasada esta
 # ventana queda pendiente de corrección manual.
 _MAX_VERIFICATION_AGE = timedelta(days=14)
+# Periodo de gracia para picks creados hace poco (p. ej. recuperados por
+# el catch-up o por un reproceso de raws antiguos): aunque su
+# `fecha_evento` ya esté fuera de la ventana, merecen sus primeras
+# pasadas — para partidos antiguos el resultado es estático, así que un
+# par de ciclos bastan para resolverlos o descartarlos.
+_RECENTLY_CREATED_GRACE = timedelta(hours=6)
+
+
+def _should_attempt_verification(pick: ParsedPick, now: datetime) -> bool:
+    """True si el pick merece un intento de verificación en esta pasada.
+
+    Dentro de la ventana siempre; fuera de ella solo durante el periodo
+    de gracia desde que se creó el pick (cubre los recuperados tarde).
+    """
+    if pick.fecha_evento >= now - _MAX_VERIFICATION_AGE:
+        return True
+    created = pick.created_at or pick.fecha_evento
+    return created >= now - _RECENTLY_CREATED_GRACE
 
 
 def _normalize_sport(deporte: Optional[str]) -> Optional[str]:
@@ -634,9 +652,12 @@ async def verify_pending_picks() -> int:
             .where(ParsedPick.anulada == False)  # noqa: E712
             .where(ParsedPick.fecha_evento != None)  # noqa: E711
             .where(ParsedPick.fecha_evento < now)
-            .where(ParsedPick.fecha_evento >= now - _MAX_VERIFICATION_AGE)
         )
-        pending = list(result.all())
+        # El filtro de edad se aplica en Python: además de la ventana de
+        # 14 días hay un periodo de gracia para picks recién creados
+        # (recuperados tarde por el catch-up), difícil de expresar en SQL
+        # sin OR de columnas. El conjunto pendiente es pequeño.
+        pending = [p for p in result.all() if _should_attempt_verification(p, now)]
 
         logger.info(
             "[RESULTS_VERIFIER] Picks pendientes de verificar (con fecha pasada): %s",
