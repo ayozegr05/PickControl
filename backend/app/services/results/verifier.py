@@ -762,6 +762,11 @@ async def verify_pending_picks() -> int:
         # (recuperados tarde por el catch-up), difícil de expresar en SQL
         # sin OR de columnas. El conjunto pendiente es pequeño.
         pending = [p for p in result.all() if _should_attempt_verification(p, now)]
+        # Recientes primero: los mercados de estadísticas (córners,
+        # tarjetas...) solo se pueden consultar en la ventana ±1 día de
+        # API-Football gratis — si la cuota se agota a mitad de pasada,
+        # que se queden fuera los picks viejos, no los que caducan.
+        pending.sort(key=lambda p: p.fecha_evento, reverse=True)
 
         logger.info(
             "[RESULTS_VERIFIER] Picks pendientes de verificar (con fecha pasada): %s",
