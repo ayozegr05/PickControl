@@ -97,12 +97,19 @@ def match_reversed(team_hint: str, home_team: str, away_team: str) -> bool:
 
 @dataclass
 class MatchResult:
-    """Resultado final de un partido, ya normalizado entre proveedores."""
+    """Resultado final de un partido, ya normalizado entre proveedores.
+
+    En tenis `home_score`/`away_score` son sets ganados y `sets` lleva
+    los juegos de cada set orientados igual que home/away
+    (`[(juegos_home_set1, juegos_away_set1), ...]`): permite mercados
+    de juegos (over/under, hándicap). None si el proveedor no lo da.
+    """
 
     home_team: str
     away_team: str
     home_score: int
     away_score: int
+    sets: Optional[list[tuple[int, int]]] = None
 
 
 @dataclass

@@ -51,6 +51,8 @@ _RESULT_PATTERN = re.compile(
     r"^\s*(?P<winner>.+?)\s+beat\s+(?P<loser>.+?)\s+(?P<w>\d+)\s*-\s*(?P<l>\d+)",
     re.IGNORECASE,
 )
+# Líneas siguientes de strResult: "Siniakova : 6 6" → juegos por set.
+_GAMES_LINE = re.compile(r"^\s*(?P<name>.+?)\s*:\s*(?P<games>\d+(?:\s+\d+)*)\s*$")
 
 
 def _similar(a: str, b: str) -> float:
@@ -74,16 +76,48 @@ def _player_similar(hint: str, api_name: str) -> float:
 
 
 def _parse_result(event: dict) -> Optional[MatchResult]:
-    """Extrae ganador/perdedor/sets de `strResult`. None si no terminó."""
+    """Extrae ganador/perdedor/sets de `strResult`. None si no terminó.
+
+    Además del marcador de sets ("X beat Y 2-0") se parsean las líneas
+    "Jugador : 6 6" para llevar los juegos por set en `MatchResult.sets`
+    (orientados winner/loser, igual que home/away del resultado).
+    """
     result = str(event.get("strResult") or "")
     m = _RESULT_PATTERN.search(result)
     if not m:
         return None
+    winner = m.group("winner").strip()
+    loser = m.group("loser").strip()
+
+    games_by_name: dict[str, list[int]] = {}
+    for line in result.splitlines()[1:]:
+        gm = _GAMES_LINE.match(line)
+        if gm:
+            games_by_name[gm.group("name").strip()] = [
+                int(x) for x in gm.group("games").split()
+            ]
+
+    sets = None
+    winner_games = loser_games = None
+    for name, games in games_by_name.items():
+        if _player_similar(winner, name) >= _MIN_PLAYER_SIMILARITY:
+            winner_games = games
+        elif _player_similar(loser, name) >= _MIN_PLAYER_SIMILARITY:
+            loser_games = games
+    total_sets = int(m.group("w")) + int(m.group("l"))
+    if (
+        winner_games
+        and loser_games
+        and len(winner_games) == len(loser_games) == total_sets
+    ):
+        sets = list(zip(winner_games, loser_games))
+
     return MatchResult(
-        home_team=m.group("winner").strip(),
-        away_team=m.group("loser").strip(),
+        home_team=winner,
+        away_team=loser,
         home_score=int(m.group("w")),
         away_score=int(m.group("l")),
+        sets=sets,
     )
 
 

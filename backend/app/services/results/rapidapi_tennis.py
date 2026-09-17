@@ -57,23 +57,32 @@ _DATE_TOLERANCE = timedelta(days=1)
 _SET_SCORE = re.compile(r"^(\d+)-(\d+)")
 
 
+def _parse_set_games(result: str) -> Optional[list[tuple[int, int]]]:
+    """Juegos por set desde la perspectiva del ganador: "6-7(5) 6-1"
+    -> [(6, 7), (6, 1)]. None si hay retirada/walkover (letras) o no
+    es parseable."""
+    if re.search(r"[a-zA-Z]", result):
+        return None
+    games = []
+    for token in result.split():
+        m = _SET_SCORE.match(token)
+        if not m:
+            return None
+        games.append((int(m.group(1)), int(m.group(2))))
+    return games or None
+
+
 def _count_sets(result: str) -> Optional[tuple[int, int]]:
     """Sets ganados por cada jugador a partir de "6-7(5) 6-1 6-3".
 
     Devuelve (sets_p1, sets_p2) contando qué jugador ganó cada set, o
     None si el string contiene retiradas/walkovers o no es parseable.
     """
-    if re.search(r"[a-zA-Z]", result):
-        return None
-    sets = result.split()
-    if not sets:
+    games = _parse_set_games(result)
+    if not games:
         return None
     p1_won = p2_won = 0
-    for s in sets:
-        m = _SET_SCORE.match(s)
-        if not m:
-            return None
-        g1, g2 = int(m.group(1)), int(m.group(2))
+    for g1, g2 in games:
         if g1 > g2:
             p1_won += 1
         elif g2 > g1:
@@ -175,6 +184,9 @@ class RapidApiTennisProvider:
                     away_team=loser,
                     home_score=sets[0],
                     away_score=sets[1],
+                    # Juegos por set (perspectiva del ganador) para
+                    # mercados de juegos.
+                    sets=_parse_set_games(str(match.get("result") or "")),
                 )
 
         if not best_match or best_score < _MIN_PLAYER_SIMILARITY:

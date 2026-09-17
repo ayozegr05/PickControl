@@ -65,7 +65,11 @@ _CATEGORIES = (3, 6, 72, 785, 213, 871, 76, 1705, 79)
 
 
 def _parse_event(event: dict) -> Optional[MatchResult]:
-    """Evento Sofascore -> MatchResult. None si no terminó o es dobles."""
+    """Evento Sofascore -> MatchResult. None si no terminó o es dobles.
+
+    `homeScore.periodN`/`awayScore.periodN` llevan los juegos de cada
+    set — se guardan en `MatchResult.sets` para mercados de juegos.
+    """
     status = (event.get("status") or {}).get("type")
     if status != "finished":
         return None
@@ -78,8 +82,24 @@ def _parse_event(event: dict) -> Optional[MatchResult]:
         away_sets = int((event.get("awayScore") or {})["current"])
     except (KeyError, TypeError, ValueError):
         return None
+
+    home_score = event.get("homeScore") or {}
+    away_score = event.get("awayScore") or {}
+    sets: list[tuple[int, int]] = []
+    for period in range(1, home_sets + away_sets + 1):
+        try:
+            sets.append(
+                (int(home_score[f"period{period}"]), int(away_score[f"period{period}"]))
+            )
+        except (KeyError, TypeError, ValueError):
+            break
+
     return MatchResult(
-        home_team=home, away_team=away, home_score=home_sets, away_score=away_sets
+        home_team=home,
+        away_team=away,
+        home_score=home_sets,
+        away_score=away_sets,
+        sets=sets or None,
     )
 
 

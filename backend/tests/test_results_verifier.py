@@ -111,16 +111,23 @@ class TestProvidersForSport:
 
 
 class _StubTennisProvider:
-    """Proveedor de tenis que devuelve sets ganados en home/away_score."""
+    """Proveedor de tenis que devuelve sets ganados en home/away_score y,
+    opcionalmente, los juegos de cada set en `sets`."""
 
     SUPPORTED_SPORTS = frozenset({"tenis"})
 
-    def __init__(self, home_sets: int, away_sets: int):
+    def __init__(
+        self,
+        home_sets: int,
+        away_sets: int,
+        sets: list[tuple[int, int]] | None = None,
+    ):
         self._match = MatchResult(
             home_team="Carlos Alcaraz",
             away_team="Jannik Sinner",
             home_score=home_sets,
             away_score=away_sets,
+            sets=sets,
         )
 
     async def find_match(self, date, team_hint):
@@ -139,23 +146,116 @@ def _pick_tenis(seleccion: str, mercado: str | None = "ganador") -> ParsedPick:
 
 
 class TestTennisMarkets:
-    """En tenis el proveedor devuelve sets ganados, no juegos: solo el
-    mercado "ganador" se puede resolver; hándicaps y totales de juegos
-    quedan pendientes para revisión manual."""
+    """Tenis: sets exactos ("gana 2-0"), over/under y hándicap de juegos
+    (con el desglose por sets del proveedor) o de sets."""
 
-    async def test_over_under_tenis_queda_pendiente(self):
-        pick = ParsedPick(
-            raw_message_id=1,
-            deporte="tenis",
-            mercado="más de",
-            seleccion="Más de 20.5 juegos",
-            linea=20.5,
-            fecha_evento=datetime(2026, 9, 15, 12, 0),
-        )
-        # Ni siquiera con el proveedor de tenis configurado.
-        acierto, anulada = await verify_pick(pick, [ApiTennisProvider("k")])
-        assert acierto is None
-        assert anulada is False
+    async def test_over_under_juegos_sin_desglose_pendiente(self):
+        # Sin `sets` en el resultado no hay total de juegos -> pendiente.
+        provider = _StubTennisProvider(2, 0)
+        pick = _pick_tenis("Más de 20.5 juegos", "más de")
+        pick.linea = 20.5
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+
+    async def test_over_under_juegos_total(self):
+        # 6-4 3-6 6-2 = 33 juegos > 20.5
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        pick = _pick_tenis("Más de 20.5 juegos", "más de")
+        pick.linea = 20.5
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_under_juegos_total_falla(self):
+        # 33 juegos no es menos de 20.5
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        pick = _pick_tenis("Menos de 20.5 juegos", "menos de")
+        pick.linea = 20.5
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_over_under_juegos_sin_sujeto_por_linea(self):
+        # Sin la palabra "juegos" la línea alta desambigua a juegos.
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])
+        pick = _pick_tenis("Más de 15.5", "over")
+        pick.linea = 15.5
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_over_under_sets_total(self):
+        # 2-1 = 3 sets > 2.5
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        pick = _pick_tenis("Más de 2.5 sets", "más de")
+        pick.linea = 2.5
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_over_under_sets_20_es_under(self):
+        # 2-0 = 2 sets < 2.5
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])
+        pick = _pick_tenis("Más de 2.5 sets", "más de")
+        pick.linea = 2.5
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_over_under_juegos_jugador(self):
+        # Alcaraz: 6+3+6 = 15 juegos > 12.5
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        pick = _pick_tenis("Alcaraz más de 12.5 juegos", "más de")
+        pick.linea = 12.5
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_handicap_sets(self):
+        # Alcaraz -1.5 sets con 2-1: 2-1.5 = 0.5 > 1? No: 2-1.5=0.5 vs 1
+        # -> pierde. Con 2-0 gana.
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])
+        pick = _pick_tenis("Alcaraz -1.5 sets", "hándicap")
+        pick.linea = -1.5
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_handicap_juegos(self):
+        # Alcaraz 15 juegos vs Sinner 12: -2.5 -> 12.5 > 12 gana.
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        pick = _pick_tenis("Alcaraz -2.5 juegos", "hándicap")
+        pick.linea = -2.5
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_handicap_juegos_push_anulada(self):
+        # Alcaraz 15 vs Sinner 12, línea -3 entera -> push -> anulada.
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        pick = _pick_tenis("Alcaraz -3 juegos", "hándicap")
+        pick.linea = -3.0
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, True)
+
+    async def test_handicap_sin_sujeto_pendiente(self):
+        # "-1.5" a secas es ambiguo entre sets y juegos -> pendiente.
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])
+        pick = _pick_tenis("Alcaraz -1.5", "hándicap")
+        pick.linea = -1.5
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+
+    async def test_over_under_sin_direccion_pendiente(self):
+        # Mercado "over/under juegos" + selección sin lado -> pendiente,
+        # no hándicap.
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])
+        pick = _pick_tenis("Alcaraz", "over/under juegos")
+        pick.linea = 12.5
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+
+    async def test_juegos_jugador_desconocido_pendiente(self):
+        provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
+        pick = _pick_tenis("Fokina más de 12.5 juegos", "más de")
+        pick.linea = 12.5
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
 
     async def test_gana_20_con_20_real_acierta(self):
         provider = _StubTennisProvider(2, 0)
@@ -191,6 +291,71 @@ class TestTennisMarkets:
         provider = _StubTennisProvider(2, 0)
         acierto, anulada = await verify_pick(_pick_tenis("Fokina gana 2-0"), [provider])
         assert (acierto, anulada) == (None, False)
+
+
+class TestTennisProviderSets:
+    """Cada proveedor extrae los juegos por set en `MatchResult.sets`,
+    orientados igual que home_team/away_team del resultado."""
+
+    def test_thesportsdb_str_result_juegos_por_set(self):
+        from app.services.results.api_tennis import _parse_result
+
+        event = {
+            "strResult": "Siniakova  beat Udvardy  2-0\r\n"
+            "Siniakova : 6 6\n"
+            "Udvardy : 1 2"
+        }
+        match = _parse_result(event)
+        assert match is not None
+        assert match.sets == [(6, 1), (6, 2)]
+
+    def test_thesportsdb_sin_lineas_de_juegos(self):
+        from app.services.results.api_tennis import _parse_result
+
+        match = _parse_result({"strResult": "Siniakova  beat Udvardy  2-0"})
+        assert match is not None
+        assert match.sets is None
+
+    def test_rapidapi_result_con_tiebreak(self):
+        from app.services.results.rapidapi_tennis import _parse_set_games
+
+        # "6-7(5)": el número entre paréntesis son puntos del tiebreak,
+        # no juegos — se ignoran.
+        assert _parse_set_games("6-7(5) 6-1 6-3") == [(6, 7), (6, 1), (6, 3)]
+
+    def test_rapidapi_ret_no_parseable(self):
+        from app.services.results.rapidapi_tennis import _parse_set_games
+
+        assert _parse_set_games("6-1 2-0 RET") is None
+        assert _parse_set_games("W/O") is None
+
+    def test_tennisapi1_period_scores(self):
+        from app.services.results.tennisapi1 import _parse_event
+
+        event = {
+            "status": {"type": "finished"},
+            "homeTeam": {"name": "Carlos Alcaraz"},
+            "awayTeam": {"name": "Jannik Sinner"},
+            "homeScore": {"current": 2, "period1": 6, "period2": 3, "period3": 7},
+            "awayScore": {"current": 1, "period1": 4, "period2": 6, "period3": 6},
+        }
+        match = _parse_event(event)
+        assert match is not None
+        assert match.sets == [(6, 4), (3, 6), (7, 6)]
+
+    def test_tennisapi1_sin_periodos(self):
+        from app.services.results.tennisapi1 import _parse_event
+
+        event = {
+            "status": {"type": "finished"},
+            "homeTeam": {"name": "A"},
+            "awayTeam": {"name": "B"},
+            "homeScore": {"current": 2},
+            "awayScore": {"current": 0},
+        }
+        match = _parse_event(event)
+        assert match is not None
+        assert match.sets is None
 
 
 class TestResolveWinner:
