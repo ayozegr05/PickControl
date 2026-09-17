@@ -29,7 +29,7 @@ from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.models.user import User  # noqa: F401
 from app.services.telegram.pick_extractor import _looks_like_bet, extract_pick
-from app.services.telegram.processor import _find_duplicate_pick
+from app.services.telegram.processor import _find_duplicate_pick, _merge_pick_data
 
 
 async def main() -> None:
@@ -80,7 +80,10 @@ async def main() -> None:
         for parsed, raw in passing:
             source_text = (raw.extracted_text or raw.text or "").strip()
             pick = await extract_pick(
-                source_text, settings.openai_api_key, informante=raw.channel_name
+                source_text,
+                settings.openai_api_key,
+                informante=raw.channel_name,
+                fecha_referencia=raw.received_at,
             )
             if not pick or not pick.es_apuesta:
                 still_not_bet += 1
@@ -96,8 +99,7 @@ async def main() -> None:
                     f"  msg {raw.message_id}: duplicado de ParsedPick "
                     f"id={duplicate.id} ('{pick.seleccion}'), se queda rejected."
                 )
-                if duplicate.fecha_evento is None and pick.fecha_evento is not None:
-                    duplicate.fecha_evento = pick.fecha_evento
+                if _merge_pick_data(duplicate, pick):
                     session.add(duplicate)
                 continue
 

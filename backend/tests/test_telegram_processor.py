@@ -17,8 +17,10 @@ from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.services.telegram.pick_extractor import ExtractedPick
 from app.services.telegram.processor import (
+    _merge_pick_data,
     _text_similarity,
     _word_set_similarity,
+    _word_subset,
     process_incoming_message,
 )
 
@@ -41,6 +43,39 @@ class TestWordSetSimilarity:
 class TestTextSimilarity:
     def test_textos_identicos_son_totalmente_similares(self):
         assert _text_similarity("Real Madrid gana", "Real Madrid gana") == 1.0
+
+
+class TestWordSubset:
+    def test_nombre_parcial_es_subconjunto(self):
+        # "Tom gana" (texto del tipster) ⊂ "Tom Gentzsch gana" (OCR).
+        assert _word_subset("Tom gana", "Tom Gentzsch gana") is True
+
+    def test_no_es_subconjunto_con_palabras_distintas(self):
+        assert _word_subset("Tom gana", "Real Madrid gana") is False
+
+    def test_una_sola_palabra_no_basta(self):
+        # Una selección genérica de 1 palabra no debe hacer match con
+        # cualquier pick del canal.
+        assert _word_subset("Gana", "Tom Gentzsch gana") is False
+
+    def test_ignora_stopwords(self):
+        # Foto "Más de 3 tarjetas" ⊂ texto "Más 3 tarjetas en el partido".
+        assert _word_subset("Más de 3 tarjetas", "Más 3 tarjetas en el partido") is True
+
+
+class TestMergePickData:
+    def test_fusiona_campos_que_faltan(self):
+        target = ParsedPick(seleccion="Tom Gentzsch gana", cuota=1.53)
+        source = ExtractedPick(es_apuesta=True, seleccion="Tom gana", stake=4.0)
+        assert _merge_pick_data(target, source) is True
+        assert target.stake == 4.0
+        assert target.cuota == 1.53  # no se pisa lo que ya tiene
+
+    def test_no_fusiona_si_no_falta_nada(self):
+        target = ParsedPick(seleccion="X gana", cuota=1.5, stake=2.0)
+        source = ExtractedPick(es_apuesta=True, seleccion="X gana", stake=4.0)
+        assert _merge_pick_data(target, source) is False
+        assert target.stake == 2.0
 
 
 @pytest.fixture

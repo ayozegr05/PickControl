@@ -48,27 +48,116 @@ def _word_set_similarity(a: str, b: str) -> float:
     return len(words_a & words_b) / len(words_a | words_b)
 
 
+# Palabras vacías que no aportan identidad al pick: el texto del tipster
+# dice "Más 3 tarjetas en el partido" y el OCR "Más de 3 tarjetas" — sin
+# filtrar stopwords ninguno es subconjunto del otro.
+_STOPWORDS = {
+    "a",
+    "al",
+    "de",
+    "del",
+    "el",
+    "en",
+    "la",
+    "las",
+    "los",
+    "por",
+    "para",
+    "y",
+    "o",
+    "u",
+    "con",
+    "sin",
+    "que",
+    "se",
+    "su",
+    "sus",
+    "un",
+    "una",
+    "es",
+    "the",
+}
+
+
+def _word_subset(a: str, b: str) -> bool:
+    """True si todas las palabras significativas de `a` están en `b`.
+
+    Cubre el nombre parcial: el texto del tipster dice "Tom gana" y el
+    OCR del boleto dice "Tom Gentzsch gana" — es el mismo pick aunque la
+    similitud global sea baja. Se ignoran stopwords ("de", "en", "el"...)
+    para que "Más de 3 tarjetas" ⊂ "Más 3 tarjetas en el partido". Exigimos
+    mínimo 2 palabras significativas para que una selección genérica de
+    una sola palabra ("Gana") no haga match con cualquier cosa del canal.
+    """
+    words_a = {w for w in re.findall(r"\w+", a.lower()) if w not in _STOPWORDS}
+    words_b = {w for w in re.findall(r"\w+", b.lower()) if w not in _STOPWORDS}
+    return len(words_a) >= 2 and words_a <= words_b
+
+
+# Campos que el mensaje duplicado puede aportar al pick original cuando
+# este no los tiene: la foto del boleto suele traer la cuota y el texto
+# del tipster el stake (o la fecha del evento).
+_MERGEABLE_FIELDS = ("fecha_evento", "cuota", "stake", "linea", "casa", "mercado")
+
+
+def _merge_pick_data(target: ParsedPick, source: ExtractedPick) -> bool:
+    """Copia a `target` los campos que le falten y `source` sí tenga."""
+    merged = False
+    for field in _MERGEABLE_FIELDS:
+        if getattr(target, field) is None and getattr(source, field) is not None:
+            setattr(target, field, getattr(source, field))
+            merged = True
+    return merged
+
+
 async def _find_duplicate_pick(
-    session: AsyncSession, channel: str, pick: ExtractedPick
+    session: AsyncSession,
+    channel: str,
+    pick: ExtractedPick,
+    message_date: datetime | None,
 ) -> ParsedPick | None:
     """Busca un ParsedPick muy similar ya guardado para el mismo canal.
 
     Sirve para evitar duplicar el mismo pronóstico cuando el tipster lo
     envía primero como imagen (OCR) y luego lo repite como texto (o al
-    revés).
+    revés). La ventana se mide sobre la FECHA DEL MENSAJE
+    (`received_at`), no sobre `created_at`: en una importación masiva
+    todos los picks tienen created_at=hoy y selecciones genéricas como
+    "Más de 1.5 goles" fusionarían partidos de días distintos.
     """
     if not pick.seleccion:
         return None
 
-    cutoff = utc_now() - _DUPLICATE_WINDOW
-    result = await session.exec(
+    query = (
         select(ParsedPick)
+        .join(
+            TelegramRawMessage,
+            TelegramRawMessage.id == ParsedPick.raw_message_id,  # type: ignore[arg-type]
+        )
         .where(ParsedPick.informante == channel)
         .where(ParsedPick.es_apuesta == True)  # noqa: E712
-        .where(ParsedPick.created_at >= cutoff)
     )
+    if message_date is not None:
+        query = query.where(
+            TelegramRawMessage.received_at >= message_date - _DUPLICATE_WINDOW,
+            TelegramRawMessage.received_at <= message_date + _DUPLICATE_WINDOW,
+        )
+    else:
+        cutoff = utc_now() - _DUPLICATE_WINDOW
+        query = query.where(ParsedPick.created_at >= cutoff)
+    result = await session.exec(query)
     for candidate in result.all():
         if not candidate.seleccion:
+            continue
+
+        # La línea distingue apuestas con texto casi idéntico: "Más de
+        # 7.0 córners" y "Más de 8.0 córners" son picks distintos y no
+        # deben fusionarse.
+        if (
+            pick.linea is not None
+            and candidate.linea is not None
+            and abs(candidate.linea - pick.linea) > 0.001
+        ):
             continue
 
         similarity = _text_similarity(candidate.seleccion, pick.seleccion)
@@ -77,6 +166,12 @@ async def _find_duplicate_pick(
 
         if _word_set_similarity(candidate.seleccion, pick.seleccion) >= (
             _DUPLICATE_WORD_SET_SIMILARITY
+        ):
+            return candidate
+
+        # Nombre parcial: "Tom gana" ⊂ "Tom Gentzsch gana".
+        if _word_subset(candidate.seleccion, pick.seleccion) or _word_subset(
+            pick.seleccion, candidate.seleccion
         ):
             return candidate
 
@@ -152,7 +247,10 @@ async def process_incoming_message(
         if settings.openai_api_key and source_text:
             try:
                 pick = await extract_pick(
-                    source_text, settings.openai_api_key, informante=channel
+                    source_text,
+                    settings.openai_api_key,
+                    informante=channel,
+                    fecha_referencia=naive_message_date,
                 )
             except Exception:  # noqa: BLE001
                 logger.exception(
@@ -164,6 +262,17 @@ async def process_incoming_message(
                 pick = None
 
         if pick is not None:
+            # Auditoría de fechas: permite cotejar la fecha real del
+            # mensaje con la que el extractor asignó al evento.
+            logger.info(
+                "[TELEGRAM_PROCESSOR] msg=%s canal=%s fecha_referencia=%s "
+                "-> fecha_evento_extraida=%s (metodo=%s)",
+                message_id,
+                channel,
+                naive_message_date,
+                pick.fecha_evento,
+                pick.metodo,
+            )
             if pick.fecha_evento is None and naive_message_date is not None:
                 # Aproximación: sin fecha explícita en el texto, asumimos
                 # que el pick se publicó el mismo día del partido.
@@ -179,7 +288,9 @@ async def process_incoming_message(
 
             duplicate = None
             if pick.es_apuesta:
-                duplicate = await _find_duplicate_pick(db_session, channel, pick)
+                duplicate = await _find_duplicate_pick(
+                    db_session, channel, pick, naive_message_date
+                )
 
             if duplicate:
                 logger.info(
@@ -190,20 +301,29 @@ async def process_incoming_message(
                     pick.seleccion,
                     duplicate.seleccion,
                 )
-                if duplicate.fecha_evento is None and pick.fecha_evento is not None:
-                    # El mensaje duplicado puede traer información (p. ej.
-                    # la fecha del evento en la foto del boleto) que el
-                    # original no tenía. La fusionamos en vez de perderla.
-                    duplicate.fecha_evento = pick.fecha_evento
+                # El duplicado puede traer datos que el original no
+                # tenía (la foto trae la cuota, el texto el stake...).
+                if _merge_pick_data(duplicate, pick):
                     db_session.add(duplicate)
                     logger.info(
-                        "[TELEGRAM_PROCESSOR] Fecha de evento completada en "
-                        "pick id=%s a partir del duplicado.",
+                        "[TELEGRAM_PROCESSOR] Datos del duplicado fusionados "
+                        "en pick id=%s.",
                         duplicate.id,
                     )
             else:
                 informante = await get_or_create_informante(
                     db_session, channel, es_canal_telegram=True
+                )
+                # Los "retos" del tipster ("RETO X3 GRATIS"...) van a su
+                # propia sección, fuera de las apuestas diarias. El texto
+                # del reto suele venir en la caption o en el cuerpo del
+                # mensaje, así que se mira ambos (texto + OCR).
+                es_reto = bool(
+                    re.search(
+                        r"\breto\b",
+                        f"{text or ''} {extracted_text or ''}",
+                        re.IGNORECASE,
+                    )
                 )
                 parsed = ParsedPick(
                     raw_message_id=raw.id,
@@ -223,6 +343,7 @@ async def process_incoming_message(
                     linea=pick.linea,
                     metodo=pick.metodo,
                     confianza=pick.confianza,
+                    es_reto=es_reto,
                 )
                 db_session.add(parsed)
         elif not source_text:
