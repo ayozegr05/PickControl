@@ -774,6 +774,176 @@ _TENNIS_SETS_AFTER_VERB = re.compile(
 )
 
 
+# Tenis: sujeto del mercado de totales/hándicap — "juegos" o "sets".
+_TENNIS_SETS_SUBJECT = re.compile(r"\bsets?\b", re.IGNORECASE)
+_TENNIS_GAMES_SUBJECT = re.compile(r"juego\w*|\bgames?\b", re.IGNORECASE)
+# Ruido a quitar de la selección para quedarnos con el jugador.
+_TENNIS_PLAYER_NOISE = re.compile(
+    r"h[aá]ndicap\w*|asi[aá]tic\w*|juego\w*|\bgames?\b|\bsets?\b"
+    r"|m[aá]s|menos|over|under|gana\w*",
+    re.IGNORECASE,
+)
+
+
+def _tennis_subject(text: str) -> Optional[str]:
+    """ "sets" | "games" | None si el mercado no dice a cuál aplica."""
+    if _TENNIS_SETS_SUBJECT.search(text):
+        return "sets"
+    if _TENNIS_GAMES_SUBJECT.search(text):
+        return "games"
+    return None
+
+
+def _extract_tennis_player_name(seleccion: str) -> Optional[str]:
+    """Nombre del jugador en una selección de tenis ("Alcaraz -1.5 sets"
+    -> "Alcaraz"). Quita línea, palabras de mercado y verbos."""
+    cleaned = _LINEA_PATTERN.sub("", seleccion or "")
+    cleaned = _TENNIS_PLAYER_NOISE.sub(" ", cleaned)
+    return _clean_team_name(cleaned) or None
+
+
+def _player_games(match: MatchResult, player: str) -> Optional[tuple[int, int]]:
+    """Juegos (jugador, rival) sumando el desglose por sets. None si el
+    proveedor no lo trajo o el jugador no casa con ningún participante."""
+    if not match.sets:
+        return None
+    home_games = sum(h for h, _ in match.sets)
+    away_games = sum(a for _, a in match.sets)
+    home_sim = _similar(player, match.home_team)
+    away_sim = _similar(player, match.away_team)
+    if max(home_sim, away_sim) < _MIN_TEAM_SIMILARITY:
+        return None
+    if home_sim >= away_sim:
+        return home_games, away_games
+    return away_games, home_games
+
+
+def _handicap_result(player_score: int, opp_score: int, linea: float):
+    """Hándicap sobre un marcador cualquiera (goles, sets, juegos):
+    devuelve (acierto, anulada) partiendo líneas de cuarto en dos medias."""
+    q = int(round(linea * 4))
+    lines = (linea - 0.25, linea + 0.25) if q % 2 == 1 else (linea,)
+    outcomes = [_handicap_outcome(player_score, opp_score, line) for line in lines]
+    if all(o == "win" for o in outcomes):
+        return True, False
+    if all(o == "lose" for o in outcomes):
+        return False, False
+    if all(o == "push" for o in outcomes):
+        return None, True
+    return ("win" in outcomes), False
+
+
+async def _verify_tennis_pick(
+    pick: ParsedPick, providers: list[ResultsProvider]
+) -> Optional[tuple[Optional[bool], bool]]:
+    """Resuelve mercados de tenis: resultado exacto en sets ("gana 2-0"),
+    over/under de juegos o sets, y hándicap de juegos o sets.
+
+    Devuelve None si el pick no entra en ninguno (cae al "ganador").
+    Usa `MatchResult.sets` (juegos por set) para los mercados de juegos;
+    si el proveedor no lo trajo, pendiente.
+    """
+    seleccion = pick.seleccion or ""
+    text = f"{seleccion} {pick.mercado or ''}"
+
+    sets_pred = _extract_tennis_sets_prediction(seleccion, pick.mercado)
+    if sets_pred:
+        team, s1, s2, player_oriented = sets_pred
+        team_hint = pick.evento or team
+        match = await _find_match_across_providers(
+            pick.fecha_evento, team_hint, providers, pick.id
+        )
+        if not match:
+            return None, False
+        scores = _match_team_scores(match, team)
+        if scores is None:
+            return None, False
+        player_sets, opp_sets = scores
+        if player_sets <= opp_sets:
+            return False, False  # el jugador predicho perdió
+        if player_oriented:
+            pred_ps, pred_os = s1, s2
+        else:
+            # Marcador en orden del evento: pasarlo a sets del jugador
+            # según el lado que ocupa (y si el evento va al revés).
+            player_is_home = _similar(team, match.home_team) >= _similar(
+                team, match.away_team
+            )
+            reversed_order = bool(pick.evento) and match_reversed(
+                pick.evento, match.home_team, match.away_team
+            )
+            if player_is_home != reversed_order:
+                pred_ps, pred_os = s1, s2
+            else:
+                pred_ps, pred_os = s2, s1
+        return (player_sets == pred_ps and opp_sets == pred_os), False
+
+    if pick.linea is None:
+        return None
+
+    direction = _detect_over_under_direction(seleccion) or _detect_over_under_direction(
+        pick.mercado or ""
+    )
+    if direction:
+        # Sin sujeto explícito la línea desambigua: los juegos totales
+        # nunca bajan de ~12, las líneas de sets son <= 4.5.
+        subject = _tennis_subject(text) or ("games" if pick.linea >= 6 else "sets")
+        player = _extract_team_total_team(seleccion)
+        team_hint = player or pick.evento
+        if not team_hint:
+            return None, False
+        match = await _find_match_across_providers(
+            pick.fecha_evento, team_hint, providers, pick.id
+        )
+        if not match:
+            return None, False
+        if subject == "sets":
+            if player:
+                scores = _match_team_scores(match, player)
+                if scores is None:
+                    return None, False
+                return _compare_over_under(scores[0], direction, pick.linea)
+            return _compare_over_under(
+                match.home_score + match.away_score, direction, pick.linea
+            )
+        if player:
+            totals = _player_games(match, player)
+            if totals is None:
+                return None, False
+            return _compare_over_under(totals[0], direction, pick.linea)
+        if not match.sets:
+            return None, False
+        total_games = sum(h + a for h, a in match.sets)
+        return _compare_over_under(total_games, direction, pick.linea)
+
+    # Línea sin dirección over/under -> hándicap. Si el mercado pinta
+    # over/under pero no se detecta el lado (p. ej. mercado
+    # "over/under juegos" + selección "Alcaraz"), pendiente: resolverlo
+    # como hándicap sería un resultado inventado.
+    if _OVER_PATTERN.search(text) or _UNDER_PATTERN.search(text):
+        return None, False
+    # Exige sujeto explícito: "-1.5" a secas es ambiguo entre sets y
+    # juegos.
+    player = _extract_tennis_player_name(seleccion)
+    subject = _tennis_subject(text)
+    if not player or subject is None:
+        return None, False
+    match = await _find_match_across_providers(
+        pick.fecha_evento, pick.evento or player, providers, pick.id
+    )
+    if not match:
+        return None, False
+    if subject == "sets":
+        scores = _match_team_scores(match, player)
+        if scores is None:
+            return None, False
+        return _handicap_result(scores[0], scores[1], pick.linea)
+    totals = _player_games(match, player)
+    if totals is None:
+        return None, False
+    return _handicap_result(totals[0], totals[1], pick.linea)
+
+
 def _extract_tennis_sets_prediction(
     seleccion: str, mercado: Optional[str]
 ) -> Optional[tuple[str, int, int, bool]]:
@@ -979,12 +1149,6 @@ async def verify_pick(
     es_handicap = "hándicap" in mercado_low or "handicap" in mercado_low
     es_over_under = "over" in mercado_low or "under" in mercado_low
 
-    if sport == "tenis" and (es_handicap or es_over_under):
-        # En tenis los proveedores devuelven sets ganados, no juegos:
-        # un "Más de 20.5 juegos" o un hándicap de juegos no se puede
-        # resolver con esos números. Solo el mercado "ganador" aplica.
-        return None, False
-
     if any(
         m in mercado_low
         for m in ("combinada", "combinado", "acumulador", "múltiple", "multiple")
@@ -994,6 +1158,12 @@ async def verify_pick(
         # "ganador" solo comprobaría la primera y daría un falso
         # resultado. Manual hasta modelar las selecciones sueltas.
         return None, False
+
+    if sport == "tenis":
+        result = await _verify_tennis_pick(pick, providers_for_sport)
+        if result is not None:
+            return result
+        # Mercado no reconocido en tenis: cae al "ganador" de abajo.
 
     if pick.evento and pick.fecha_evento < utc_now() - _POSTPONED_VOID_AFTER:
         # Pasada la ventana de reprogramación de la casa (~72 h) y el
@@ -1198,42 +1368,6 @@ async def verify_pick(
         if players is None:
             return None, False
         return _resolve_player_prop(players, player, prop_keys, prop_dir, prop_linea)
-
-    # Tenis: "X gana 2-0" es resultado exacto en sets — verificar solo
-    # el ganador marcaría acierto en un 2-1 real (la apuesta perdió).
-    if sport == "tenis":
-        sets_pred = _extract_tennis_sets_prediction(pick.seleccion or "", pick.mercado)
-        if sets_pred:
-            team, s1, s2, player_oriented = sets_pred
-            team_hint = pick.evento or team
-            match = await _find_match_across_providers(
-                pick.fecha_evento, team_hint, providers_for_sport, pick.id
-            )
-            if not match:
-                return None, False
-            scores = _match_team_scores(match, team)
-            if scores is None:
-                return None, False
-            player_sets, opp_sets = scores
-            if player_sets <= opp_sets:
-                return False, False  # el jugador predicho perdió
-            if player_oriented:
-                pred_ps, pred_os = s1, s2
-            else:
-                # Marcador en orden del evento: pasarlo a sets del
-                # jugador según el lado que ocupa (y si el evento va
-                # al revés que el fixture).
-                player_is_home = _similar(team, match.home_team) >= _similar(
-                    team, match.away_team
-                )
-                reversed_order = bool(pick.evento) and match_reversed(
-                    pick.evento, match.home_team, match.away_team
-                )
-                if player_is_home != reversed_order:
-                    pred_ps, pred_os = s1, s2
-                else:
-                    pred_ps, pred_os = s2, s1
-            return (player_sets == pred_ps and opp_sets == pred_os), False
 
     # Mercado "ganador" simple (o "resultado sin empate" con selección =
     # solo el nombre del equipo).

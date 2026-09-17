@@ -70,15 +70,20 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
       Ambos fallbacks ya probados en vivo (Alcaraz/Shelton y
       Bucsa/Udvardy resueltos). Baloncesto: pendiente de empezar cuando
       se confirme (api-sports.io sí tiene basketball — API-Basketball).
-- [ ] **Mercados de sets/juegos en tenis** (mismo coste de API: los 3
-      proveedores ya devuelven el desglose por sets — `strResult`,
-      `result`, `homeScore.periodN` — solo falta parsearlo):
+- [x] **Mercados de sets/juegos en tenis** (sin coste extra de API: los 3
+      proveedores ya devolvían el desglose por sets — `strResult`,
+      `result`, `homeScore.periodN` — parseado a `MatchResult.sets`):
       - ~~Correct score en sets ("gana 2-0")~~ — **hecho**: "X gana A-B"
         exige el marcador exacto de sets (un 2-1 real ya no cuenta como
         acierto de un "gana 2-0"); también "jugador" + mercado
         "resultado exacto" con orientación por el orden del evento.
-      - Over/under y hándicap de juegos: sumando juegos por set.
-      - Decidir política ante RET/W-O (bookies suelen anular).
+      - ~~Over/under y hándicap de juegos~~ — **hecho**: sumando juegos
+        por set; total del partido y por jugador, líneas de cuarto y
+        push incluidos. Over/under de sets también.
+      - RET/W-O quedan pendientes a propósito (cada casa aplica reglas
+        distintas sobre cuánto partido debe completarse; si el dato es
+        ambiguo mejor pendiente que inventado). Política de anulada
+        automática por decidir.
 - [x] **Amortizar el límite de API-Football** (implementado): caché de
       fixtures por fecha + caché de stats/events/players por fixture,
       pendientes ordenados por `fecha_evento` DESC (los picks que caducan
@@ -231,9 +236,10 @@ importados). "Push" (líneas enteras) y aplazados/cancelados >72 h se marcan
 - **Ligas menores / competiciones fuera de football-data** (Süper Lig,
   amistosos, Primera Federación...): solo resolubles dentro de la ventana de
   API-Football; fuera de ella, corrección manual.
-- **Tenis solo resuelve "ganador"**: los sets/juegos están en las respuestas
-  pero sin parsear (bug conocido: "gana 2-0" se marca acierto aunque gane 2-1);
-  política RET/W-O sin decidir.
+- **Tenis** resuelve ganador, marcador exacto en sets, over/under y hándicap
+  de juegos y de sets (vía `MatchResult.sets` parseado de los 3 proveedores).
+  Pendiente a propósito: RET/W-O (reglas de anulada varían por casa) y mercados
+  sin sujeto inequívoco ("-1.5" a secas no distingue sets de juegos).
 - **Baloncesto** sin proveedor (API-Basketball de api-sports.io sería el
   candidato).
 - Futuro: plan de pago de API-Football eliminaría la restricción de fechas.
