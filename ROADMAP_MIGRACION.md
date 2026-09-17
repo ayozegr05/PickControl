@@ -86,6 +86,13 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
       - ~~Ganador de set individual y tiebreak~~ — **hecho**: "X gana
         el 1er set" se resuelve con los juegos de ese set; "habrá
         tiebreak" se deduce de un 7-6 en el desglose.
+      - ~~Dobles~~ — **hecho**: matching por parejas (`_pair_similar`);
+        un individual no casa con dobles ni al revés.
+      - ~~Hándicap ambiguo / "gana un set" / líneas "N+"~~ — **hecho**:
+        "-1.5" sin sujeto usa la convención de casas (≤1.5 → sets,
+        ≥3.5 → juegos, en medio pendiente); "gana un set" y líneas
+        "21+"/"20 o más" (= over N-0.5) soportadas en verificador y
+        extractor.
 - [x] **Amortizar el límite de API-Football** (implementado): caché de
       fixtures por fecha + caché de stats/events/players por fixture,
       pendientes ordenados por `fecha_evento` DESC (los picks que caducan
@@ -238,13 +245,15 @@ importados). "Push" (líneas enteras) y aplazados/cancelados >72 h se marcan
 - **Ligas menores / competiciones fuera de football-data** (Süper Lig,
   amistosos, Primera Federación...): solo resolubles dentro de la ventana de
   API-Football; fuera de ella, corrección manual.
-- **Tenis** resuelve ganador, marcador exacto en sets, over/under y hándicap
-  de juegos y de sets — también por set concreto —, ganador de set individual,
-  tiebreak sí/no (vía `MatchResult.sets`) y **dobles** (matching por parejas:
-  exige todos los miembros en la pista, y una pista de dobles no casa con un
-  individual). RET/W-O → anulada automática.
-  Pendiente a propósito: hándicap "-1.5" sin sujeto (ambiguo entre sets y
-  juegos) y combinadas.
+- **Tenis** resuelve ganador, marcador exacto en sets, "gana un set",
+  over/under y hándicap de juegos y de sets — también por set concreto —,
+  ganador de set individual, tiebreak sí/no (vía `MatchResult.sets`) y
+  **dobles** (matching por parejas: exige todos los miembros en la pista, y
+  una pista de dobles no casa con un individual). RET/W-O → anulada
+  automática. Líneas "21+"/"N o más" y hándicap sin sujeto (convención:
+  ≤1.5 sets, ≥3.5 juegos, en medio pendiente) soportadas.
+  Pendiente a propósito: combinadas (sección propia) y correct score en
+  juegos, mercado casi inexistente en los canales.
 - **Baloncesto** sin proveedor (API-Basketball de api-sports.io sería el
   candidato).
 - Futuro: plan de pago de API-Football eliminaría la restricción de fechas.

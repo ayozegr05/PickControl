@@ -172,6 +172,13 @@ def _extract_linea(seleccion: str) -> Optional[float]:
     if unsigned_match:
         return float(unsigned_match.group(1).replace(",", "."))
 
+    # "21+ juegos" / "20 o más juegos" = over N-0.5 (N o más).
+    plus_match = re.search(r"(\d+(?:[.,]\d+)?)\s*\+", seleccion)
+    o_mas_match = re.search(r"(\d+(?:[.,]\d+)?)\s+o\s+m[aá]s", seleccion.lower())
+    for m in (plus_match, o_mas_match):
+        if m:
+            return float(m.group(1).replace(",", ".")) - 0.5
+
     return None
 
 
