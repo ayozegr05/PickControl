@@ -192,8 +192,14 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
       (hoy todo corre en local: Uvicorn + Expo en red local).
 - [ ] **Backups de PostgreSQL** (`pg_dump` diario): la BD es la fuente de
       verdad de la auditoría.
-- [ ] **Tests del pipeline de Telegram**: catch-up, dedup, OCR y verifier tienen
-      la lógica más frágil y la menor cobertura.
+- [x] **Tests del pipeline de Telegram** (hecho): `catchup.py` (marca de
+      agua, huecos por debajo de la marca, raw vacío/`processed=False`
+      reprocesado, raw con pick vinculado no se toca, corte por 7 días,
+      error aislado por mensaje y por canal), `handlers.py` (parsing de
+      canales/ids, foto sin texto → OCR, foto con caption sin OCR,
+      descarga fallida → raw vacío, grouped_id ignorado, álbum hereda
+      caption), `ocr.py` (sin key/archivo/error → None, éxito) y
+      `client.py` (credenciales obligatorias, singleton, reset).
 - [ ] **Limpieza de usuarios**: decidir si `test@a.com` se mantiene; la
       contraseña actual `123456` es estrictamente temporal.
 
