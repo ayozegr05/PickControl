@@ -42,7 +42,7 @@ from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
 from app.services.results.api_football import ApiFootballProvider
-from app.services.results.api_tennis import ApiTennisProvider
+from app.services.results.api_tennis import ApiTennisProvider, _pair_similar
 from app.services.results.base import (
     MatchEvents,
     MatchPlayers,
@@ -164,7 +164,9 @@ def _providers_for_sport(
 
 
 _MARKDOWN_NOISE = re.compile(r"[*_~`]+")
-_NON_TEAM_CHARS = re.compile(r"[^\w\sÁÉÍÓÚÑáéíóúñ.'-]", re.UNICODE)
+# Se conserva "/": en tenis separa a los miembros de una pareja de
+# dobles ("Alcaraz / Munar") y el matching por parejas lo necesita.
+_NON_TEAM_CHARS = re.compile(r"[^\w\sÁÉÍÓÚÑáéíóúñ.'/-]", re.UNICODE)
 _HANDICAP_KEYWORDS = re.compile(r"h[aá]nd(?:icap)?\.?\s*asi[aá]tico", re.IGNORECASE)
 _LINEA_PATTERN = re.compile(r"[+-]\s?\d+(?:[.,]\d+)?")
 
@@ -856,11 +858,10 @@ def _player_games_in_set(
     if not match.sets or len(match.sets) <= set_idx:
         return None
     home_games, away_games = match.sets[set_idx]
-    home_sim = _similar(player, match.home_team)
-    away_sim = _similar(player, match.away_team)
-    if max(home_sim, away_sim) < _MIN_TEAM_SIMILARITY:
+    side = _tennis_side(match, player)
+    if side is None:
         return None
-    if home_sim >= away_sim:
+    if side == 0:
         return home_games, away_games
     return away_games, home_games
 
@@ -882,18 +883,39 @@ def _extract_tennis_player_name(seleccion: str) -> Optional[str]:
     return _clean_team_name(cleaned) or None
 
 
+def _tennis_side(match: MatchResult, name: str) -> Optional[int]:
+    """0 = home, 1 = away para el jugador/pareja del pick. Matching
+    consciente de dobles: una pareja solo casa si TODOS sus miembros
+    aparecen en la pista, y una pista con pareja no casa con un
+    nombre individual."""
+    home_sim = _pair_similar(name, match.home_team)
+    away_sim = _pair_similar(name, match.away_team)
+    if max(home_sim, away_sim) < _MIN_TEAM_SIMILARITY:
+        return None
+    return 0 if home_sim >= away_sim else 1
+
+
+def _tennis_scores(match: MatchResult, name: str) -> Optional[tuple[int, int]]:
+    """Sets (jugador/pareja, rival) con matching consciente de dobles."""
+    side = _tennis_side(match, name)
+    if side is None:
+        return None
+    if side == 0:
+        return match.home_score, match.away_score
+    return match.away_score, match.home_score
+
+
 def _player_games(match: MatchResult, player: str) -> Optional[tuple[int, int]]:
-    """Juegos (jugador, rival) sumando el desglose por sets. None si el
-    proveedor no lo trajo o el jugador no casa con ningún participante."""
+    """Juegos (jugador/pareja, rival) sumando el desglose por sets.
+    None si el proveedor no lo trajo o no casa con ningún participante."""
     if not match.sets:
         return None
     home_games = sum(h for h, _ in match.sets)
     away_games = sum(a for _, a in match.sets)
-    home_sim = _similar(player, match.home_team)
-    away_sim = _similar(player, match.away_team)
-    if max(home_sim, away_sim) < _MIN_TEAM_SIMILARITY:
+    side = _tennis_side(match, player)
+    if side is None:
         return None
-    if home_sim >= away_sim:
+    if side == 0:
         return home_games, away_games
     return away_games, home_games
 
@@ -940,7 +962,7 @@ async def _verify_tennis_pick(
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
             return None, True
-        scores = _match_team_scores(match, team)
+        scores = _tennis_scores(match, team)
         if scores is None:
             return None, False
         player_sets, opp_sets = scores
@@ -951,9 +973,7 @@ async def _verify_tennis_pick(
         else:
             # Marcador en orden del evento: pasarlo a sets del jugador
             # según el lado que ocupa (y si el evento va al revés).
-            player_is_home = _similar(team, match.home_team) >= _similar(
-                team, match.away_team
-            )
+            player_is_home = _tennis_side(match, team) == 0
             reversed_order = bool(pick.evento) and match_reversed(
                 pick.evento, match.home_team, match.away_team
             )
@@ -986,11 +1006,9 @@ async def _verify_tennis_pick(
         winner_side = _tennis_set_winner_index(match, set_idx)
         if winner_side is None or not player:
             return None, False  # set no jugado o sin desglose
-        home_sim = _similar(player, match.home_team)
-        away_sim = _similar(player, match.away_team)
-        if max(home_sim, away_sim) < _MIN_TEAM_SIMILARITY:
+        player_side = _tennis_side(match, player)
+        if player_side is None:
             return None, False
-        player_side = 0 if home_sim >= away_sim else 1
         return player_side == winner_side, False
 
     # "Habrá tiebreak" / "tiebreak en el partido: sí" — deducible de un
@@ -1047,7 +1065,7 @@ async def _verify_tennis_pick(
             return _compare_over_under(set_total, direction, pick.linea)
         if subject == "sets":
             if player:
-                scores = _match_team_scores(match, player)
+                scores = _tennis_scores(match, player)
                 if scores is None:
                     return None, False
                 return _compare_over_under(scores[0], direction, pick.linea)
@@ -1090,7 +1108,7 @@ async def _verify_tennis_pick(
             return None, False
         return _handicap_result(in_set[0], in_set[1], pick.linea)
     if subject == "sets":
-        scores = _match_team_scores(match, player)
+        scores = _tennis_scores(match, player)
         if scores is None:
             return None, False
         return _handicap_result(scores[0], scores[1], pick.linea)
@@ -1554,6 +1572,10 @@ async def verify_pick(
             return None, True
         return False, False  # empate: la apuesta a "gana" falla
 
+    if sport == "tenis":
+        # Matching por parejas: "Alcaraz / Munar" casa con el dobles,
+        # pero "Alcaraz" solo no.
+        return _pair_similar(predicted_team, winner) >= _MIN_TEAM_SIMILARITY, False
     return _similar(predicted_team, winner) >= _MIN_TEAM_SIMILARITY, False
 
 

@@ -79,6 +79,28 @@ def _player_similar(hint: str, api_name: str) -> float:
     return max(direct, 0.8) if surname_hit else direct
 
 
+# Separadores de parejas de dobles en los nombres de las APIs.
+_PAIR_SPLIT = re.compile(r"\s*[/+&]\s*")
+
+
+def _pair_similar(hint: str, api_name: str) -> float:
+    """Similitud nombre-a-nombre consciente de dobles.
+
+    - Si el nombre de la API es una pareja ("Alcaraz / Munar") exige que
+      TODOS los miembros casen con el hint: un pick individual
+      "Alcaraz" no debe resolver contra un dobles del mismo jugador.
+    - Si el hint trae "/" pero el nombre de la API es individual, se
+      penaliza: un pick de dobles no debe casar con el individual.
+    - El orden de los miembros no importa ("Munar / Alcaraz" casa igual
+      que "Alcaraz / Munar").
+    """
+    members = [m.strip() for m in _PAIR_SPLIT.split(api_name) if m.strip()]
+    if len(members) <= 1:
+        score = _player_similar(hint, api_name)
+        return score * 0.5 if _PAIR_SPLIT.search(hint) else score
+    return min(_player_similar(hint, m) for m in members)
+
+
 def _parse_result(event: dict) -> Optional[MatchResult]:
     """Extrae ganador/perdedor/sets de `strResult`. None si no terminó.
 
@@ -195,8 +217,8 @@ class ApiTennisProvider:
                     if not match:
                         continue  # sin strResult "X beat Y" → no terminado
                     score = max(
-                        _player_similar(team_hint, match.home_team),
-                        _player_similar(team_hint, match.away_team),
+                        _pair_similar(team_hint, match.home_team),
+                        _pair_similar(team_hint, match.away_team),
                     )
                     if score > best_score:
                         best_score = score
