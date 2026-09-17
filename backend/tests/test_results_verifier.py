@@ -21,6 +21,7 @@ from app.services.results.verifier import (
     _resolve_asian_handicap,
     _resolve_over_under,
     _resolve_winner,
+    _should_attempt_verification,
     verify_pick,
 )
 
@@ -215,6 +216,35 @@ class TestResolveOverUnder:
         acierto, anulada = _resolve_over_under(match, "under", 3.0)
         assert acierto is None
         assert anulada is True
+
+
+class TestShouldAttemptVerification:
+    """Ventana de verificación: 14 días desde el evento, más un periodo
+    de gracia para picks creados hace poco (recuperados tarde por el
+    catch-up o un reproceso de raws antiguos)."""
+
+    def test_dentro_de_ventana_siempre_intenta(self):
+        now = datetime(2026, 9, 17, 12, 0)
+        pick = _pick("Levante gana", "ganador")
+        pick.fecha_evento = datetime(2026, 9, 10)  # hace 7 días
+        pick.created_at = datetime(2026, 9, 10)
+        assert _should_attempt_verification(pick, now) is True
+
+    def test_fuera_de_ventana_pero_creado_ayer_si_intenta(self):
+        # El catch-up recuperó un pick de agosto hoy: un solo intento
+        # basta para resolverlo si football-data lo cubre.
+        now = datetime(2026, 9, 17, 12, 0)
+        pick = _pick("Más 1,5 Goles", "over/under goles", linea=1.5)
+        pick.fecha_evento = datetime(2026, 8, 20)  # hace ~1 mes
+        pick.created_at = now  # creado en esta pasada
+        assert _should_attempt_verification(pick, now) is True
+
+    def test_fuera_de_ventana_y_viejo_no_intenta(self):
+        now = datetime(2026, 9, 17, 12, 0)
+        pick = _pick("Menos 3,5 Goles", "over/under goles", linea=3.5)
+        pick.fecha_evento = datetime(2026, 8, 18)
+        pick.created_at = datetime(2026, 8, 18)  # no fue recuperado tarde
+        assert _should_attempt_verification(pick, now) is False
 
 
 class TestMatchScore:
