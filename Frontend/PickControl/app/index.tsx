@@ -238,6 +238,17 @@ const Main = () => {
                   <Text style={styles.value}>{t.total}</Text>
                 </View>
                 <View style={styles.cell}>
+                  <Text style={styles.label}>Pendientes</Text>
+                  <Text
+                    style={[
+                      styles.value,
+                      t.pendientes > 0 && { color: "#ff9f1c" },
+                    ]}
+                  >
+                    {t.pendientes}
+                  </Text>
+                </View>
+                <View style={styles.cell}>
                   <Text style={styles.label}>Aciertos</Text>
                   <Text style={styles.value}>{t.aciertos}</Text>
                 </View>

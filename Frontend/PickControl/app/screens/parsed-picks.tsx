@@ -19,7 +19,7 @@ import {
 } from "@/src/api/parsed-picks.api";
 import { listInformantes } from "@/src/api/informantes.api";
 
-const OVERVIEW_PER_CHANNEL = 4;
+const OVERVIEW_PER_CHANNEL = 2;
 const CHANNEL_PAGE_SIZE = 20;
 
 function formatDate(isoDate: string): string {
@@ -172,7 +172,7 @@ export default function ParsedPicksScreen() {
     setShowAll(next);
     // El filtro es_apuesta se aplica en el backend ANTES del top-N,
     // así que hay que refetchear para que el resumen no se quede con
-    // mensajes descartados ocupando los 4 huecos de cada canal.
+    // mensajes descartados ocupando los huecos de cada canal.
     setLoading(true);
     try {
       await loadOverview(next);
@@ -238,7 +238,9 @@ export default function ParsedPicksScreen() {
   const renderPickCard = (pick: ParsedPick) => (
     <View key={pick.id} style={styles.card}>
       <Text style={styles.cardTitle}>{pick.apuesta || "Sin apuesta"}</Text>
-      <Text style={styles.cardDate}>{formatDate(pick.created_at)}</Text>
+      <Text style={styles.cardDate}>
+        {formatDate(pick.fecha_evento ?? pick.created_at)}
+      </Text>
       <Text style={styles.cardMeta}>
         Canal:{" "}
         <Text
@@ -448,7 +450,19 @@ export default function ParsedPicksScreen() {
                     Sin picks extraídos con este filtro.
                   </Text>
                 ) : (
-                  group.picks.map(renderPickCard)
+                  <>
+                    {group.picks
+                      .filter((p) => !p.es_reto)
+                      .map(renderPickCard)}
+                    {group.picks.some((p) => p.es_reto) && (
+                      <>
+                        <Text style={styles.retosTitle}>Retos</Text>
+                        {group.picks
+                          .filter((p) => p.es_reto)
+                          .map(renderPickCard)}
+                      </>
+                    )}
+                  </>
                 )}
               </View>
             ))}
@@ -459,7 +473,13 @@ export default function ParsedPicksScreen() {
               {channelPicks.length} pick{channelPicks.length !== 1 ? "s" : ""}{" "}
               de {selectedChannel.name}
             </Text>
-            {channelPicks.map(renderPickCard)}
+            {channelPicks.filter((p) => !p.es_reto).map(renderPickCard)}
+            {channelPicks.some((p) => p.es_reto) && (
+              <>
+                <Text style={styles.retosTitle}>Retos</Text>
+                {channelPicks.filter((p) => p.es_reto).map(renderPickCard)}
+              </>
+            )}
             {hasMore && (
               <TouchableOpacity
                 style={styles.loadMore}
@@ -566,24 +586,43 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
   channelSection: {
-    marginBottom: 8,
+    marginTop: 14,
+    marginBottom: 6,
   },
   channelHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginTop: 8,
-    marginBottom: 10,
+    backgroundColor: "#241a0d",
+    borderLeftWidth: 4,
+    borderLeftColor: "#ff9f1c",
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
   },
   channelTitle: {
-    color: "#fff",
-    fontSize: 17,
+    color: "#ff9f1c",
+    fontSize: 16,
     fontWeight: "bold",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+    flexShrink: 1,
   },
   seeAll: {
-    color: "#ff9f1c",
+    color: "#ffcf8a",
     fontSize: 13,
     fontWeight: "bold",
+    marginLeft: 12,
+  },
+  retosTitle: {
+    color: "#b388ff",
+    fontSize: 15,
+    fontWeight: "bold",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginTop: 10,
+    marginBottom: 10,
   },
   count: {
     color: "#aaa",

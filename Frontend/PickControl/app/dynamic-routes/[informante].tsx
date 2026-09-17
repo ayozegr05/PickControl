@@ -20,6 +20,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { getInformanteStats } from "@/src/api/informantes.api";
 import { deletePick, updatePick } from "@/src/api/picks.api";
+import { updateParsedPickAcierto } from "@/src/api/parsed-picks.api";
 import { ApiError } from "@/src/api/client";
 import { InformanteStats } from "@/src/types/informante.types";
 import { PickItem, Acierto } from "@/src/types/pick.types";
@@ -40,6 +41,8 @@ export default function InformantDetail() {
   const [selectedApuesta, setSelectedApuesta] = useState<PickItem | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedApuestaToUpdate, setSelectedApuestaToUpdate] =
+    useState<PickItem | null>(null);
+  const [selectedTelegramPick, setSelectedTelegramPick] =
     useState<PickItem | null>(null);
   const [periodoSeleccionado, setPeriodoSeleccionado] = useState("semana");
 
@@ -381,6 +384,25 @@ export default function InformantDetail() {
     );
   };
 
+  // Corrección del resultado de un pick de Telegram desde el detalle.
+  const corregirPickTelegram = async (
+    pick: PickItem,
+    update: { acierto?: boolean | null; anulada?: boolean }
+  ) => {
+    try {
+      await updateParsedPickAcierto(pick.id, update);
+      setSelectedTelegramPick(null);
+      await fetchInformanteData();
+    } catch (error) {
+      console.error("Error al corregir el pick:", error);
+      const message =
+        error instanceof ApiError
+          ? error.message
+          : "No se pudo corregir el pick.";
+      Alert.alert("Error", message);
+    }
+  };
+
   const handleFechaPress = (apuesta: PickItem) => {
     setSelectedApuestaToUpdate(apuesta);
     setShowDatePicker(true);
@@ -643,14 +665,16 @@ export default function InformantDetail() {
                   </View>
 
                   {[...data.parsedPicks]
+                    .filter((p) => !p.esReto)
                     .sort(
                       (a, b) =>
                         new Date(a.fecha).getTime() -
                         new Date(b.fecha).getTime()
                     )
                     .map((apuesta, index) => (
-                      <View
+                      <TouchableOpacity
                         key={apuesta.id}
+                        onPress={() => setSelectedTelegramPick(apuesta)}
                         style={[
                           styles.tableRow,
                           index % 2 === 0 ? styles.evenRow : styles.oddRow,
@@ -662,6 +686,11 @@ export default function InformantDetail() {
                           >
                             {apuesta.apuesta || "(sin nombre)"}
                           </Text>
+                          {apuesta.evento ? (
+                            <Text style={styles.eventoText}>
+                              {apuesta.evento}
+                            </Text>
+                          ) : null}
                         </View>
                         <View style={[styles.tableCell, styles.border]}>
                           <Text>
@@ -711,10 +740,40 @@ export default function InformantDetail() {
                             <Text>u</Text>
                           </Text>
                         </View>
-                      </View>
+                      </TouchableOpacity>
                     ))}
                 </View>
               </ScrollView>
+            )}
+
+            {/* Retos del tipster: van aparte de las apuestas diarias */}
+            {data.parsedPicks.some((p) => p.esReto) && (
+              <View style={styles.retosSection}>
+                <Text style={styles.retosTitle}>Retos</Text>
+                {data.parsedPicks
+                  .filter((p) => p.esReto)
+                  .sort(
+                    (a, b) =>
+                      new Date(b.fecha).getTime() - new Date(a.fecha).getTime()
+                  )
+                  .map((reto) => (
+                    <TouchableOpacity
+                      key={reto.id}
+                      onPress={() => setSelectedTelegramPick(reto)}
+                      style={styles.retoRow}
+                    >
+                      <Text style={styles.retoText}>
+                        {reto.apuesta || "(sin nombre)"}
+                        {reto.evento ? ` · ${reto.evento}` : ""}
+                      </Text>
+                      <Text style={styles.retoMeta}>
+                        {formatearFecha(reto.fecha)} · cuota{" "}
+                        {Number(reto.cuota).toFixed(2)} ·{" "}
+                        {renderPronosticoTelegram(reto.acierto)}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+              </View>
             )}
           </View>
 
@@ -962,6 +1021,115 @@ export default function InformantDetail() {
             </View>
           </View>
         </Modal>
+        {/* Detalle de un pick de Telegram + corrección manual del resultado */}
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={selectedTelegramPick !== null}
+          onRequestClose={() => setSelectedTelegramPick(null)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <TouchableOpacity
+                style={styles.closeButton}
+                onPress={() => setSelectedTelegramPick(null)}
+              >
+                <Text style={styles.closeButtonText}>
+                  <MaterialCommunityIcons
+                    name="close"
+                    size={26}
+                    color="white"
+                  />
+                </Text>
+              </TouchableOpacity>
+
+              {selectedTelegramPick && (
+                <>
+                  <Text style={styles.modalTitle}>
+                    {selectedTelegramPick.apuesta || "(sin nombre)"}
+                  </Text>
+                  <View style={styles.detailRows}>
+                    <Text style={styles.detailRow}>
+                      Resultado:{" "}
+                      {selectedTelegramPick.acierto === "True"
+                        ? "Acertó ✅"
+                        : selectedTelegramPick.acierto === "False"
+                          ? "Falló ❌"
+                          : "Pendiente ❓"}
+                    </Text>
+                    {selectedTelegramPick.evento ? (
+                      <Text style={styles.detailRow}>
+                        Evento: {selectedTelegramPick.evento}
+                      </Text>
+                    ) : null}
+                    <Text style={styles.detailRow}>
+                      Mercado: {selectedTelegramPick.tipoDeApuesta || "-"}
+                    </Text>
+                    <Text style={styles.detailRow}>
+                      Cuota: {Number(selectedTelegramPick.cuota).toFixed(2)} ·
+                      Stake:{" "}
+                      {Number(selectedTelegramPick.cantidadApostada).toFixed(2)}
+                      u
+                    </Text>
+                    <Text style={styles.detailRow}>
+                      Fecha: {formatearFecha(selectedTelegramPick.fecha)}
+                    </Text>
+                    {selectedTelegramPick.casa ? (
+                      <Text style={styles.detailRow}>
+                        Casa: {selectedTelegramPick.casa}
+                      </Text>
+                    ) : null}
+                  </View>
+
+                  <Text style={styles.modalText}>Corregir resultado:</Text>
+                  <View style={styles.detailButtons}>
+                    <TouchableOpacity
+                      style={[
+                        styles.detailButton,
+                        { backgroundColor: "#1e3a24" },
+                      ]}
+                      onPress={() =>
+                        corregirPickTelegram(selectedTelegramPick, {
+                          acierto: true,
+                          anulada: false,
+                        })
+                      }
+                    >
+                      <Text style={styles.detailButtonText}>✅ Acertó</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.detailButton,
+                        { backgroundColor: "#3a1e1e" },
+                      ]}
+                      onPress={() =>
+                        corregirPickTelegram(selectedTelegramPick, {
+                          acierto: false,
+                          anulada: false,
+                        })
+                      }
+                    >
+                      <Text style={styles.detailButtonText}>❌ Falló</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.detailButton,
+                        { backgroundColor: "#2a2a2a" },
+                      ]}
+                      onPress={() =>
+                        corregirPickTelegram(selectedTelegramPick, {
+                          anulada: true,
+                        })
+                      }
+                    >
+                      <Text style={styles.detailButtonText}>Anulada</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
         {showDatePicker && (
           <DateTimePicker
             value={new Date(selectedApuestaToUpdate?.fecha || new Date())}
@@ -1053,6 +1221,39 @@ const styles = StyleSheet.create({
     color: "white",
     marginBottom: 20,
     textAlign: "center",
+  },
+  detailRows: {
+    alignSelf: "stretch",
+    marginBottom: 10,
+  },
+  eventoText: {
+    fontSize: 11,
+    color: "#999",
+    marginTop: 2,
+  },
+  detailRow: {
+    fontSize: 15,
+    color: "#ddd",
+    marginBottom: 6,
+  },
+  detailButtons: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 4,
+  },
+  detailButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#555",
+  },
+  detailButtonText: {
+    color: "white",
+    fontSize: 13,
+    fontWeight: "bold",
   },
   modalButtons: {
     flexDirection: "row",
@@ -1306,5 +1507,37 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 10,
     fontStyle: "italic",
+  },
+  retosSection: {
+    marginTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: "#333",
+    paddingTop: 12,
+  },
+  retosTitle: {
+    color: "#b388ff",
+    fontSize: 16,
+    fontWeight: "bold",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  retoRow: {
+    backgroundColor: "#1a1425",
+    borderColor: "#3a2d55",
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8,
+  },
+  retoText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "bold",
+  },
+  retoMeta: {
+    color: "#aaa",
+    fontSize: 12,
+    marginTop: 4,
   },
 });

@@ -67,6 +67,8 @@ def _parsed_to_read(
         fecha=parsed.fecha_evento or parsed.created_at,
         source=PickSource.TELEGRAM,
         ganancia=ganancias.get(parsed.id),
+        evento=parsed.evento,
+        es_reto=parsed.es_reto,
     )
 
 
@@ -125,6 +127,7 @@ async def obtener_stats_informante(
         ganancias=manual_stats.ganancias,
         porcentaje_aciertos=manual_stats.porcentaje_aciertos,
         yield_pct=manual_stats.yield_pct,
+        total_pendientes=manual_stats.total_pendientes,
         apuestas=apuestas_read,
         parsed_picks=parsed_picks_read,
         parsed_total_apuestas=parsed_stats.total_apuestas,
@@ -132,6 +135,7 @@ async def obtener_stats_informante(
         parsed_ganancias=parsed_stats.ganancias,
         parsed_porcentaje_aciertos=parsed_stats.porcentaje_aciertos,
         parsed_yield_pct=parsed_stats.yield_pct,
+        parsed_total_pendientes=parsed_stats.total_pendientes,
     )
 
 
@@ -183,16 +187,19 @@ async def listar_informantes(
                 manual_ganancias=manual_stats.ganancias,
                 manual_porcentaje=manual_stats.porcentaje_aciertos,
                 manual_yield=manual_stats.yield_pct,
+                manual_pendientes=manual_stats.total_pendientes,
                 parsed_total=parsed_stats.total_apuestas,
                 parsed_aciertos=parsed_stats.total_aciertos,
                 parsed_ganancias=parsed_stats.ganancias,
                 parsed_porcentaje=parsed_stats.porcentaje_aciertos,
                 parsed_yield=parsed_stats.yield_pct,
+                parsed_pendientes=parsed_stats.total_pendientes,
                 total=combined.total_apuestas,
                 aciertos=combined.total_aciertos,
                 ganancias=combined.ganancias,
                 porcentaje=combined.porcentaje_aciertos,
                 yield_pct=combined.yield_pct,
+                pendientes=combined.total_pendientes,
             )
         )
 

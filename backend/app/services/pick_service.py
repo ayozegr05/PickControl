@@ -64,6 +64,7 @@ class InformanteStatsResult:
     ganancias: float
     porcentaje_aciertos: float
     yield_pct: float
+    total_pendientes: int = 0
     ganancias_por_pick: dict[int, float] = field(default_factory=dict)
 
 
@@ -110,6 +111,10 @@ def _stats_inputs_to_result(
         ganancias=ganancias,
         porcentaje_aciertos=porcentaje_aciertos,
         yield_pct=yield_pct,
+        # El % de aciertos e yield se calculan solo sobre las finalizadas:
+        # sin este dato la card mostraba "3 picks, 1 acierto, 100%" y
+        # parecía que el tipster lo había acertado todo.
+        total_pendientes=total_apuestas - len(finalizadas),
         ganancias_por_pick=ganancias_por_pick,
     )
 
@@ -152,9 +157,17 @@ def calcular_stats(picks: list[Pick]) -> InformanteStatsResult:
 
 
 def calcular_stats_parsed(parsed_picks: list[ParsedPick]) -> InformanteStatsResult:
-    """Calcula métricas agregadas de picks extraídos de Telegram."""
+    """Calcula métricas agregadas de picks extraídos de Telegram.
+
+    Los retos (`es_reto`) se excluyen: van en su propia sección y su
+    stake/cuota atípicos distorsionarían el yield del canal.
+    """
     return _stats_inputs_to_result(
-        [to_stats_input_from_parsed(p) for p in parsed_picks if p.es_apuesta]
+        [
+            to_stats_input_from_parsed(p)
+            for p in parsed_picks
+            if p.es_apuesta and not p.es_reto
+        ]
     )
 
 
@@ -164,7 +177,11 @@ def calcular_stats_combinado(
     """Calcula métricas combinando apuestas manuales y picks de Telegram."""
     return _stats_inputs_to_result(
         [to_stats_input(p) for p in picks]
-        + [to_stats_input_from_parsed(p) for p in parsed_picks if p.es_apuesta]
+        + [
+            to_stats_input_from_parsed(p)
+            for p in parsed_picks
+            if p.es_apuesta and not p.es_reto
+        ]
     )
 
 

@@ -23,6 +23,7 @@ class InformanteStats(SQLModel):
     ganancias: float
     porcentaje_aciertos: float
     yield_pct: float
+    total_pendientes: int = 0
     apuestas: list[PickRead] = []
 
     # Picks extraídos automáticamente de Telegram.
@@ -32,6 +33,7 @@ class InformanteStats(SQLModel):
     parsed_ganancias: float = 0.0
     parsed_porcentaje_aciertos: float = 0.0
     parsed_yield_pct: float = 0.0
+    parsed_total_pendientes: int = 0
 
 
 class InformanteSummary(SQLModel):
@@ -48,6 +50,7 @@ class InformanteSummary(SQLModel):
     manual_ganancias: float = 0.0
     manual_porcentaje: float = 0.0
     manual_yield: float = 0.0
+    manual_pendientes: int = 0
 
     # Picks de Telegram.
     parsed_total: int = 0
@@ -55,6 +58,7 @@ class InformanteSummary(SQLModel):
     parsed_ganancias: float = 0.0
     parsed_porcentaje: float = 0.0
     parsed_yield: float = 0.0
+    parsed_pendientes: int = 0
 
     # Totales combinados.
     total: int = 0
@@ -62,3 +66,4 @@ class InformanteSummary(SQLModel):
     ganancias: float = 0.0
     porcentaje: float = 0.0
     yield_pct: float = 0.0
+    pendientes: int = 0

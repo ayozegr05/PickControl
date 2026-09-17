@@ -17,6 +17,9 @@ export interface PickItem {
   fecha: string; // ISO 8601
   source: PickSource;
   ganancia?: number;
+  evento?: string | null;
+  /** Solo picks de Telegram: apuesta de "reto" del tipster (sección aparte). */
+  esReto?: boolean;
 }
 
 export interface PickCreatePayload {
