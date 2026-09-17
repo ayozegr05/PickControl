@@ -57,6 +57,12 @@ _DATE_TOLERANCE = timedelta(days=1)
 _SET_SCORE = re.compile(r"^(\d+)-(\d+)")
 
 
+# Retirada/walkover en el string de resultado: "6-1 2-0 RET", "W/O".
+_RETIREMENT_PATTERN = re.compile(
+    r"\bret(?:ired)?\.?\b|w/?o\b|\bwalkover\b|\bdef\.?\b", re.IGNORECASE
+)
+
+
 def _parse_set_games(result: str) -> Optional[list[tuple[int, int]]]:
     """Juegos por set desde la perspectiva del ganador: "6-7(5) 6-1"
     -> [(6, 7), (6, 1)]. None si hay retirada/walkover (letras) o no
@@ -175,8 +181,19 @@ class RapidApiTennisProvider:
                 )
                 if score <= best_score:
                     continue
-                sets = _count_sets(str(match.get("result") or ""))
+                result_str = str(match.get("result") or "")
+                sets = _count_sets(result_str)
                 if not sets:
+                    if _RETIREMENT_PATTERN.search(result_str):
+                        # Retirada/walkover: el verificador lo anula.
+                        best_score = score
+                        best_match = MatchResult(
+                            home_team=winner,
+                            away_team=loser,
+                            home_score=0,
+                            away_score=0,
+                            status="retired",
+                        )
                     continue
                 best_score = score
                 best_match = MatchResult(
@@ -186,7 +203,7 @@ class RapidApiTennisProvider:
                     away_score=sets[1],
                     # Juegos por set (perspectiva del ganador) para
                     # mercados de juegos.
-                    sets=_parse_set_games(str(match.get("result") or "")),
+                    sets=_parse_set_games(result_str),
                 )
 
         if not best_match or best_score < _MIN_PLAYER_SIMILARITY:

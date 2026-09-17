@@ -53,6 +53,10 @@ _RESULT_PATTERN = re.compile(
 )
 # Líneas siguientes de strResult: "Siniakova : 6 6" → juegos por set.
 _GAMES_LINE = re.compile(r"^\s*(?P<name>.+?)\s*:\s*(?P<games>\d+(?:\s+\d+)*)\s*$")
+# Retirada/walkover: "Sinner beat Alcaraz 1-0 RET", "... W/O", "RET".
+_RETIREMENT_PATTERN = re.compile(
+    r"\bret(?:ired)?\.?\b|w/?o\b|\bwalkover\b|\bdef\.?\b", re.IGNORECASE
+)
 
 
 def _similar(a: str, b: str) -> float:
@@ -84,6 +88,37 @@ def _parse_result(event: dict) -> Optional[MatchResult]:
     """
     result = str(event.get("strResult") or "")
     m = _RESULT_PATTERN.search(result)
+
+    # Retirada/walkover: el partido no terminó por la vía normal y las
+    # casas suelen anular. Se reporta con `status` para que el
+    # verificador devuelva anulada en lugar de resolver con un marcador
+    # parcial ("1-0 RET" no es un 1-0 real).
+    if _RETIREMENT_PATTERN.search(result):
+        winner = loser = ""
+        w_sets = l_sets = 0
+        if m:
+            winner = m.group("winner").strip()
+            loser = m.group("loser").strip()
+            w_sets, l_sets = int(m.group("w")), int(m.group("l"))
+        else:
+            # "X beat Y RET" sin marcador: nombres aproximados.
+            clean = _RETIREMENT_PATTERN.sub(" ", result)
+            beat = re.search(r"(?P<w>.+?)\s+beat\s+(?P<l>.+)", clean, re.IGNORECASE)
+            if not beat:
+                return None
+            winner = beat.group("w").strip()
+            loser = beat.group("l").strip()
+        status = (
+            "walkover" if re.search(r"w/?o\b|\bwalkover\b", result, re.I) else "retired"
+        )
+        return MatchResult(
+            home_team=winner,
+            away_team=loser,
+            home_score=w_sets,
+            away_score=l_sets,
+            status=status,
+        )
+
     if not m:
         return None
     winner = m.group("winner").strip()

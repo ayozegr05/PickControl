@@ -190,7 +190,9 @@ class TestRapidApiTennisProvider:
         match = await provider.find_match(datetime(2026, 9, 15), "Droguet")
         assert match is None
 
-    async def test_retirada_queda_pendiente(self, monkeypatch):
+    async def test_retirada_reporta_status_void(self, monkeypatch):
+        # El partido se encontró pero acabó por retirada: el verificador
+        # lo anula, no lo deja pendiente ni lo resuelve con el parcial.
         payload = {
             "singles": [
                 {
@@ -208,7 +210,9 @@ class TestRapidApiTennisProvider:
         )
         provider = RapidApiTennisProvider("k", "tennis-api-atp-wta-itf.p.rapidapi.com")
         match = await provider.find_match(datetime(2026, 9, 15), "Droguet")
-        assert match is None
+        assert match is not None
+        assert match.status == "retired"
+        assert match.sets is None
 
     async def test_reusa_historial_del_mismo_jugador(self, monkeypatch):
         calls = []

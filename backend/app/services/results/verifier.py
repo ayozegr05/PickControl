@@ -780,9 +780,89 @@ _TENNIS_GAMES_SUBJECT = re.compile(r"juego\w*|\bgames?\b", re.IGNORECASE)
 # Ruido a quitar de la selección para quedarnos con el jugador.
 _TENNIS_PLAYER_NOISE = re.compile(
     r"h[aá]ndicap\w*|asi[aá]tic\w*|juego\w*|\bgames?\b|\bsets?\b"
+    r"|primer\w*|segund\w*|tercer\w*|cuart\w*|quint\w*"
+    r"|\d+(?:er|º|°|do|rd|th)\b|\bel\b|\bla\b|\bdel\b"
     r"|m[aá]s|menos|over|under|gana\w*",
     re.IGNORECASE,
 )
+
+# Partidos que el proveedor reporta como terminados sin jugar completo:
+# el verificador los anula (las casas suelen devolver la apuesta; si la
+# casa del usuario difiere, se corrige a mano).
+_TENNIS_VOID_STATUSES = ("retired", "walkover")
+
+# "gana el primer set" / "1er set: Alcaraz" / "set 2: Sinner".
+_TENNIS_SET_POSITION = re.compile(
+    r"\b(primer[ao]?|segund[ao]|tercer[ao]?|cuart[ao]|quint[ao])\s*set\b"
+    r"|\b([1-5])(?:er|º|°|do|rd|th)?\s*set\b"
+    r"|\bset\s*([1-5])\b",
+    re.IGNORECASE,
+)
+_TENNIS_SET_WORDS = {
+    "primer": 0,
+    "primera": 0,
+    "primero": 0,
+    "segund": 1,
+    "tercer": 2,
+    "cuart": 3,
+    "quint": 4,
+}
+# Verbo de victoria para distinguir "gana el 1er set" de un total.
+_TENNIS_WIN_VERB = re.compile(
+    r"\bgan(?:a|ar|ador|adora|e|ó)\b|\bvence\b", re.IGNORECASE
+)
+_TIEBREAK_PATTERN = re.compile(r"tie\s*-?\s*break|desempate", re.IGNORECASE)
+
+
+def _tennis_set_index(text: str) -> Optional[int]:
+    """Índice 0-based del set nombrado ("primer set" -> 0, "set 3" -> 2)
+    o None si no hay posición de set en el texto."""
+    m = _TENNIS_SET_POSITION.search(text)
+    if not m:
+        return None
+    word, digit1, digit2 = m.group(1), m.group(2), m.group(3)
+    if word:
+        low = word.lower()
+        for prefix, idx in _TENNIS_SET_WORDS.items():
+            if low.startswith(prefix):
+                return idx
+        return None
+    return int(digit1 or digit2) - 1
+
+
+def _tennis_set_winner_index(match: MatchResult, set_idx: int) -> Optional[int]:
+    """0 = home, 1 = away para el ganador del set N. None si el set no
+    consta o quedó incompleto."""
+    if not match.sets or len(match.sets) <= set_idx:
+        return None
+    home_games, away_games = match.sets[set_idx]
+    if home_games == away_games:
+        return None
+    return 0 if home_games > away_games else 1
+
+
+def _tennis_had_tiebreak(match: MatchResult) -> Optional[bool]:
+    """True si algún set acabó 7-6. None sin desglose por sets."""
+    if not match.sets:
+        return None
+    return any({h, a} == {6, 7} for h, a in match.sets)
+
+
+def _player_games_in_set(
+    match: MatchResult, player: str, set_idx: int
+) -> Optional[tuple[int, int]]:
+    """Juegos (jugador, rival) en un set concreto. None si el set no
+    consta o el jugador no casa con ningún participante."""
+    if not match.sets or len(match.sets) <= set_idx:
+        return None
+    home_games, away_games = match.sets[set_idx]
+    home_sim = _similar(player, match.home_team)
+    away_sim = _similar(player, match.away_team)
+    if max(home_sim, away_sim) < _MIN_TEAM_SIMILARITY:
+        return None
+    if home_sim >= away_sim:
+        return home_games, away_games
+    return away_games, home_games
 
 
 def _tennis_subject(text: str) -> Optional[str]:
@@ -837,11 +917,14 @@ async def _verify_tennis_pick(
     pick: ParsedPick, providers: list[ResultsProvider]
 ) -> Optional[tuple[Optional[bool], bool]]:
     """Resuelve mercados de tenis: resultado exacto en sets ("gana 2-0"),
-    over/under de juegos o sets, y hándicap de juegos o sets.
+    over/under de juegos o sets, hándicap de juegos o sets, ganador de
+    un set concreto y tiebreak sí/no.
 
     Devuelve None si el pick no entra en ninguno (cae al "ganador").
     Usa `MatchResult.sets` (juegos por set) para los mercados de juegos;
-    si el proveedor no lo trajo, pendiente.
+    si el proveedor no lo trajo, pendiente. Si el proveedor reporta
+    retirada/walkover (`match.status`), el pick se anula sea cual sea
+    el mercado — si la casa difiere, se corrige a mano.
     """
     seleccion = pick.seleccion or ""
     text = f"{seleccion} {pick.mercado or ''}"
@@ -855,6 +938,8 @@ async def _verify_tennis_pick(
         )
         if not match:
             return None, False
+        if match.status in _TENNIS_VOID_STATUSES:
+            return None, True
         scores = _match_team_scores(match, team)
         if scores is None:
             return None, False
@@ -878,6 +963,55 @@ async def _verify_tennis_pick(
                 pred_ps, pred_os = s2, s1
         return (player_sets == pred_ps and opp_sets == pred_os), False
 
+    # "Alcaraz gana el primer set" / mercado "1er set" + jugador: se
+    # resuelve con los juegos del set concreto. Exige verbo de victoria
+    # y ausencia de línea para no capturar totales ni hándicaps
+    # ("más de 2.5 sets", "gana -1.5 sets").
+    set_idx = _tennis_set_index(text)
+    set_winner_market = _TENNIS_WIN_VERB.search(text) or _TENNIS_SET_POSITION.search(
+        pick.mercado or ""
+    )
+    if set_idx is not None and pick.linea is None and set_winner_market:
+        player = _extract_tennis_player_name(seleccion)
+        team_hint = pick.evento or player
+        if not team_hint:
+            return None, False
+        match = await _find_match_across_providers(
+            pick.fecha_evento, team_hint, providers, pick.id
+        )
+        if not match:
+            return None, False
+        if match.status in _TENNIS_VOID_STATUSES:
+            return None, True
+        winner_side = _tennis_set_winner_index(match, set_idx)
+        if winner_side is None or not player:
+            return None, False  # set no jugado o sin desglose
+        home_sim = _similar(player, match.home_team)
+        away_sim = _similar(player, match.away_team)
+        if max(home_sim, away_sim) < _MIN_TEAM_SIMILARITY:
+            return None, False
+        player_side = 0 if home_sim >= away_sim else 1
+        return player_side == winner_side, False
+
+    # "Habrá tiebreak" / "tiebreak en el partido: sí" — deducible de un
+    # set 7-6 en el desglose.
+    if _TIEBREAK_PATTERN.search(text):
+        team_hint = pick.evento or _extract_tennis_player_name(seleccion)
+        if not team_hint:
+            return None, False
+        match = await _find_match_across_providers(
+            pick.fecha_evento, team_hint, providers, pick.id
+        )
+        if not match:
+            return None, False
+        if match.status in _TENNIS_VOID_STATUSES:
+            return None, True
+        had_tiebreak = _tennis_had_tiebreak(match)
+        if had_tiebreak is None:
+            return None, False
+        bet_no = bool(re.search(r"\bno\b|\bsin\b", seleccion, re.IGNORECASE))
+        return had_tiebreak != bet_no, False
+
     if pick.linea is None:
         return None
 
@@ -897,6 +1031,20 @@ async def _verify_tennis_pick(
         )
         if not match:
             return None, False
+        if match.status in _TENNIS_VOID_STATUSES:
+            return None, True
+        # Over/under sobre un set concreto ("más de 9.5 juegos en el
+        # 1er set"): se compara solo ese set, no el total del partido.
+        if set_idx is not None:
+            if not match.sets or len(match.sets) <= set_idx:
+                return None, False
+            if player:
+                in_set = _player_games_in_set(match, player, set_idx)
+                if in_set is None:
+                    return None, False
+                return _compare_over_under(in_set[0], direction, pick.linea)
+            set_total = sum(match.sets[set_idx])
+            return _compare_over_under(set_total, direction, pick.linea)
         if subject == "sets":
             if player:
                 scores = _match_team_scores(match, player)
@@ -933,6 +1081,14 @@ async def _verify_tennis_pick(
     )
     if not match:
         return None, False
+    if match.status in _TENNIS_VOID_STATUSES:
+        return None, True
+    if set_idx is not None:
+        # Hándicap de juegos dentro de un set ("-1.5 juegos 1er set").
+        in_set = _player_games_in_set(match, player, set_idx)
+        if in_set is None:
+            return None, False
+        return _handicap_result(in_set[0], in_set[1], pick.linea)
     if subject == "sets":
         scores = _match_team_scores(match, player)
         if scores is None:
@@ -1386,6 +1542,9 @@ async def verify_pick(
     )
     if not match:
         return None, False
+    if match.status in _TENNIS_VOID_STATUSES:
+        # Retirada/walkover (tenis): la casa suele devolver la apuesta.
+        return None, True
 
     winner = _resolve_winner(match)
     if winner is None:
