@@ -89,6 +89,21 @@ class MatchResult:
     away_score: int
 
 
+@dataclass
+class MatchStats:
+    """Estadísticas de un partido ya normalizadas (córners, tarjetas...).
+
+    `values` mapea el tipo de estadística del proveedor ("Corner Kicks",
+    "Yellow Cards", "Total Shots"...) a `(valor_local, valor_visitante)`.
+    Solo la devuelven los proveedores con endpoint de estadísticas
+    (hoy: API-Football `/fixtures/statistics`).
+    """
+
+    home_team: str
+    away_team: str
+    values: dict[str, tuple[int, int]]
+
+
 class ResultsProvider(Protocol):
     """Un proveedor de resultados deportivos (football-data.org, API-Football...)."""
 

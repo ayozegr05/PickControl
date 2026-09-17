@@ -43,7 +43,7 @@ from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
 from app.services.results.api_football import ApiFootballProvider
 from app.services.results.api_tennis import ApiTennisProvider
-from app.services.results.base import MatchResult, ResultsProvider
+from app.services.results.base import MatchResult, MatchStats, ResultsProvider
 from app.services.results.football_data import FootballDataProvider
 from app.services.results.rapidapi_tennis import RapidApiTennisProvider
 from app.services.results.tennisapi1 import TennisApi1Provider
@@ -171,6 +171,35 @@ _FIRST_HALF_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _GOALS_PATTERN = re.compile(r"gol", re.IGNORECASE)
+# Sujeto no-goleador -> tipos de estadística de API-Football
+# (/fixtures/statistics). El orden importa: "amarilla"/"roja" antes que
+# la "tarjeta" genérica, y "tiro a puerta" antes que "tiro".
+_STAT_SUBJECTS: tuple[tuple[re.Pattern, tuple[str, ...]], ...] = (
+    (re.compile(r"amarilla", re.IGNORECASE), ("Yellow Cards",)),
+    (re.compile(r"roja", re.IGNORECASE), ("Red Cards",)),
+    (
+        re.compile(r"tarjeta|card|booking", re.IGNORECASE),
+        ("Yellow Cards", "Red Cards"),
+    ),
+    (re.compile(r"c[oó]rner|esquina", re.IGNORECASE), ("Corner Kicks",)),
+    (
+        re.compile(r"tiro\s+a\s+puerta|on\s+(?:target|goal)", re.IGNORECASE),
+        ("Shots on Goal",),
+    ),
+    (re.compile(r"tiro|shot|disparo", re.IGNORECASE), ("Total Shots",)),
+    (re.compile(r"falta|foul", re.IGNORECASE), ("Fouls",)),
+    (re.compile(r"fuera\s+de\s+juego|offside", re.IGNORECASE), ("Offsides",)),
+)
+
+
+def _stat_keys_for(text: str) -> Optional[tuple[str, ...]]:
+    """Tipos de estadística del proveedor para el sujeto del texto."""
+    for pattern, keys in _STAT_SUBJECTS:
+        if pattern.search(text):
+            return keys
+    return None
+
+
 # Separador entre el equipo y la línea en un over/under por equipo
 # ("Real Madrid más de 1.5 goles" -> equipo = "Real Madrid").
 _OU_SPLIT_PATTERN = re.compile(r"\b(?:m[aá]s|menos|over|under)\b", re.IGNORECASE)
@@ -313,14 +342,10 @@ def _resolve_asian_handicap(
     return None, True  # push: apuesta anulada/devuelta
 
 
-def _resolve_over_under(
-    match: MatchResult, direction: str, linea: float
+def _compare_over_under(
+    total: int, direction: str, linea: float
 ) -> tuple[Optional[bool], bool]:
-    """Resuelve un pick de over/under sobre el total de goles del partido.
-
-    Devuelve (acierto, anulada). Con líneas enteras puede haber "push".
-    """
-    total = match.home_score + match.away_score
+    """Compara un total (goles, córners...) contra la línea apostada."""
     if direction == "over":
         if total > linea:
             return True, False
@@ -333,6 +358,53 @@ def _resolve_over_under(
     if total > linea:
         return False, False
     return None, True
+
+
+def _resolve_over_under(
+    match: MatchResult, direction: str, linea: float
+) -> tuple[Optional[bool], bool]:
+    """Resuelve un pick de over/under sobre el total de goles del partido.
+
+    Devuelve (acierto, anulada). Con líneas enteras puede haber "push".
+    """
+    return _compare_over_under(match.home_score + match.away_score, direction, linea)
+
+
+def _stat_total(
+    stats: MatchStats, keys: tuple[str, ...], team: Optional[str]
+) -> Optional[int]:
+    """Suma de la(s) estadística(s): total del partido o de un equipo.
+
+    None si el proveedor no trajo ninguna de las claves pedidas o el
+    equipo no se reconoce en el fixture.
+    """
+    if not any(key in stats.values for key in keys):
+        return None
+
+    def side_total(idx: int) -> int:
+        return sum(stats.values.get(key, (0, 0))[idx] for key in keys)
+
+    if team is None:
+        return side_total(0) + side_total(1)
+    home_similarity = _similar(team, stats.home_team)
+    away_similarity = _similar(team, stats.away_team)
+    if max(home_similarity, away_similarity) < _MIN_TEAM_SIMILARITY:
+        return None
+    return side_total(0) if home_similarity >= away_similarity else side_total(1)
+
+
+def _resolve_stat_over_under(
+    stats: MatchStats,
+    keys: tuple[str, ...],
+    team: Optional[str],
+    direction: str,
+    linea: float,
+) -> tuple[Optional[bool], bool]:
+    """Over/under sobre una estadística del partido (córners, tarjetas...)."""
+    total = _stat_total(stats, keys, team)
+    if total is None:
+        return None, False
+    return _compare_over_under(total, direction, linea)
 
 
 def _match_team_scores(match: MatchResult, team: str) -> tuple[int, int] | None:
@@ -354,17 +426,7 @@ def _resolve_team_over_under(
     if scores is None:
         return None, False
     goals, _ = scores
-    if direction == "over":
-        if goals > linea:
-            return True, False
-        if goals < linea:
-            return False, False
-        return None, True
-    if goals < linea:
-        return True, False
-    if goals > linea:
-        return False, False
-    return None, True
+    return _compare_over_under(goals, direction, linea)
 
 
 def _extract_team_total_team(seleccion: str) -> Optional[str]:
@@ -462,6 +524,32 @@ async def _find_match_across_providers(
             continue
         if match:
             return match
+    return None
+
+
+async def _find_stats_across_providers(
+    date: datetime,
+    team_hint: str,
+    providers: list[ResultsProvider],
+    pick_id: Optional[int],
+) -> Optional[MatchStats]:
+    """Estadísticas del partido (córners, tarjetas...): solo los
+    proveedores que implementan `find_match_stats` (hoy API-Football)."""
+    for provider in providers:
+        finder = getattr(provider, "find_match_stats", None)
+        if finder is None:
+            continue
+        try:
+            stats = await finder(date, team_hint)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[RESULTS_VERIFIER] Error consultando stats para pick id=%s: %s",
+                pick_id,
+                exc,
+            )
+            continue
+        if stats:
+            return stats
     return None
 
 
@@ -565,14 +653,9 @@ async def verify_pick(
         if not direction:
             return None, False
         ou_text = f"{pick.seleccion or ''} {pick.mercado or ''}"
-        if _OU_NON_GOALS_PATTERN.search(ou_text) or _FIRST_HALF_PATTERN.search(ou_text):
-            # Córners/tarjetas/tiros/primera parte: no resoluble con el
-            # marcador — queda para revisión manual (o un futuro
-            # proveedor de estadísticas).
-            return None, False
-        if pick.linea >= _AMBIGUOUS_LINE_MIN and not _GOALS_PATTERN.search(ou_text):
-            # Línea alta sin la palabra "gol": en fútbol casi seguro son
-            # córners, no goles. Mejor pendiente que mal verificado.
+        if _FIRST_HALF_PATTERN.search(ou_text):
+            # "Más de 0.5 goles 1ª parte": ni el marcador ni las stats
+            # cubren el descanso — pendiente.
             return None, False
         # Over/under es sobre el total del partido o sobre un equipo
         # concreto; en ambos casos necesitamos un nombre de equipo para
@@ -585,6 +668,27 @@ async def verify_pick(
             team_total_team or pick.evento or _extract_handicap_team(pick.seleccion)
         )
         if not team_hint:
+            return None, False
+        if _OU_NON_GOALS_PATTERN.search(ou_text):
+            # Córners/tarjetas/tiros...: no resoluble con el marcador,
+            # pero API-Football sí tiene /fixtures/statistics (solo
+            # dentro de la ventana de fechas del plan gratis).
+            stat_keys = _stat_keys_for(ou_text)
+            if not stat_keys:
+                # Sujeto sin estadística equivalente (juegos, sets,
+                # coches...): pendiente.
+                return None, False
+            stats = await _find_stats_across_providers(
+                pick.fecha_evento, team_hint, providers_for_sport, pick.id
+            )
+            if not stats:
+                return None, False
+            return _resolve_stat_over_under(
+                stats, stat_keys, team_total_team, direction, pick.linea
+            )
+        if pick.linea >= _AMBIGUOUS_LINE_MIN and not _GOALS_PATTERN.search(ou_text):
+            # Línea alta sin la palabra "gol": en fútbol casi seguro son
+            # córners, no goles. Mejor pendiente que mal verificado.
             return None, False
         match = await _find_match_across_providers(
             pick.fecha_evento, team_hint, providers_for_sport, pick.id
