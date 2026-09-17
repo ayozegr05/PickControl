@@ -89,14 +89,17 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 - [ ] **Verificar mercados complejos** (parcial): ya se resuelven con el
       marcador — ganador, hándicap asiático, over/under goles (total del
       partido y por equipo), doble oportunidad (1X/X2/12/"equipo y
-      empate"), ambos marcan (sí/no) y empate no válido. Pendiente:
-      **córners, tarjetas, tiros y demás líneas que no son goles**
-      (necesitan un proveedor de estadísticas por partido, no solo el
-      marcador — API-Football `/fixtures/statistics` solo con plan de
-      pago o en ventana ±1 día), **primera parte/descanso**, "jugador
-      marca" y **combinadas** (hay que modelar cada selección por
-      separado; hasta entonces quedan manuales — nunca se verifican
-      contra una sola selección, eso sería un falso resultado).
+      empate"), ambos marcan (sí/no) y empate no válido. Además se
+      resuelven con `/fixtures/statistics` de API-Football: **córners,
+      tarjetas (amarilla+roja), tiros (totales y a puerta), faltas y
+      fueras de juego**, tanto total del partido como por equipo —
+      **pero solo para partidos dentro de la ventana ±1 día del plan
+      gratis**: los picks de stats se verifican al día siguiente o se
+      pierden (el plan de pago lo arreglaría). Pendiente aún:
+      **primera parte/descanso**, "jugador marca" y **combinadas** (hay
+      que modelar cada selección por separado; hasta entonces quedan
+      manuales — nunca se verifican contra una sola selección, eso
+      sería un falso resultado).
 - [ ] **Partidos aplazados/suspendidos → anulada**: hoy solo se aceptan
       fixtures `FINISHED`/`FT`, así que un aplazado (p. ej. Levante-Athletic
       por lluvia) queda pendiente indefinidamente hasta que se juegue.

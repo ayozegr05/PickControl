@@ -11,7 +11,7 @@ import app.services.results.football_data as football_data
 from app.models.parsed_pick import ParsedPick
 from app.services.results.api_football import ApiFootballProvider
 from app.services.results.api_tennis import ApiTennisProvider
-from app.services.results.base import MatchResult, match_score
+from app.services.results.base import MatchResult, MatchStats, match_score
 from app.services.results.football_data import FootballDataProvider
 from app.services.results.verifier import (
     _detect_over_under_direction,
@@ -312,6 +312,95 @@ def _match(home: int, away: int) -> MatchResult:
     return MatchResult(
         home_team="Levante", away_team="Real Betis", home_score=home, away_score=away
     )
+
+
+class _StubStatsProvider:
+    """Proveedor con estadísticas de partido (córners, tarjetas...).
+
+    Simula la capacidad extra de API-Football (`find_match_stats`).
+    """
+
+    SUPPORTED_SPORTS = frozenset({"futbol"})
+
+    def __init__(self, stats: MatchStats | None):
+        self._stats = stats
+        self.calls = 0
+
+    async def find_match(self, date, team_hint):
+        return None
+
+    async def find_match_stats(self, date, team_hint):
+        self.calls += 1
+        return self._stats
+
+
+def _stats(home: dict, away: dict) -> MatchStats:
+    return MatchStats(
+        home_team="Levante",
+        away_team="Real Betis",
+        values={k: (home.get(k, 0), away.get(k, 0)) for k in home.keys() | away.keys()},
+    )
+
+
+class TestStatOverUnder:
+    """Mercados de estadísticas (córners, tarjetas, tiros...): se
+    resuelven con /fixtures/statistics de API-Football, no con el
+    marcador."""
+
+    async def test_corners_total_over_acierta(self):
+        stats = _stats({"Corner Kicks": 6}, {"Corner Kicks": 4})
+        provider = _StubStatsProvider(stats)
+        pick = _pick("Más de 8.0 corners", "over/under", linea=8.0)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (True, False)  # 10 > 8
+        assert provider.calls == 1
+
+    async def test_corners_total_under_falla(self):
+        stats = _stats({"Corner Kicks": 6}, {"Corner Kicks": 4})
+        provider = _StubStatsProvider(stats)
+        pick = _pick("Menos de 8.0 corners", "over/under", linea=8.0)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False  # 10 > 8
+
+    async def test_corners_por_equipo(self):
+        stats = _stats({"Corner Kicks": 6}, {"Corner Kicks": 2})
+        provider = _StubStatsProvider(stats)
+        pick = _pick("Levante más de 4.5 córners", "over/under", linea=4.5)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True  # Levante sacó 6, no 8 del total
+
+    async def test_tarjetas_suman_amarillas_y_rojas(self):
+        stats = _stats(
+            {"Yellow Cards": 2},
+            {"Yellow Cards": 1, "Red Cards": 1},
+        )
+        provider = _StubStatsProvider(stats)
+        pick = _pick("Más de 3 tarjetas", "over/under tarjetas", linea=3.0)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True  # 2 + (1+1) = 4
+
+    async def test_sujeto_sin_estadistica_queda_pendiente(self):
+        provider = _StubStatsProvider(_stats({"Corner Kicks": 6}, {}))
+        pick = _pick("Menos de 19.5 coches", "over/under", linea=19.5)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+        assert provider.calls == 0
+
+    async def test_sin_stats_del_proveedor_queda_pendiente(self):
+        # El proveedor no devolvió estadísticas (partido fuera de la
+        # ventana del plan gratis, liga sin datos...).
+        provider = _StubStatsProvider(None)
+        pick = _pick("Más de 8.0 corners", "over/under", linea=8.0)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+        assert provider.calls == 1
+
+    async def test_primera_parte_ni_siquiera_consulta_stats(self):
+        provider = _StubStatsProvider(_stats({"Corner Kicks": 6}, {}))
+        pick = _pick("Más de 4.5 corners 1ª parte", "over/under", linea=4.5)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+        assert provider.calls == 0
 
 
 class TestDoubleChance:
@@ -627,3 +716,106 @@ class TestApiFootballMatchFinding:
             datetime(2026, 9, 16), "Levante - Athletic de Bilbao"
         )
         assert match is None
+
+
+class _RoutingClient:
+    """Como _CountingClient pero devuelve distinto payload según la URL
+    (fixtures vs fixtures/statistics)."""
+
+    def __init__(self, calls, fixtures_payload, stats_payload):
+        self._calls = calls
+        self._fixtures = fixtures_payload
+        self._stats = stats_payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, url, params=None, headers=None):
+        self._calls.append(url)
+        if "statistics" in url:
+            return _FakeResponse(self._stats)
+        return _FakeResponse(self._fixtures)
+
+
+class TestApiFootballStats:
+    """/fixtures/statistics: parsing por equipo y caché por fixture."""
+
+    async def test_devuelve_estadisticas_por_equipo(self, monkeypatch):
+        calls = []
+        fixture = {
+            "fixture": {"id": 123, "status": {"short": "FT"}},
+            "teams": {
+                "home": {"id": 10, "name": "Levante UD"},
+                "away": {"id": 20, "name": "Real Betis"},
+            },
+            "goals": {"home": 2, "away": 1},
+        }
+        stats_payload = {
+            "response": [
+                {
+                    "team": {"id": 20},
+                    "statistics": [
+                        {"type": "Corner Kicks", "value": 4},
+                        {"type": "Yellow Cards", "value": 1},
+                        {"type": "Ball Possession", "value": "55%"},
+                    ],
+                },
+                {
+                    "team": {"id": 10},
+                    "statistics": [
+                        {"type": "Corner Kicks", "value": 6},
+                        {"type": "Yellow Cards", "value": 2},
+                    ],
+                },
+            ]
+        }
+        monkeypatch.setattr(
+            api_football.httpx,
+            "AsyncClient",
+            lambda **kw: _RoutingClient(calls, {"response": [fixture]}, stats_payload),
+        )
+        provider = ApiFootballProvider("key", "v3.football.api-sports.io")
+
+        stats = await provider.find_match_stats(
+            datetime(2026, 9, 15), "Levante - Betis"
+        )
+        assert stats is not None
+        assert stats.home_team == "Levante UD"
+        # (local, visitante) aunque la API devuelva al visitante primero.
+        assert stats.values["Corner Kicks"] == (6, 4)
+        assert stats.values["Yellow Cards"] == (2, 1)
+        # Los valores no numéricos ("55%") se descartan.
+        assert "Ball Possession" not in stats.values
+
+    async def test_stats_cacheadas_por_fixture(self, monkeypatch):
+        calls = []
+        fixture = {
+            "fixture": {"id": 123, "status": {"short": "FT"}},
+            "teams": {
+                "home": {"id": 10, "name": "Levante UD"},
+                "away": {"id": 20, "name": "Real Betis"},
+            },
+            "goals": {"home": 2, "away": 1},
+        }
+        stats_payload = {
+            "response": [
+                {
+                    "team": {"id": 10},
+                    "statistics": [{"type": "Corner Kicks", "value": 6}],
+                }
+            ]
+        }
+        monkeypatch.setattr(
+            api_football.httpx,
+            "AsyncClient",
+            lambda **kw: _RoutingClient(calls, {"response": [fixture]}, stats_payload),
+        )
+        provider = ApiFootballProvider("key", "v3.football.api-sports.io")
+
+        await provider.find_match_stats(datetime(2026, 9, 15), "Levante")
+        await provider.find_match_stats(datetime(2026, 9, 15), "Levante")
+        stats_calls = [u for u in calls if "statistics" in u]
+        assert len(stats_calls) == 1  # segunda vez servida desde caché

@@ -20,7 +20,7 @@ from typing import Optional
 import httpx
 
 from app.core.logging import get_logger
-from app.services.results.base import MatchResult, match_score
+from app.services.results.base import MatchResult, MatchStats, match_score
 
 logger = get_logger("app.results.api_football")
 
@@ -30,6 +30,17 @@ _MIN_TEAM_SIMILARITY = 0.6
 # fixtures solo acepta un día por petición, así que probamos el día
 # indicado y el anterior/siguiente (3 peticiones en total).
 _DATE_OFFSETS = (0, -1, 1)
+
+
+def _stat_int(value) -> Optional[int]:
+    """Normaliza un valor de estadística: int, str numérico o None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
 
 
 class ApiFootballProvider:
@@ -45,6 +56,9 @@ class ApiFootballProvider:
         # respuesta en vez de repetir la llamada. El plan gratuito da
         # 100 req/día y antes se repetía la descarga por cada pick.
         self._fixtures_cache: dict[str, list] = {}
+        # Caché de estadísticas por fixture id: varios picks del mismo
+        # partido (córners + tarjetas + tiros...) comparten la llamada.
+        self._stats_cache: dict[int, list] = {}
 
     def _headers(self) -> dict[str, str]:
         if "rapidapi" in self._api_host:
@@ -64,6 +78,11 @@ class ApiFootballProvider:
             return f"https://{self._api_host}/v3/fixtures"
         return f"https://{self._api_host}/fixtures"
 
+    def _statistics_url(self) -> str:
+        if "rapidapi" in self._api_host:
+            return f"https://{self._api_host}/v3/fixtures/statistics"
+        return f"https://{self._api_host}/fixtures/statistics"
+
     async def _fetch_fixtures(self, client: httpx.AsyncClient, date_str: str) -> list:
         if date_str in self._fixtures_cache:
             return self._fixtures_cache[date_str]
@@ -81,7 +100,31 @@ class ApiFootballProvider:
         self._fixtures_cache[date_str] = fixtures
         return fixtures
 
-    async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:
+    async def _fetch_statistics(
+        self, client: httpx.AsyncClient, fixture_id: int
+    ) -> list:
+        if fixture_id in self._stats_cache:
+            return self._stats_cache[fixture_id]
+        try:
+            response = await client.get(
+                self._statistics_url(),
+                params={"fixture": fixture_id},
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "[API-Football] Error de API stats (fixture %s): %s",
+                fixture_id,
+                exc,
+            )
+            return []
+        stats = response.json().get("response", [])
+        self._stats_cache[fixture_id] = stats
+        return stats
+
+    async def _find_fixture(self, date: datetime, team_hint: str) -> Optional[dict]:
+        """El fixture FT que mejor casa con el hint, o None."""
         best_match = None
         best_score = 0.0
         best_teams: tuple[str, str] | None = None
@@ -103,7 +146,7 @@ class ApiFootballProvider:
                     score = match_score(team_hint, home, away)
                     if score > best_score:
                         best_score = score
-                        best_match = (fixture, home, away)
+                        best_match = fixture
                         best_teams = (home, away)
                         ambiguous = False
                     elif (
@@ -118,8 +161,13 @@ class ApiFootballProvider:
 
         if not best_match or best_score < _MIN_TEAM_SIMILARITY or ambiguous:
             return None
+        return best_match
 
-        fixture, home, away = best_match
+    async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:
+        fixture = await self._find_fixture(date, team_hint)
+        if fixture is None:
+            return None
+
         goals = fixture.get("goals", {})
         home_score = goals.get("home")
         away_score = goals.get("away")
@@ -127,8 +175,54 @@ class ApiFootballProvider:
             return None
 
         return MatchResult(
-            home_team=home,
-            away_team=away,
+            home_team=fixture["teams"]["home"]["name"],
+            away_team=fixture["teams"]["away"]["name"],
             home_score=home_score,
             away_score=away_score,
+        )
+
+    async def find_match_stats(
+        self, date: datetime, team_hint: str
+    ) -> Optional[MatchStats]:
+        """Estadísticas del partido (córners, tarjetas, tiros...).
+
+        Mismo matching que `find_match`, más una llamada a
+        `/fixtures/statistics` por el id del fixture (cacheada: varios
+        picks del mismo partido comparten la respuesta).
+        """
+        fixture = await self._find_fixture(date, team_hint)
+        if fixture is None:
+            return None
+        fixture_id = fixture.get("fixture", {}).get("id")
+        home_id = fixture["teams"]["home"].get("id")
+        if fixture_id is None or home_id is None:
+            return None
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            raw_stats = await self._fetch_statistics(client, fixture_id)
+
+        home_values: dict[str, int] = {}
+        away_values: dict[str, int] = {}
+        for entry in raw_stats:
+            target = (
+                home_values
+                if entry.get("team", {}).get("id") == home_id
+                else away_values
+            )
+            for item in entry.get("statistics", []):
+                value = _stat_int(item.get("value"))
+                if value is not None:
+                    target[item.get("type")] = value
+
+        if not home_values and not away_values:
+            return None
+
+        values = {
+            key: (home_values.get(key, 0), away_values.get(key, 0))
+            for key in home_values.keys() | away_values.keys()
+        }
+        return MatchStats(
+            home_team=fixture["teams"]["home"]["name"],
+            away_team=fixture["teams"]["away"]["name"],
+            values=values,
         )
