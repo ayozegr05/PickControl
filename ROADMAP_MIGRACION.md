@@ -125,10 +125,27 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
       Pendiente: revisar por qué "Marco Cecchinato" no apareció en
       `matches-played` de RapidAPI ATP/WTA/ITF cuando haya cuota
       (¿Challenger sin cobertura? ¿formato de perfil?).
-- [ ] **D. Limpieza puntual de datos**: picks >14 días fuera de ventana
-      en Lady Bets (corrección manual o subir `_MAX_VERIFICATION_AGE`
-      para un barrido); combinada id=1201 con patas que son nombres de
-      partido (reclasificar/corregir).
+- [x] **D. Limpieza puntual de datos** (hecho):
+      - **Automovilismo**: borrados los picks 367 (GP Países Bajos) y
+        902 (GP España) — deporte sin proveedor, quedaban pendientes
+        para siempre. Además `_normalize_pick` ahora marca
+        `es_apuesta=False`/`metodo="rejected"` para deportes sin
+        soporte (`_UNSUPPORTED_SPORTS` + señal `_MOTOR_SIGNAL`), así
+        futuras picks de F1 se guardan auditables sin ensuciar
+        pendientes; un reproceso del raw las recupera cuando haya
+        soporte.
+      - **Combinada id=1201**: borrada con sus patas 1336/1337 — el OCR
+        había extraído nombres de partido como "patas" sin selección
+        (irrecuperables como apuestas; el raw de imagen se conserva).
+      - **Lady Bets**: las ~123 filas vacías son `metodo="rejected"`
+        (saludos/marketing rechazados a propósito — son el rastro de
+        auditoría, no se tocan). Los ~22 con datos pendientes:
+        `scripts/verify_backlog.py` barre picks fuera de la ventana de
+        14 días con el mismo `verify_pick` del ciclo normal. Primera
+        ejecución: TODOS los proveedores en rate-limit (429 en
+        API-Football, football-data.org, TheSportsDB y RapidAPI) → 0
+        resueltos, sin marcar misses (los errores no contaminan).
+        Re-ejecutar cuando renueve la cuota diaria.
 
 ### 1. Core: verificación de resultados
 

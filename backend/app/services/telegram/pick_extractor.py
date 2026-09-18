@@ -573,6 +573,25 @@ _BALONCESTO_SIGNAL = re.compile(
     r"baloncesto|basket|\bnba\b|euroleague|euroliga|\bncaa\b|liga\s+endesa",
     re.IGNORECASE,
 )
+_MOTOR_SIGNAL = re.compile(
+    r"automovilismo|f[óo]rmula\s*1|\bf1\b|grand\s*prix|gran\s+premio|"
+    r"\bmotogp\b|\bnascar\b|\bcoches\b|\bgp\b",
+    re.IGNORECASE,
+)
+# Deportes sin proveedor de resultados configurado: el pick se guarda
+# como rejected (auditable en la pantalla de debug) en lugar de quedar
+# pendiente para siempre; un reproceso del raw lo recupera cuando haya
+# soporte. El LLM puede devolver variantes — se comparan normalizadas.
+_UNSUPPORTED_SPORTS = {
+    "automovilismo",
+    "f1",
+    "formula 1",
+    "fórmula 1",
+    "motorsport",
+    "motogp",
+    "nascar",
+    "motor",
+}
 
 
 def _detect_deporte(text: Optional[str]) -> Optional[str]:
@@ -585,6 +604,8 @@ def _detect_deporte(text: Optional[str]) -> Optional[str]:
         return "fútbol"
     if _BALONCESTO_SIGNAL.search(text):
         return "baloncesto"
+    if _MOTOR_SIGNAL.search(text):
+        return "automovilismo"
     return None
 
 
@@ -597,6 +618,9 @@ def _normalize_pick(pick: ExtractedPick, text: str) -> ExtractedPick:
     pick.evento = _clean_text_field(pick.evento)
     if pick.es_apuesta and not pick.deporte:
         pick.deporte = _detect_deporte(text)
+    if pick.es_apuesta and (pick.deporte or "").strip().lower() in _UNSUPPORTED_SPORTS:
+        pick.es_apuesta = False
+        pick.metodo = "rejected"
     for pata in pick.patas:
         _normalize_pick(pata, text)
     return pick
