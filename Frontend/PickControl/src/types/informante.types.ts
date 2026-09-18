@@ -22,6 +22,14 @@ export interface InformanteStats {
   parsedGanancias: number;
   parsedPorcentajeAciertos: number;
   parsedYieldPct: number;
+
+  // Combinadas del canal (sección propia, fuera de las stats de simples).
+  combinadasTotal: number;
+  combinadasAciertos: number;
+  combinadasGanancias: number;
+  combinadasPorcentaje: number;
+  combinadasYieldPct: number;
+  combinadasPendientes: number;
 }
 
 export interface InformanteSummary {

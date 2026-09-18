@@ -24,6 +24,7 @@ from app.schemas.analisis import (
 from app.services.pick_service import (
     InformanteStatsResult,
     calcular_stats,
+    calcular_stats_combinadas,
     calcular_stats_parsed,
 )
 
@@ -90,6 +91,7 @@ async def analisis_global(
                     ]
                 ),
                 cuota_media_mia=_media([p.cuota for p in jugados]),
+                combinadas=_to_bloque(calcular_stats_combinadas(telegram)),
             )
         )
 
@@ -126,4 +128,5 @@ async def analisis_global(
         deportes=deportes,
         totales_tipster=_to_bloque(calcular_stats_parsed(parsed_picks)),
         totales_yo=_to_bloque(calcular_stats(picks)),
+        totales_combinadas=_to_bloque(calcular_stats_combinadas(parsed_picks)),
     )

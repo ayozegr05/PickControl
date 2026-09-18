@@ -31,6 +31,9 @@ class AnalisisCanal(SQLModel):
     # sobre esos mismos picks jugados — mide la pérdida de cuota real.
     cuota_media_tipster: Optional[float] = None
     cuota_media_mia: Optional[float] = None
+    # Combinadas del canal (solo padres): sección propia, fuera de las
+    # stats de picks simples.
+    combinadas: Optional[StatsBloque] = None
 
 
 class AnalisisDeporte(SQLModel):
@@ -48,3 +51,5 @@ class AnalisisGlobal(SQLModel):
     deportes: list[AnalisisDeporte]
     totales_tipster: StatsBloque
     totales_yo: StatsBloque
+    # Combinadas agregadas de todos los canales (solo padres).
+    totales_combinadas: Optional[StatsBloque] = None

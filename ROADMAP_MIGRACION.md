@@ -56,7 +56,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 
 | # | Hito | Estado | Esfuerzo |
 |---|---|---|---|
-| 1 | Combinadas como sección propia | Pendiente | Alto — modelo, extractor, verificador, UI |
+| 1 | Combinadas como sección propia | Hecho | Alto — modelo, extractor, verificador, UI |
 | 2 | Fútbol: primera parte/descanso | Pendiente — sin datos en proveedores | Alto (proveedor nuevo) |
 | 3 | Fútbol: partidos parados (SUSP/ABD/INT) | Manual a propósito | — |
 | 4 | Cuota tipster vs cuota real de mercado | Pendiente | Alto + API de odds (probablemente de pago) |
@@ -141,10 +141,37 @@ cobertura de proveedor, hándicap sin sujeto en zona ambigua |línea| 2-3.
         y penalti fallado no cuentan; no jugó → `anulada`) y props de
         jugador con número ("X más de 1.5 tiros a puerta").
       Pendiente a propósito: **primera parte/descanso** (sin datos en
-      los proveedores actuales), **combinadas** (irán a sección propia
-      como los retos; cada selección se modela aparte) y partidos
-      parados a mitad (`SUSP`/`ABD` — hay mercados ya decididos que la
-      casa paga; quedan manuales).
+      los proveedores actuales) y partidos parados a mitad
+      (`SUSP`/`ABD` — hay mercados ya decididos que la casa paga;
+      quedan manuales).
+- [x] **Combinadas como sección propia** (self-FK sobre `parsed_picks`;
+      ADR completo en el docstring de la migración `f1a2b3c4d5e6`):
+      - Modelo: padre `es_combinada=True` con cuota/stake/texto unidos y
+        N patas como `parsed_picks` normales con `combinada_id`+`orden`.
+        Se eligió self-FK sobre tabla hija o JSON por reutilizar TODO el
+        pipeline (verificador, PATCH manual, dedup, ventanas de edad)
+        sin duplicar lógica; el coste asumido es filtrar patas/padres en
+        las queries de simples (centralizado en `_es_pick_simple`).
+      - Extractor: señales "crea tu apuesta"/"combinada"/"N pronósticos"
+        + split por viñetas por reglas, `patas` estructuradas en el
+        prompt del LLM y degradación a simple con <2 patas reales.
+      - Liquidación (`verifier.settle_combinada`): una pata roja tumba
+        la combinada, las anuladas se excluyen, todas verdes → acierto,
+        todas anuladas → anulada. `cuota_efectiva` = producto de las
+        cuotas de patas activas SOLO si todas las patas tienen cuota;
+        si no, NULL (no se inventa la ganancia). Los padres nunca se
+        consultan a APIs deportivas. Override manual del padre siempre
+        respetado; una combinada auto-liquidada vuelve a pendiente si
+        una pata se reabre.
+      - API/UI: `PATCH` sobre una pata re-liquida el padre;
+        "Yo también la jugué" opera sobre el padre (una pata redirige);
+        sección "Combinadas" propia en `[informante]` y `parsed-picks`
+        con patas expandibles, fuera de las stats de simples
+        (`calcular_stats_combinadas` para las métricas propias).
+      - Backfill: `scripts/backfill_combinadas.py` reprocesa el RAW de
+        cada registro etiquetado como combinada (dry-run por defecto,
+        `--apply` para escribir) — los falsos positivos se reclasifican
+        solos y los raws no se tocan.
 - [x] **Partidos aplazados/cancelados → anulada**: implementado. Si el
       fixture consta `POSTPONED`/`CANCELLED` (football-data) o
       `PST`/`CANC` (API-Football) y la `fecha_evento` lleva más de 72 h
@@ -304,8 +331,8 @@ importados). "Push" (líneas enteras) y aplazados/cancelados >72 h se marcan
   automática, correct score en juegos ("gana 6-4 6-2"). Líneas
   "21+"/"N o más" y hándicap sin sujeto (convención: ≤1.5 sets,
   ≥3.5 juegos, en medio pendiente) soportadas.
-  Pendiente a propósito: combinadas (sección propia) y hándicap sin
-  sujeto en la zona ambigua |línea| 2-3.
+  Pendiente a propósito: hándicap sin sujeto en la zona ambigua
+  |línea| 2-3.
 - **Baloncesto** sin proveedor (API-Basketball de api-sports.io sería el
   candidato).
 - Futuro: plan de pago de API-Football eliminaría la restricción de fechas.

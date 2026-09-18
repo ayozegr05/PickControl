@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.core.logging import get_logger
 from app.services.telegram.openai_retry import call_with_retry
@@ -26,7 +26,8 @@ class ExtractedPick(BaseModel):
     """Pronóstico extraído, con metadatos del método usado."""
 
     es_apuesta: bool = Field(
-        description="True si el mensaje contiene una apuesta clara, False en caso contrario"
+        default=False,
+        description="True si el mensaje contiene una apuesta clara, False en caso contrario",
     )
     deporte: Optional[str] = None
     evento: Optional[str] = None
@@ -45,6 +46,18 @@ class ExtractedPick(BaseModel):
     linea: Optional[float] = None
     metodo: str = "unknown"  # 'rule', 'llm' o 'rejected'
     confianza: float = 0.0
+    # Patas de una combinada ("crear apuesta"/acumulador): cada una es
+    # una selección independiente que se verifica por separado; el pick
+    # padre se liquida en conjunto y `cuota` es la cuota combinada total.
+    # Lista vacía en picks simples.
+    patas: list[ExtractedPick] = Field(default_factory=list)
+
+    @field_validator("patas", mode="before")
+    @classmethod
+    def _none_patas_a_lista(cls, v: object) -> object:
+        # El prompt pide "patas": null para picks simples — se normaliza
+        # a lista vacía para no romper el parseo del JSON del LLM.
+        return [] if v is None else v
 
 
 _MESES_ES = {
@@ -182,6 +195,247 @@ def _extract_linea(seleccion: str) -> Optional[float]:
     return None
 
 
+# --- Combinadas -------------------------------------------------------
+#
+# Una combinada es UNA apuesta con N selecciones (patas): bet-builders
+# de una casa ("CREA TU APUESTA 5 pronósticos") o acumuladores entre
+# partidos ("Combinada @3.40: A gana + B gana"). El padre lleva la cuota
+# combinada total; cada pata se verifica por separado.
+
+# Señales de que el mensaje es una combinada.
+_COMBINADA_PATTERN = re.compile(
+    r"\bcombinad[ao]\b|\bacumulador\b|\bacumulada\b|\bm[uú]ltiple\b|"
+    r"\bparlay\b|\bcrea(?:r)?\s+(?:tu\s+)?apuesta\b|\bbet\s*builder\b|"
+    r"\b\d+\s+pron[oó]sticos\b",
+    re.IGNORECASE,
+)
+
+# Viñeta que precede a cada pata en el texto/OCR del boleto.
+_LEG_BULLET_PATTERN = re.compile(r"^\s*[✔✅☑•·▪►➤‣\-–—*]\s*(?P<leg>\S.*)$")
+
+# Una línea con viñeta que NO es una pata: metadatos del boleto
+# (cuota/stake/importe), cabeceras o líneas de fecha/hora.
+_LEG_NOISE_PATTERN = re.compile(
+    r"cuota|stake|unidades|importe|ganancias|ganaste|apostad|"
+    r"pron[oó]stico|combinad|acumulador|crea(?:r)?\s|"
+    r"^\d{1,2}\s*[:./-]\s*\d{1,2}",
+    re.IGNORECASE,
+)
+
+
+def _classify_leg_market(leg: str) -> Optional[str]:
+    """Mercado probable de una pata suelta, por palabras clave.
+
+    El verificador re-detecta el mercado real a partir de
+    `seleccion`/`linea`, pero necesita una pista inicial para entrar en
+    la rama correcta (p. ej. "over/under" para llegar a las stats de
+    córners o al fallback de props de jugador).
+    """
+    low = leg.lower()
+    if re.search(r"h[aá]ndicap|handicap", low):
+        return "hándicap asiático"
+    if re.search(r"doble\s+oportunidad|double\s*chance", low):
+        return "doble oportunidad"
+    if re.search(
+        r"empate\s+no\s+v[aá]lido|resultado\s+sin\s+empate|draw\s+no\s+bet", low
+    ):
+        return "empate no válido"
+    if re.search(
+        r"ambos\s+(?:equipos?\s+)?(?:marcan|anotan)|both\s+teams|\bbtts\b", low
+    ):
+        return "ambos marcan"
+    if re.search(
+        r"resultado\s+exacto|marcador\s+(?:exacto|correcto)|correct\s+score", low
+    ):
+        return "resultado exacto"
+    if re.search(r"\bover\b|\bunder\b|m[aá]s\s+de|menos\s+de|\d+\s*o\s+m[aá]s", low):
+        return "over/under"
+    if re.search(r"marca|asiste|tarjeta|goleador|scorer", low):
+        return "jugador"
+    if re.search(r"\bgana\b|\bganador\b|\bvence\b|vencedor|moneyline", low):
+        return "ganador"
+    return None
+
+
+def _extract_eventos(lines: list[str]) -> list[str]:
+    """Líneas "EquipoA - EquipoB" / "A vs B" del mensaje, en orden.
+
+    Se ignoran las líneas con viñeta: una pata tipo "Ambos equipos
+    marcan - Sí" casa con el patrón de evento pero es una selección.
+    """
+    eventos = []
+    for line in lines:
+        if _LEG_BULLET_PATTERN.match(line) or _LEG_NOISE_PATTERN.search(line):
+            continue
+        match = _TEAM_VS_TEAM_PATTERN.search(line)
+        if match:
+            eventos.append(match.group(0))
+        elif re.search(r"\bvs\.?\b", line, re.IGNORECASE):
+            eventos.append(line.strip())
+    return eventos
+
+
+def _extract_combinada_cuota(lowered: str) -> Optional[float]:
+    """Cuota total de la combinada: "cuota total X", "cuota X", "@X.XX"."""
+    for pattern in (
+        r"cuota\s+total\s*:?\s*([0-9]+[.,]?[0-9]*)",
+        r"cuota\s*[:=]?\s*([0-9]+[.,]?[0-9]*)",
+        r"@\s*([0-9]+[.,]?[0-9]{2,})",
+    ):
+        match = re.search(pattern, lowered)
+        if match:
+            return float(match.group(1).replace(",", "."))
+    return None
+
+
+def _rule_extract_combinada(
+    text: str,
+    informante: Optional[str] = None,
+    fecha_referencia: Optional[datetime] = None,
+) -> Optional[ExtractedPick]:
+    """Parte una combinada por reglas: >=2 patas en líneas con viñeta.
+
+    El evento se hereda a las patas cuando el mensaje trae UN solo
+    partido (bet-builder) o tantos eventos como patas (acumulador en el
+    mismo orden). Devuelve None si no se puede partir con confianza —
+    entonces lo intenta el LLM.
+    """
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+    legs: list[str] = []
+    for line in lines:
+        match = _LEG_BULLET_PATTERN.match(line)
+        if not match:
+            continue
+        leg = match.group("leg").strip()
+        if len(leg) < 3 or _LEG_NOISE_PATTERN.search(leg):
+            continue
+        if leg not in legs:
+            legs.append(leg)
+    if len(legs) < 2:
+        return None
+
+    eventos = _extract_eventos(lines)
+    shared_fecha = _extract_event_date(text, fecha_referencia)
+    patas = []
+    for idx, leg in enumerate(legs):
+        if len(eventos) == 1:
+            evento = eventos[0]
+        elif len(eventos) == len(legs):
+            evento = eventos[idx]
+        else:
+            evento = None
+        patas.append(
+            ExtractedPick(
+                es_apuesta=True,
+                seleccion=leg,
+                evento=evento,
+                mercado=_classify_leg_market(leg),
+                linea=_extract_linea(leg),
+                fecha_evento=shared_fecha,
+                metodo="rule",
+                confianza=0.8,
+            )
+        )
+
+    return ExtractedPick(
+        es_apuesta=True,
+        evento=eventos[0] if len(eventos) == 1 else (" + ".join(eventos) or None),
+        mercado="combinada",
+        seleccion=" + ".join(legs),
+        cuota=_extract_combinada_cuota(text.lower()),
+        informante=informante,
+        fecha_evento=shared_fecha,
+        metodo="rule",
+        confianza=0.8,
+        patas=patas,
+    )
+
+
+def _patas_from_joined(pick: ExtractedPick) -> list[ExtractedPick]:
+    """Reconstruye patas a partir del "A + B + C" clásico de `seleccion`.
+
+    Red de seguridad para respuestas del LLM que unen las patas con
+    " + " sin rellenar el array `patas`. Un trozo que parece una línea
+    suelta ("+7.5 juegos", "2-1") no es una pata.
+    """
+    seleccion = pick.seleccion or ""
+    if " + " not in seleccion:
+        return []
+    parts = [p.strip() for p in seleccion.split(" + ") if p.strip()]
+    eventos = [e.strip() for e in pick.evento.split(" + ")] if pick.evento else []
+    patas = []
+    for idx, part in enumerate(parts):
+        if len(part) < 3 or re.match(r"^[+-]?\s*\d", part):
+            continue
+        patas.append(
+            ExtractedPick(
+                es_apuesta=True,
+                seleccion=part,
+                evento=(
+                    eventos[idx]
+                    if len(eventos) == len(parts)
+                    else (pick.evento if len(eventos) == 1 else None)
+                ),
+                mercado=_classify_leg_market(part),
+                linea=_extract_linea(part),
+                metodo=pick.metodo,
+                confianza=pick.confianza,
+            )
+        )
+    return patas
+
+
+def _ensure_combinada_shape(
+    pick: ExtractedPick, fecha_referencia: Optional[datetime] = None
+) -> ExtractedPick:
+    """Normaliza un pick combinada tras reglas o LLM.
+
+    - Rellena `patas` desde el "A + B" de `seleccion` si el LLM no las
+      devolvió.
+    - Las patas heredan del padre lo que no tengan (deporte, evento,
+      fecha, mercado clasificado, línea).
+    - La `fecha_evento` del padre pasa a ser la de la ÚLTIMA pata: la
+      combinada no se liquida hasta que acaban todos los partidos.
+    - Si quedan menos de 2 patas degrada a pick simple (p. ej. "Brunold
+      gana +7.5 juegos" no es una combinada aunque el LLM lo etiquete).
+    """
+    if not pick.es_apuesta:
+        pick.patas = []
+        return pick
+    if not pick.patas:
+        pick.patas = _patas_from_joined(pick)
+    if len(pick.patas) < 2:
+        pick.patas = []
+        if pick.mercado and "combinada" in pick.mercado.lower():
+            pick.mercado = None
+        return pick
+
+    pick.mercado = "combinada"
+    if not pick.seleccion:
+        pick.seleccion = " + ".join(p.seleccion or "" for p in pick.patas)
+    for pata in pick.patas:
+        # Una pata es por definición una selección de la combinada.
+        pata.es_apuesta = True
+        pata.deporte = pata.deporte or pick.deporte
+        pata.evento = pata.evento or pick.evento
+        pata.fecha_evento = (
+            _sanitize_event_date(pata.fecha_evento, fecha_referencia)
+            or pick.fecha_evento
+        )
+        pata.mercado = pata.mercado or _classify_leg_market(pata.seleccion or "")
+        if pata.linea is None and pata.seleccion:
+            pata.linea = _extract_linea(pata.seleccion)
+        if pata.metodo == "unknown":
+            pata.metodo = pick.metodo
+        if not pata.confianza:
+            pata.confianza = pick.confianza
+    fechas = [p.fecha_evento for p in pick.patas if p.fecha_evento]
+    if fechas:
+        pick.fecha_evento = max(fechas)
+    return pick
+
+
 _POSITIVE_PATTERNS = [
     r"\bcuota\b",
     r"\bstake\b",
@@ -219,7 +473,6 @@ _NEGATIVE_PATTERNS = [
     r"\bsorteo\b",
     r"\bmega\s*reto\b",
     r"\breto\s*especial\b",
-    r"\bcrear\s*apuesta\b",
     r"\bbuenos\s*días\b",
     r"\bgratis\b",
     r"\benlace\b",
@@ -354,7 +607,8 @@ Recibirás texto de canales de Telegram de tipsters. Devuelve ÚNICAMENTE un JSO
   "informante": string | null,
   "explicacion": string | null,
   "fecha_evento": string | null,
-  "linea": number | null
+  "linea": number | null,
+  "patas": array | null
 }
 
 Reglas:
@@ -365,6 +619,7 @@ Reglas:
   * Boletos ya liquidados reposteados como prueba: sello "GANADOR"/"GANADA" o "Ganancias <importe>" SIN la palabra "potenciales" (en un slip abierto siempre pone "Ganancias potenciales").
   Una apuesta abierta real es una recomendación de algo que AÚN no se ha jugado.
 - "seleccion" es lo recomendado (ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5"). Si es una combinada/"crear apuesta" (varias selecciones en un mismo boleto), únelas con " + " (ej. "Más de 1 gol + Más de 2 tarjetas").
+- "patas": SOLO si es una combinada/"crear apuesta"/acumulador (varias selecciones en un mismo boleto): un array con UN objeto por selección del boleto, cada uno con la misma estructura {"seleccion", "evento", "mercado", "linea", "deporte", "fecha_evento", "cuota"} y las mismas reglas de formato ("cuota" por pata solo si aparece explícita; si no, null). En una combinada cada pata puede ser de un partido distinto (rellena su "evento" propio) o del mismo partido (bet-builder: repite el mismo "evento" en todas). Si NO es combinada, "patas" = null. Si solo puedes identificar UNA selección, NO es combinada: "patas" = null y trátala como pick simple.
 - "evento" es el partido/competición (ej. "Tenis - Challenger Francia - Cassis"). Si el texto muestra un "EquipoA - EquipoB" o "EquipoA vs EquipoB", usa ese formato completo con ambos equipos — nunca solo uno.
 - "mercado" es el tipo de apuesta: usa siempre una de estas etiquetas si aplica: "ganador", "hándicap asiático", "over/under" (o "over/under goles", "over/under juegos" según el deporte). Si es una combinada/"crear apuesta" con varias selecciones, usa "combinada". Si no encaja en ninguna, describe brevemente el mercado.
 - "deporte" debe ser una palabra normalizada y simple: "fútbol", "tenis", "baloncesto", etc.
@@ -496,6 +751,29 @@ async def extract_pick(
             es_apuesta=False, informante=informante, metodo="rejected", confianza=0.95
         )
 
+    # Combinadas: si hay señal de combinada se intenta partir por
+    # reglas y, si no se puede, se va directo al LLM. `_rule_extract`
+    # NO se ejecuta aquí: cogería la primera pata como si fuera un pick
+    # simple y perderíamos el resto del boleto.
+    if _COMBINADA_PATTERN.search(text):
+        rule_comb = _rule_extract_combinada(
+            text, informante=informante, fecha_referencia=fecha_referencia
+        )
+        if rule_comb is not None:
+            rule_comb.fecha_evento = _sanitize_event_date(
+                rule_comb.fecha_evento, fecha_referencia
+            )
+            return _ensure_combinada_shape(rule_comb, fecha_referencia)
+        llm_comb = await _llm_extract(
+            text, api_key, informante=informante, fecha_referencia=fecha_referencia
+        )
+        if llm_comb is None:
+            return None
+        llm_comb.fecha_evento = _sanitize_event_date(
+            llm_comb.fecha_evento, fecha_referencia
+        )
+        return _ensure_combinada_shape(llm_comb, fecha_referencia)
+
     rule_result = _rule_extract(
         text, informante=informante, fecha_referencia=fecha_referencia
     )
@@ -512,4 +790,7 @@ async def extract_pick(
         llm_result.fecha_evento = _sanitize_event_date(
             llm_result.fecha_evento, fecha_referencia
         )
+        # El LLM puede devolver patas aunque el mensaje no tuviera la
+        # señal léxica de combinada (p. ej. un slip solo con viñetas).
+        llm_result = _ensure_combinada_shape(llm_result, fecha_referencia)
     return llm_result

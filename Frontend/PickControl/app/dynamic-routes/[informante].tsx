@@ -57,6 +57,10 @@ export default function InformantDetail() {
   const [jugarCasa, setJugarCasa] = useState("");
   const [jugando, setJugando] = useState(false);
   const [periodoSeleccionado, setPeriodoSeleccionado] = useState("semana");
+  // Combinadas expandidas: id del padre -> true si se muestran sus patas.
+  const [combinadasAbiertas, setCombinadasAbiertas] = useState<
+    Record<number, boolean>
+  >({});
 
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -725,7 +729,7 @@ export default function InformantDetail() {
                   </View>
 
                   {[...data.parsedPicks]
-                    .filter((p) => !p.esReto)
+                    .filter((p) => !p.esReto && !p.esCombinada)
                     .sort(
                       (a, b) =>
                         new Date(a.fecha).getTime() -
@@ -833,6 +837,106 @@ export default function InformantDetail() {
                       </Text>
                     </TouchableOpacity>
                   ))}
+              </View>
+            )}
+
+            {/* Combinadas del tipster: sección propia, fuera de las
+                stats de simples. Cada padre se expande para ver las
+                patas con su resultado individual. */}
+            {data.parsedPicks.some((p) => p.esCombinada) && (
+              <View style={styles.retosSection}>
+                <Text style={styles.retosTitle}>Combinadas</Text>
+                {data.combinadasTotal > 0 && (
+                  <Text style={styles.retoMeta}>
+                    {data.combinadasTotal} combinadas ·{" "}
+                    {data.combinadasAciertos} aciertos ·{" "}
+                    {data.combinadasGanancias.toFixed(2)}u · yield{" "}
+                    {data.combinadasYieldPct.toFixed(2)}%
+                  </Text>
+                )}
+                {data.parsedPicks
+                  .filter((p) => p.esCombinada)
+                  .sort(
+                    (a, b) =>
+                      new Date(b.fecha).getTime() - new Date(a.fecha).getTime()
+                  )
+                  .map((comb) => {
+                    const abierta = !!combinadasAbiertas[comb.id];
+                    const numPatas = comb.patas?.length ?? 0;
+                    return (
+                      <View key={comb.id} style={styles.retoRow}>
+                        <View style={styles.combinadaHeader}>
+                          <TouchableOpacity
+                            style={{ flex: 1 }}
+                            onPress={() => setSelectedTelegramPick(comb)}
+                          >
+                            <Text style={styles.retoText}>
+                              {comb.apuesta || "(combinada)"}
+                              {comb.evento ? ` · ${comb.evento}` : ""}
+                            </Text>
+                            <Text style={styles.retoMeta}>
+                              {formatearFecha(comb.fecha)} · cuota{" "}
+                              {Number(
+                                comb.cuotaEfectiva ?? comb.cuota
+                              ).toFixed(2)}
+                              {comb.cuotaEfectiva != null &&
+                              comb.cuotaEfectiva !== comb.cuota
+                                ? ` (declarada ${Number(comb.cuota).toFixed(2)})`
+                                : ""}
+                              {" · "}
+                              {numPatas} patas ·{" "}
+                              {renderPronosticoTelegram(comb.acierto)}
+                            </Text>
+                          </TouchableOpacity>
+                          {numPatas > 0 && (
+                            <TouchableOpacity
+                              style={styles.combinadaChevron}
+                              onPress={() =>
+                                setCombinadasAbiertas((prev) => ({
+                                  ...prev,
+                                  [comb.id]: !abierta,
+                                }))
+                              }
+                            >
+                              <MaterialCommunityIcons
+                                name={abierta ? "chevron-up" : "chevron-down"}
+                                size={22}
+                                color="#b388ff"
+                              />
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                        {abierta &&
+                          (comb.patas ?? []).map((pata) => (
+                            <View key={pata.id} style={styles.pataRow}>
+                              <Text style={styles.pataIcono}>
+                                {pata.anulada
+                                  ? "↩️"
+                                  : pata.acierto === true
+                                    ? "✅"
+                                    : pata.acierto === false
+                                      ? "❌"
+                                      : "❓"}
+                              </Text>
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.pataText}>
+                                  {pata.seleccion || "(pata)"}
+                                </Text>
+                                <Text style={styles.pataMeta}>
+                                  {[
+                                    pata.evento,
+                                    pata.mercado,
+                                    pata.anulada ? "anulada" : null,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" · ")}
+                                </Text>
+                              </View>
+                            </View>
+                          ))}
+                      </View>
+                    );
+                  })}
               </View>
             )}
           </View>
@@ -1723,5 +1827,35 @@ const styles = StyleSheet.create({
     color: "#aaa",
     fontSize: 12,
     marginTop: 4,
+  },
+  combinadaHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  combinadaChevron: {
+    padding: 4,
+    marginLeft: 8,
+  },
+  pataRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#2a2140",
+    paddingLeft: 8,
+  },
+  pataIcono: {
+    fontSize: 14,
+    marginRight: 8,
+  },
+  pataText: {
+    color: "#e8e0f5",
+    fontSize: 13,
+  },
+  pataMeta: {
+    color: "#888",
+    fontSize: 11,
+    marginTop: 2,
   },
 });

@@ -136,6 +136,17 @@ async def _find_duplicate_pick(
         )
         .where(ParsedPick.informante == channel)
         .where(ParsedPick.es_apuesta == True)  # noqa: E712
+        # Las patas de una combinada nunca son candidatas a dedup: un
+        # pick simple futuro con el mismo texto no debe fusionarse con
+        # una selección que forma parte de un boleto.
+        .where(ParsedPick.combinada_id == None)  # noqa: E711
+        # Y un simple solo dedup contra simples: sin este filtro, la
+        # selección "Real Madrid gana" se fusionaba con el padre
+        # "Real Madrid gana + Barça gana" por subset de palabras —
+        # son apuestas distintas (una es un boleto de N patas).
+        .where(
+            ParsedPick.es_combinada == bool(pick.es_apuesta and len(pick.patas) >= 2)
+        )
     )
     if message_date is not None:
         query = query.where(
@@ -325,6 +336,7 @@ async def process_incoming_message(
                         re.IGNORECASE,
                     )
                 )
+                es_combinada = pick.es_apuesta and len(pick.patas) >= 2
                 parsed = ParsedPick(
                     raw_message_id=raw.id,
                     informante_id=informante.id,
@@ -344,8 +356,37 @@ async def process_incoming_message(
                     metodo=pick.metodo,
                     confianza=pick.confianza,
                     es_reto=es_reto,
+                    es_combinada=es_combinada,
                 )
                 db_session.add(parsed)
+
+                if es_combinada:
+                    # Una fila por pata (self-FK): cada una se verifica
+                    # por separado con el verificador normal y el padre
+                    # se liquida en conjunto (ver verifier.settle_combinada).
+                    await db_session.flush()
+                    for orden, pata in enumerate(pick.patas):
+                        leg = ParsedPick(
+                            raw_message_id=raw.id,
+                            informante_id=informante.id,
+                            combinada_id=parsed.id,
+                            orden=orden,
+                            es_apuesta=True,
+                            apuesta=pata.seleccion,
+                            deporte=pata.deporte,
+                            evento=pata.evento,
+                            mercado=pata.mercado,
+                            seleccion=pata.seleccion,
+                            cuota=pata.cuota,
+                            casa=pick.casa,
+                            informante=channel,
+                            fecha_evento=pata.fecha_evento,
+                            linea=pata.linea,
+                            metodo=pick.metodo,
+                            confianza=pick.confianza,
+                            es_reto=es_reto,
+                        )
+                        db_session.add(leg)
         elif not source_text:
             # Sin texto (ni extraído ni crudo), no hay nada que procesar.
             raw.processed = True

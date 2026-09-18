@@ -14,8 +14,9 @@ from app.models.parsed_pick import ParsedPick
 from app.models.pick import Acierto, Pick, PickSource
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.models.user import User
-from app.schemas.pick import PickRead
+from app.schemas.pick import ParsedPickRead, PickRead
 from app.services.pick_service import calcular_ganancia, to_naive_utc
+from app.services.results.verifier import settle_combinada
 
 router = APIRouter(tags=["telegram"])
 
@@ -46,7 +47,7 @@ async def listar_mensajes_crudos(
     return list(result.all())
 
 
-@router.get("/telegram/parsed-picks", response_model=list[ParsedPick])
+@router.get("/telegram/parsed-picks", response_model=list[ParsedPickRead])
 async def listar_picks_extraidos(
     informante_id: int | None = Query(default=None),
     per_channel: int | None = Query(default=None, ge=1, le=50),
@@ -55,7 +56,7 @@ async def listar_picks_extraidos(
     limit: int = Query(default=20, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
     _user: User = Depends(get_current_user),
-) -> list[ParsedPick]:
+) -> list[ParsedPickRead]:
     """Devuelve los picks extraídos de los mensajes de Telegram.
 
     Dos modos de uso:
@@ -71,7 +72,9 @@ async def listar_picks_extraidos(
     top-N o la paginación, para que el resumen no lo ocupen mensajes
     descartados recientes (resultados, promociones, etc.).
     """
-    filters = []
+    # Las patas de combinadas nunca salen como filas sueltas: solo
+    # anidadas bajo su padre (`patas`), como componentes que son.
+    filters = [ParsedPick.combinada_id.is_(None)]
     if solo_apuestas:
         filters.append(ParsedPick.es_apuesta.is_(True))
     if informante_id is not None:
@@ -107,7 +110,32 @@ async def listar_picks_extraidos(
         )
 
     result = await session.exec(stmt)
-    return list(result.all())
+    picks = list(result.all())
+
+    # Patas de las combinadas devueltas, agrupadas por padre.
+    parent_ids = [p.id for p in picks if p.es_combinada]
+    patas_por_padre: dict[int, list[ParsedPick]] = {}
+    if parent_ids:
+        legs = (
+            await session.exec(
+                select(ParsedPick)
+                .where(ParsedPick.combinada_id.in_(parent_ids))
+                .order_by(ParsedPick.orden)
+            )
+        ).all()
+        for leg in legs:
+            patas_por_padre.setdefault(leg.combinada_id, []).append(leg)
+
+    return [
+        ParsedPickRead(
+            **p.model_dump(),
+            patas=[
+                ParsedPickRead(**leg.model_dump())
+                for leg in patas_por_padre.get(p.id, [])
+            ],
+        )
+        for p in picks
+    ]
 
 
 @router.patch("/telegram/parsed-picks/{pick_id}", response_model=ParsedPick)
@@ -135,6 +163,17 @@ async def corregir_acierto_pick(
     )
 
     session.add(pick)
+    await session.flush()
+
+    # Si es una pata, la corrección re-liquida la combinada entera
+    # (p. ej. anular una pata recalcula, o reabrir una pata devuelve el
+    # padre a pendiente). El override manual sobre el padre mismo ya
+    # quedó marcado con verificado_por="manual" y no se toca.
+    if pick.combinada_id is not None:
+        parent = await session.get(ParsedPick, pick.combinada_id)
+        if parent is not None:
+            await settle_combinada(session, parent)
+
     await session.commit()
     await session.refresh(pick)
     return pick
@@ -190,6 +229,16 @@ async def jugar_pick(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Pick no encontrado",
         )
+    if parsed.combinada_id is not None:
+        # "Yo también la jugué" opera sobre la combinada entera, nunca
+        # sobre una pata suelta: si llega el id de una pata se usa su padre.
+        parent = await session.get(ParsedPick, parsed.combinada_id)
+        if parent is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Combinada no encontrada",
+            )
+        parsed = parent
     if parsed.informante_id is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

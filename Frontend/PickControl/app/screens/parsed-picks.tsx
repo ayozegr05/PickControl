@@ -203,6 +203,68 @@ export default function ParsedPicksScreen() {
     }
   };
 
+  // Corrección de una PATA de combinada: el PATCH re-liquida el padre
+  // en el backend, pero la pata no es fila de primer nivel en la UI —
+  // hay que recargar para verla y ver el nuevo estado de la combinada.
+  const handleCorregirPata = async (
+    pata: ParsedPick,
+    update: { acierto?: boolean | null; anulada?: boolean }
+  ) => {
+    try {
+      await updateParsedPickAcierto(pata.id, update);
+      await reload();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const estadoPata = (pata: ParsedPick): string => {
+    if (pata.anulada) return "Anulada";
+    if (pata.acierto === true) return "Acertó";
+    if (pata.acierto === false) return "Falló";
+    return "Pendiente";
+  };
+
+  const renderPataRow = (pata: ParsedPick) => (
+    <View key={pata.id} style={styles.pataRow}>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.pataText}>
+          {pata.orden != null ? `${pata.orden + 1}. ` : ""}
+          {pata.seleccion || "(pata)"}
+        </Text>
+        {pata.evento ? (
+          <Text style={styles.pataMeta}>{pata.evento}</Text>
+        ) : null}
+        <Text style={styles.pataMeta}>
+          {estadoPata(pata)}
+          {pata.verificado_por ? ` (${pata.verificado_por})` : ""}
+        </Text>
+      </View>
+      <View style={styles.pataButtons}>
+        <TouchableOpacity onPress={() => handleCorregirPata(pata, { acierto: true })}>
+          <Text style={styles.pataButton}>✅</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => handleCorregirPata(pata, { acierto: false })}
+        >
+          <Text style={styles.pataButton}>❌</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => handleCorregirPata(pata, { anulada: true })}
+        >
+          <Text style={styles.pataButton}>↩️</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() =>
+            handleCorregirPata(pata, { acierto: null, anulada: false })
+          }
+        >
+          <Text style={styles.pataButton}>❓</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
   const channelGroups = useMemo<ChannelGroup[]>(() => {
     const map = new Map<string, ChannelGroup>();
     // Primero todos los canales reales: un canal sin picks en el filtro
@@ -334,6 +396,19 @@ export default function ParsedPicksScreen() {
           </View>
         </View>
       )}
+
+      {pick.es_combinada && (pick.patas?.length ?? 0) > 0 && (
+        <View style={styles.acertoSection}>
+          <Text style={styles.cardMeta}>
+            Patas ({pick.patas!.length})
+            {pick.cuota_efectiva != null &&
+            pick.cuota_efectiva !== pick.cuota
+              ? ` · cuota efectiva ${pick.cuota_efectiva}`
+              : ""}
+          </Text>
+          {(pick.patas ?? []).map(renderPataRow)}
+        </View>
+      )}
     </View>
   );
 
@@ -452,8 +527,16 @@ export default function ParsedPicksScreen() {
                 ) : (
                   <>
                     {group.picks
-                      .filter((p) => !p.es_reto)
+                      .filter((p) => !p.es_reto && !p.es_combinada)
                       .map(renderPickCard)}
+                    {group.picks.some((p) => p.es_combinada) && (
+                      <>
+                        <Text style={styles.retosTitle}>Combinadas</Text>
+                        {group.picks
+                          .filter((p) => p.es_combinada)
+                          .map(renderPickCard)}
+                      </>
+                    )}
                     {group.picks.some((p) => p.es_reto) && (
                       <>
                         <Text style={styles.retosTitle}>Retos</Text>
@@ -473,7 +556,15 @@ export default function ParsedPicksScreen() {
               {channelPicks.length} pick{channelPicks.length !== 1 ? "s" : ""}{" "}
               de {selectedChannel.name}
             </Text>
-            {channelPicks.filter((p) => !p.es_reto).map(renderPickCard)}
+            {channelPicks
+              .filter((p) => !p.es_reto && !p.es_combinada)
+              .map(renderPickCard)}
+            {channelPicks.some((p) => p.es_combinada) && (
+              <>
+                <Text style={styles.retosTitle}>Combinadas</Text>
+                {channelPicks.filter((p) => p.es_combinada).map(renderPickCard)}
+              </>
+            )}
             {channelPicks.some((p) => p.es_reto) && (
               <>
                 <Text style={styles.retosTitle}>Retos</Text>
@@ -697,6 +788,30 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 6,
     marginRight: 8,
+  },
+  pataRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 6,
+    borderTopWidth: 1,
+    borderTopColor: "#2a2a2a",
+  },
+  pataText: {
+    color: "#e5e5e5",
+    fontSize: 13,
+  },
+  pataMeta: {
+    color: "#888",
+    fontSize: 11,
+    marginTop: 2,
+  },
+  pataButtons: {
+    flexDirection: "row",
+    marginLeft: 8,
+  },
+  pataButton: {
+    fontSize: 16,
+    marginLeft: 6,
   },
   acertoButtonTrue: {
     backgroundColor: "#1e3a24",

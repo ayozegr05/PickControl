@@ -25,6 +25,18 @@ export type ParsedPick = {
   raw_message_id: number;
   created_at: string;
   es_reto: boolean;
+  /** True solo en el padre de una combinada (va en su propia sección). */
+  es_combinada: boolean;
+  /** En patas: id de la combinada padre. Las patas no llegan como filas
+   * sueltas del listado, solo anidadas en `patas`. */
+  combinada_id: number | null;
+  /** Posición de la pata en el boleto (solo en patas). */
+  orden: number | null;
+  /** Cuota real de cobro tras excluir patas anuladas (null si no se pudo
+   * recalcular — no se inventa la ganancia). */
+  cuota_efectiva: number | null;
+  /** Patas de la combinada (solo en el padre). */
+  patas: ParsedPick[];
 };
 
 export type ParsedPicksQuery = {

@@ -10,6 +10,7 @@
 import { apiRequest } from "./client";
 import {
   Acierto,
+  CombinadaPata,
   PickCreatePayload,
   PickItem,
   PickSource,
@@ -30,6 +31,9 @@ export type RawPick = {
   ganancia?: number | null;
   evento?: string | null;
   es_reto?: boolean;
+  es_combinada?: boolean;
+  cuota_efectiva?: number | null;
+  patas?: CombinadaPata[] | null;
   parsed_pick_id?: number | null;
 };
 
@@ -48,6 +52,9 @@ export function toPickItem(raw: RawPick): PickItem {
     ganancia: raw.ganancia ?? undefined,
     evento: raw.evento ?? null,
     esReto: raw.es_reto ?? false,
+    esCombinada: raw.es_combinada ?? false,
+    cuotaEfectiva: raw.cuota_efectiva ?? null,
+    patas: raw.patas ?? undefined,
     parsedPickId: raw.parsed_pick_id ?? null,
   };
 }

@@ -5,6 +5,20 @@
 export type Acierto = "Pending" | "True" | "False";
 export type PickSource = "manual" | "telegram";
 
+/** Una pata de una combinada (cada una se verifica por separado). */
+export interface CombinadaPata {
+  id: number;
+  orden?: number | null;
+  seleccion?: string | null;
+  evento?: string | null;
+  mercado?: string | null;
+  linea?: number | null;
+  cuota?: number | null;
+  fecha_evento?: string | null;
+  acierto?: boolean | null;
+  anulada: boolean;
+}
+
 export interface PickItem {
   id: number;
   apuesta: string;
@@ -23,6 +37,12 @@ export interface PickItem {
   /** Apuestas creadas desde un pick de Telegram ("Yo también la jugué"):
    * id del parsed_pick de origen. Ausente en apuestas dadas de alta a mano. */
   parsedPickId?: number | null;
+  /** Solo picks de Telegram: combinada del tipster (sección propia).
+   * `patas` lleva cada selección con su resultado; `cuotaEfectiva` es la
+   * cuota real tras excluir anuladas (null si no se pudo recalcular). */
+  esCombinada?: boolean;
+  cuotaEfectiva?: number | null;
+  patas?: CombinadaPata[];
 }
 
 export interface PickCreatePayload {

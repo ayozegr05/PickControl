@@ -35,6 +35,7 @@ from difflib import SequenceMatcher
 from typing import Optional
 
 from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import get_settings
 from app.core.dates import utc_now
@@ -483,6 +484,10 @@ def _extract_team_total_team(seleccion: str) -> Optional[str]:
     if not split or split.start() == 0:
         return None
     team = _clean_team_name(seleccion[: split.start()])
+    # "Total de córners - Menos de 9.5": el trozo antes de "menos" es el
+    # SUJETO del mercado, no un equipo — es un total del partido.
+    if team and re.match(r"^(?:total|n[uú]mero|cantidad)\b", team, re.IGNORECASE):
+        return None
     return team or None
 
 
@@ -531,7 +536,8 @@ _PLAYER_SCORER_PATTERN = re.compile(
 )
 _PLAYER_ASSIST_PATTERN = re.compile(r"\basist", re.IGNORECASE)
 _PLAYER_CARD_PATTERN = re.compile(
-    r"recibe\s+tarjeta|recibir[aá]\s+tarjeta|amonestad|sancionad|"
+    r"recibe\s+(?:una\s+)?tarjeta|recibir[aá]\s+(?:una\s+)?tarjeta|"
+    r"amonestad|sancionad|"
     r"ver[aá]\s+tarjeta|se\s+le\s+muestra\s+tarjeta|\bcarded\b",
     re.IGNORECASE,
 )
@@ -1421,6 +1427,12 @@ async def verify_pick(
     Devuelve `(acierto, anulada)`. Si todavía no se puede resolver
     (partido no encontrado, mercado no soportado...), `(None, False)`.
     """
+    if pick.es_combinada:
+        # El padre de una combinada nunca se verifica contra APIs: sus
+        # patas se resuelven como picks normales y el padre se liquida
+        # en conjunto con `settle_combinada`.
+        return None, False
+
     if not pick.fecha_evento or not pick.seleccion:
         return None, False
 
@@ -1437,10 +1449,9 @@ async def verify_pick(
         m in mercado_low
         for m in ("combinada", "combinado", "acumulador", "múltiple", "multiple")
     ):
-        # Una combinada no se resuelve con un solo marcador: hay que
-        # verificar cada selección por separado. Sin eso, la rama de
-        # "ganador" solo comprobaría la primera y daría un falso
-        # resultado. Manual hasta modelar las selecciones sueltas.
+        # Mercado "combinada" sin patas modeladas (p. ej. picks antiguos
+        # no migrados): no se puede resolver con un solo marcador —
+        # queda para revisión manual o para el backfill.
         return None, False
 
     if sport == "tenis":
@@ -1689,6 +1700,131 @@ async def verify_pick(
     return _similar(predicted_team, winner) >= _MIN_TEAM_SIMILARITY, False
 
 
+async def settle_combinada(session: AsyncSession, parent: ParsedPick) -> bool:
+    """Liquida una combinada a partir del estado de sus patas.
+
+    Reglas de la casa de apuestas:
+    - Una pata fallada -> la combinada entera falla, aunque queden
+      patas pendientes (ya está muerta).
+    - Una pata anulada se EXCLUYE: la combinada sigue con las demás y
+      la cuota se recalcula (no se anula todo).
+    - Todas las patas anuladas -> combinada anulada.
+    - Todas las activas en verde -> acierto.
+
+    `cuota_efectiva` es la cuota real de cobro tras excluir anuladas:
+    sin anuladas es la cuota total declarada; con anuladas solo se
+    recalcula si TODAS las patas tienen cuota (los slips casi nunca la
+    traen por pata) — si no, queda a None y la ganancia no cuenta en
+    stats hasta corrección manual (no se inventa).
+
+    Si las patas ya no permiten resolver (p. ej. corrección manual que
+    reabre una pata), una combinada resuelta automáticamente vuelve a
+    pendiente; un override MANUAL del padre se respeta siempre.
+
+    Devuelve True si el padre quedó actualizado.
+    """
+    if parent.id is None or parent.verificado_por == "manual":
+        return False
+
+    legs = (
+        await session.exec(
+            select(ParsedPick)
+            .where(ParsedPick.combinada_id == parent.id)
+            .order_by(ParsedPick.orden)
+        )
+    ).all()
+    if not legs:
+        return False
+
+    # Estado objetivo: (acierto, anulada, cuota_efectiva). cuota_efectiva
+    # solo es relevante cuando acierto=True.
+    target: tuple[Optional[bool], bool, Optional[float]] | None = None
+
+    if any(leg.acierto is False for leg in legs if not leg.anulada):
+        target = (False, False, parent.cuota_efectiva)
+        detalle = "alguna pata perdida"
+    else:
+        pendientes = [leg for leg in legs if not leg.anulada and leg.acierto is None]
+        activas = [leg for leg in legs if not leg.anulada]
+        if pendientes:
+            # No resoluble: vuelve a pendiente si estaba resuelta por
+            # auto (una corrección manual reabrió una pata).
+            target = (None, False, None)
+            detalle = f"{len(pendientes)} pata(s) pendiente(s)"
+        elif not activas:
+            target = (None, True, None)
+            detalle = "todas las patas anuladas"
+        else:
+            if len(activas) == len(legs):
+                # Sin anuladas: la cuota efectiva es la total declarada.
+                cuota_efectiva = parent.cuota
+            elif all(leg.cuota is not None for leg in legs):
+                # Recalculable: producto de las cuotas de las patas activas.
+                cuota = 1.0
+                for leg in activas:
+                    cuota *= leg.cuota or 1.0
+                cuota_efectiva = round(cuota, 2)
+            else:
+                # No recalculable (faltan cuotas por pata): no se inventa.
+                cuota_efectiva = None
+            target = (True, False, cuota_efectiva)
+            detalle = (
+                f"{len(activas)}/{len(legs)} patas verdes "
+                f"({len(legs) - len(activas)} anulada(s))"
+            )
+
+    acierto, anulada, cuota_efectiva = target
+    # Idempotente: solo se escribe si el estado cambia de verdad.
+    resolved = acierto is not None or anulada
+    if (
+        parent.acierto == acierto
+        and parent.anulada == anulada
+        and parent.cuota_efectiva == cuota_efectiva
+        and (parent.verificado_por == "auto") == resolved
+    ):
+        return False
+
+    parent.acierto = acierto
+    parent.anulada = anulada
+    parent.cuota_efectiva = cuota_efectiva
+    parent.verificado_por = "auto" if resolved else None
+    session.add(parent)
+    logger.info(
+        "[RESULTS_VERIFIER] Combinada id=%s: acierto=%s anulada=%s "
+        "cuota_efectiva=%s (%s).",
+        parent.id,
+        acierto,
+        anulada,
+        cuota_efectiva,
+        detalle,
+    )
+    return True
+
+
+async def _settle_combinadas(session: AsyncSession) -> int:
+    """Pasa de liquidación de combinadas tras verificar las patas.
+
+    Devuelve cuántas combinadas cambiaron de estado en esta pasada. Se
+    procesan también las resueltas por "auto": una corrección manual en
+    una pata puede reabrir la combinada.
+    """
+    parents = (
+        await session.exec(
+            select(ParsedPick)
+            .where(ParsedPick.es_combinada == True)  # noqa: E712
+            .where(
+                (ParsedPick.verificado_por == None)  # noqa: E711
+                | (ParsedPick.verificado_por == "auto")
+            )
+        )
+    ).all()
+    settled = 0
+    for parent in parents:
+        if await settle_combinada(session, parent):
+            settled += 1
+    return settled
+
+
 async def verify_pending_picks() -> int:
     """Revisa todos los picks pendientes de verificar y actualiza los que pueda.
 
@@ -1713,6 +1849,9 @@ async def verify_pending_picks() -> int:
             .where(ParsedPick.es_apuesta == True)  # noqa: E712
             .where(ParsedPick.acierto == None)  # noqa: E711
             .where(ParsedPick.anulada == False)  # noqa: E712
+            # Los padres de combinadas no se consultan a APIs: se
+            # liquidan en `_settle_combinadas` a partir de sus patas.
+            .where(ParsedPick.es_combinada == False)  # noqa: E712
             .where(ParsedPick.fecha_evento != None)  # noqa: E711
             .where(ParsedPick.fecha_evento < now)
         )
@@ -1748,6 +1887,16 @@ async def verify_pending_picks() -> int:
                     acierto,
                     anulada,
                 )
+
+        # Liquidación de combinadas: con las patas ya verificadas en
+        # esta pasada (y las anteriores), cada padre se resuelve en
+        # conjunto — una pata perdida la tumba, las anuladas se excluyen.
+        combinadas_settled = await _settle_combinadas(session)
+        if combinadas_settled:
+            logger.info(
+                "[RESULTS_VERIFIER] Combinadas liquidadas en esta pasada: %s",
+                combinadas_settled,
+            )
 
         await session.commit()
 

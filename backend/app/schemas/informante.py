@@ -35,6 +35,16 @@ class InformanteStats(SQLModel):
     parsed_yield_pct: float = 0.0
     parsed_total_pendientes: int = 0
 
+    # Combinadas del canal (sección propia, fuera de las stats de
+    # simples). Los padres también llegan en `parsed_picks` con
+    # `es_combinada=True` y sus `patas` anidadas.
+    combinadas_total: int = 0
+    combinadas_aciertos: int = 0
+    combinadas_ganancias: float = 0.0
+    combinadas_porcentaje: float = 0.0
+    combinadas_yield_pct: float = 0.0
+    combinadas_pendientes: int = 0
+
 
 class InformanteSummary(SQLModel):
     """Resumen agregado de un informante para listados y rankings.

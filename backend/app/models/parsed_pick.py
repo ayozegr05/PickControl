@@ -41,6 +41,23 @@ class ParsedPickBase(SQLModel):
     # estadísticas del canal.
     es_reto: bool = Field(default=False)
 
+    # Combinada (self-FK, ver ADR en la migración f1a2b3c4d5e6):
+    # - En el PADRE `es_combinada=True` y la fila lleva la cuota total
+    #   declarada, el stake y el texto unido de las patas en `seleccion`
+    #   (así el dedup por similitud de texto sigue funcionando).
+    # - En cada PATA `combinada_id` apunta al padre y `orden` conserva
+    #   la posición en el boleto. La pata es un pick normal: el
+    #   verificador la resuelve de forma independiente.
+    # - `cuota_efectiva` es la cuota real de cobro tras excluir patas
+    #   anuladas; solo se calcula si todas las patas tienen cuota (si
+    #   no, NULL: no se inventa la ganancia).
+    es_combinada: bool = Field(default=False)
+    combinada_id: Optional[int] = Field(
+        default=None, foreign_key="parsed_picks.id", index=True
+    )
+    orden: Optional[int] = None
+    cuota_efectiva: Optional[float] = None
+
     # Verificación del resultado: None = pendiente, True = acertó, False = falló.
     acierto: Optional[bool] = None
     # Apuesta anulada/devuelta (p. ej. "push" en hándicap/over-under con

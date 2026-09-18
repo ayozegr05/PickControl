@@ -23,6 +23,13 @@ type RawInformanteStats = {
   parsed_ganancias: number;
   parsed_porcentaje_aciertos: number;
   parsed_yield_pct: number;
+
+  combinadas_total: number;
+  combinadas_aciertos: number;
+  combinadas_ganancias: number;
+  combinadas_porcentaje: number;
+  combinadas_yield_pct: number;
+  combinadas_pendientes: number;
 };
 
 export async function getInformanteStats(
@@ -45,6 +52,12 @@ export async function getInformanteStats(
     parsedGanancias: raw.parsed_ganancias,
     parsedPorcentajeAciertos: raw.parsed_porcentaje_aciertos,
     parsedYieldPct: raw.parsed_yield_pct,
+    combinadasTotal: raw.combinadas_total,
+    combinadasAciertos: raw.combinadas_aciertos,
+    combinadasGanancias: raw.combinadas_ganancias,
+    combinadasPorcentaje: raw.combinadas_porcentaje,
+    combinadasYieldPct: raw.combinadas_yield_pct,
+    combinadasPendientes: raw.combinadas_pendientes,
   };
 }
 
