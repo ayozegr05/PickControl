@@ -52,6 +52,12 @@ diario pg_dump a `backend/backups/` con retención 14 días, ignorado por git).
 - **Boletos liquidados** (sello GANADOR / línea de premio pagado) se rechazan:
   son marketing del tipster, no picks abiertos.
 - **Retos** (`parsed_picks.es_reto`): tabla y stats aparte.
+- **Combinadas** (self-FK `parsed_picks.combinada_id`, ADR en la migración
+  `f1a2b3c4d5e6`): padre `es_combinada=True` + patas como filas normales.
+  Las patas se verifican solas pero NUNCA cuentan en stats/listados de
+  simples ni en dedup; el padre se liquida en conjunto
+  (`verifier.settle_combinada`) y no se consulta a APIs. `cuota_efectiva`
+  NULL si faltan cuotas por pata (no se inventa la ganancia).
 - Los raws (`telegram_raw_messages`) NUNCA se borran: son la auditoría.
 - Catch-up: máx. 300 mensajes Y tope 7 días, orden nuevo→viejo.
 

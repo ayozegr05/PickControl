@@ -18,6 +18,8 @@ export type AnalisisCanal = {
   jugadas: number;
   cuota_media_tipster: number | null;
   cuota_media_mia: number | null;
+  /** Combinadas del canal (solo padres), fuera de las stats de simples. */
+  combinadas?: StatsBloque | null;
 };
 
 export type AnalisisDeporte = {
@@ -31,6 +33,8 @@ export type AnalisisGlobal = {
   deportes: AnalisisDeporte[];
   totales_tipster: StatsBloque;
   totales_yo: StatsBloque;
+  /** Combinadas agregadas de todos los canales (solo padres). */
+  totales_combinadas?: StatsBloque | null;
 };
 
 export async function getAnalisisGlobal(): Promise<AnalisisGlobal> {

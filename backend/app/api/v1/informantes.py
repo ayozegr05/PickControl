@@ -4,6 +4,8 @@ Migrado de `backend/DbMongo/routes.js`:
 - GET /informante/:informante (líneas 185-235)
 """
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -13,9 +15,10 @@ from app.models.informante import Informante
 from app.models.parsed_pick import ParsedPick
 from app.models.pick import Acierto, Pick, PickSource
 from app.schemas.informante import InformanteStats, InformanteSummary
-from app.schemas.pick import PickRead
+from app.schemas.pick import CombinadaPata, PickRead
 from app.services.pick_service import (
     calcular_stats,
+    calcular_stats_combinadas,
     calcular_stats_combinado,
     calcular_stats_parsed,
 )
@@ -53,8 +56,26 @@ def _pick_to_read(
     )
 
 
+def _pata_to_read(leg: ParsedPick) -> CombinadaPata:
+    return CombinadaPata(
+        id=leg.id,
+        orden=leg.orden,
+        seleccion=leg.seleccion,
+        evento=leg.evento,
+        mercado=leg.mercado,
+        linea=leg.linea,
+        cuota=leg.cuota,
+        fecha_evento=leg.fecha_evento,
+        acierto=leg.acierto,
+        anulada=leg.anulada,
+    )
+
+
 def _parsed_to_read(
-    parsed: ParsedPick, informante: Informante, ganancias: dict[int, float]
+    parsed: ParsedPick,
+    informante: Informante,
+    ganancias: dict[int, float],
+    patas: Optional[list[ParsedPick]] = None,
 ) -> PickRead:
     return PickRead(
         id=parsed.id,
@@ -70,6 +91,9 @@ def _parsed_to_read(
         ganancia=ganancias.get(parsed.id),
         evento=parsed.evento,
         es_reto=parsed.es_reto,
+        es_combinada=parsed.es_combinada,
+        cuota_efectiva=parsed.cuota_efectiva,
+        patas=[_pata_to_read(p) for p in patas] if patas else None,
     )
 
 
@@ -110,15 +134,28 @@ async def obtener_stats_informante(
 
     manual_stats = calcular_stats(picks)
     parsed_stats = calcular_stats_parsed(parsed_picks)
+    combinadas_stats = calcular_stats_combinadas(parsed_picks)
+
+    patas_por_padre: dict[int, list[ParsedPick]] = {}
+    for parsed in parsed_picks:
+        if parsed.combinada_id is not None:
+            patas_por_padre.setdefault(parsed.combinada_id, []).append(parsed)
+    for patas in patas_por_padre.values():
+        patas.sort(key=lambda p: p.orden or 0)
 
     apuestas_read = [
         _pick_to_read(pick, informante, manual_stats.ganancias_por_pick)
         for pick in picks
     ]
     parsed_picks_read = [
-        _parsed_to_read(parsed, informante, parsed_stats.ganancias_por_pick)
+        _parsed_to_read(
+            parsed,
+            informante,
+            parsed_stats.ganancias_por_pick,
+            patas=patas_por_padre.get(parsed.id),
+        )
         for parsed in parsed_picks
-        if parsed.es_apuesta
+        if parsed.es_apuesta and parsed.combinada_id is None
     ]
 
     return InformanteStats(
@@ -137,6 +174,12 @@ async def obtener_stats_informante(
         parsed_porcentaje_aciertos=parsed_stats.porcentaje_aciertos,
         parsed_yield_pct=parsed_stats.yield_pct,
         parsed_total_pendientes=parsed_stats.total_pendientes,
+        combinadas_total=combinadas_stats.total_apuestas,
+        combinadas_aciertos=combinadas_stats.total_aciertos,
+        combinadas_ganancias=combinadas_stats.ganancias,
+        combinadas_porcentaje=combinadas_stats.porcentaje_aciertos,
+        combinadas_yield_pct=combinadas_stats.yield_pct,
+        combinadas_pendientes=combinadas_stats.total_pendientes,
     )
 
 

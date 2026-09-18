@@ -5,6 +5,7 @@ from typing import Optional
 
 from sqlmodel import Field, SQLModel
 
+from app.models.parsed_pick import ParsedPickBase
 from app.models.pick import Acierto, PickSource
 
 
@@ -32,6 +33,24 @@ class PickUpdate(SQLModel):
     fecha: Optional[datetime] = None
 
 
+class CombinadaPata(SQLModel):
+    """Una pata (selección) de una combinada, con su propio resultado.
+
+    Cada pata se verifica por separado; el padre se liquida en conjunto.
+    """
+
+    id: int
+    orden: Optional[int] = None
+    seleccion: Optional[str] = None
+    evento: Optional[str] = None
+    mercado: Optional[str] = None
+    linea: Optional[float] = None
+    cuota: Optional[float] = None
+    fecha_evento: Optional[datetime] = None
+    acierto: Optional[bool] = None
+    anulada: bool = False
+
+
 class PickRead(SQLModel):
     """Representación pública de una apuesta, incluyendo el nombre del informante
     (en vez del `informante_id` interno) y la ganancia calculada."""
@@ -54,3 +73,24 @@ class PickRead(SQLModel):
     # Solo para picks de Telegram: apuesta de "reto" del tipster (va en su
     # propia sección, fuera de las apuestas diarias y de las stats).
     es_reto: bool = False
+    # Solo para picks de Telegram: combinada del tipster (sección propia,
+    # fuera de las stats de simples). `patas` lleva cada selección con su
+    # resultado; `cuota_efectiva` es la cuota real tras excluir anuladas
+    # (None si no se pudo recalcular — no se inventa la ganancia).
+    es_combinada: bool = False
+    cuota_efectiva: Optional[float] = None
+    patas: Optional[list[CombinadaPata]] = None
+
+
+class ParsedPickRead(ParsedPickBase):
+    """`ParsedPick` para listados: igual que la fila de BD pero con las
+    patas anidadas cuando `es_combinada=True`.
+
+    Las patas nunca salen como filas sueltas del listado: solo anidadas
+    bajo su padre (`combinada_id IS NULL` en el nivel superior)."""
+
+    id: int
+    raw_message_id: int
+    informante_id: Optional[int] = None
+    created_at: datetime
+    patas: list["ParsedPickRead"] = []

@@ -134,6 +134,11 @@ def to_stats_input_from_parsed(parsed: ParsedPick) -> StatsInput:
 
     Si no hay cuota o stake, se asume 1 unidad de stake y cuota 1.0,
     de modo que la apuesta no aporta ganancia hasta tener esos datos.
+
+    En combinadas se usa `cuota_efectiva` (la cuota real tras excluir
+    patas anuladas); si quedó a None porque no se pudo recalcular, la
+    cuota efectiva es 1.0 -> ganancia 0 hasta corrección manual (no se
+    inventa el beneficio).
     """
     if parsed.anulada:
         acierto = Acierto.PENDING
@@ -143,10 +148,14 @@ def to_stats_input_from_parsed(parsed: ParsedPick) -> StatsInput:
         acierto = Acierto.FALSE
     else:
         acierto = Acierto.PENDING
+    if parsed.es_combinada:
+        cuota = parsed.cuota_efectiva or 1.0
+    else:
+        cuota = parsed.cuota or 1.0
     return StatsInput(
         id=parsed.id,
         cantidad_apostada=parsed.stake or 1.0,
-        cuota=parsed.cuota or 1.0,
+        cuota=cuota,
         acierto=acierto,
     )
 
@@ -156,17 +165,45 @@ def calcular_stats(picks: list[Pick]) -> InformanteStatsResult:
     return _stats_inputs_to_result([to_stats_input(p) for p in picks])
 
 
+def _es_pick_simple(parsed: ParsedPick) -> bool:
+    """True si el parsed_pick cuenta en las stats de picks simples.
+
+    Quedan fuera los retos (sección propia), las combinadas (padre) y
+    las patas (se liquidan dentro de su combinada, nunca sueltas).
+    """
+    return (
+        parsed.es_apuesta
+        and not parsed.es_reto
+        and not parsed.es_combinada
+        and parsed.combinada_id is None
+    )
+
+
 def calcular_stats_parsed(parsed_picks: list[ParsedPick]) -> InformanteStatsResult:
     """Calcula métricas agregadas de picks extraídos de Telegram.
 
-    Los retos (`es_reto`) se excluyen: van en su propia sección y su
-    stake/cuota atípicos distorsionarían el yield del canal.
+    Los retos (`es_reto`) y las combinadas (`es_combinada` + patas) se
+    excluyen: van en sus propias secciones y su stake/cuota atípicos
+    distorsionarían el yield del canal.
+    """
+    return _stats_inputs_to_result(
+        [to_stats_input_from_parsed(p) for p in parsed_picks if _es_pick_simple(p)]
+    )
+
+
+def calcular_stats_combinadas(
+    parsed_picks: list[ParsedPick],
+) -> InformanteStatsResult:
+    """Métricas de las combinadas del canal (solo los padres).
+
+    Sección propia, igual que los retos: las patas nunca cuentan
+    sueltas — su resultado ya está agregado en el padre.
     """
     return _stats_inputs_to_result(
         [
             to_stats_input_from_parsed(p)
             for p in parsed_picks
-            if p.es_apuesta and not p.es_reto
+            if p.es_apuesta and p.es_combinada
         ]
     )
 
@@ -177,11 +214,7 @@ def calcular_stats_combinado(
     """Calcula métricas combinando apuestas manuales y picks de Telegram."""
     return _stats_inputs_to_result(
         [to_stats_input(p) for p in picks]
-        + [
-            to_stats_input_from_parsed(p)
-            for p in parsed_picks
-            if p.es_apuesta and not p.es_reto
-        ]
+        + [to_stats_input_from_parsed(p) for p in parsed_picks if _es_pick_simple(p)]
     )
 
 
