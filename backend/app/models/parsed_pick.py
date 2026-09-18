@@ -58,6 +58,13 @@ class ParsedPickBase(SQLModel):
     orden: Optional[int] = None
     cuota_efectiva: Optional[float] = None
 
+    # Enlace al evento en el proveedor de odds para auditar la cuota
+    # publicada contra la de mercado ("<familia>:<id>", p. ej.
+    # "sofascore:17058707"). Se resuelve una vez por el snapshotter y
+    # se reutiliza en todos los snapshots del evento. NULL si el evento
+    # no se localizó o el deporte no tiene proveedor de odds.
+    odds_event_id: Optional[str] = Field(default=None, max_length=60)
+
     # Verificación del resultado: None = pendiente, True = acertó, False = falló.
     acierto: Optional[bool] = None
     # Apuesta anulada/devuelta (p. ej. "push" en hándicap/over-under con

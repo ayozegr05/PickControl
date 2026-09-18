@@ -77,6 +77,14 @@ class Settings(BaseSettings):
     # por cuenta RapidAPI, no por producto; cada suscripción lleva su
     # propia cuota (~50 req/día cada una).
     rapidapi_tennisapi1_host: str = "tennisapi1.p.rapidapi.com"
+    # Proveedor de cuotas de mercado (auditoría "cuota tipster vs
+    # real"): "AllSportsApi" en RapidAPI, mismo backend Sofascore que
+    # tennisapi1 y misma key de cuenta — pero cuota diaria propia, así
+    # los snapshots no compiten con la verificación de resultados.
+    rapidapi_allsports_host: str = "allsportsapi2.p.rapidapi.com"
+    # Cada cuántos minutos corre el snapshotter de odds en segundo
+    # plano. Cadencia corta para capturar bien el cierre de cuotas.
+    odds_snapshot_interval_minutes: float = 30.0
     # Cada cuántas horas se revisan picks pendientes de verificar en segundo plano.
     results_verification_interval_hours: float = 3.0
 
