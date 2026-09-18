@@ -33,6 +33,7 @@ from app.services.results.verifier import (
     _resolve_over_under,
     _resolve_winner,
     _should_attempt_verification,
+    _tennis_lookup_hint,
     verify_pick,
 )
 
@@ -2217,3 +2218,41 @@ class TestFootballDataPostponed:
             datetime(2026, 9, 16), "Levante - Athletic"
         )
         assert state is None
+
+
+class TestTennisLookupHint:
+    """Un `evento` que solo trae el torneo ("Tenis - Chall. Szczecin")
+    es contexto para la UI pero un hint inútil para los proveedores
+    (casan por nombre de jugador): se prefiere el jugador."""
+
+    def _pick(self, evento):
+        return ParsedPick(
+            raw_message_id=1,
+            deporte="tenis",
+            mercado="ganador",
+            seleccion="Cecchinato gana",
+            evento=evento,
+            fecha_evento=datetime(2026, 9, 17, 9, 0),
+        )
+
+    def test_torneo_usa_el_jugador(self):
+        pick = self._pick("Tenis - Chall. Szczecin")
+        assert _tennis_lookup_hint(pick, "Cecchinato") == "Cecchinato"
+
+    def test_evento_vs_se_usa_entero(self):
+        pick = self._pick("Marco Cecchinato vs Marvin Moeller")
+        assert _tennis_lookup_hint(pick, "Cecchinato") == (
+            "Marco Cecchinato vs Marvin Moeller"
+        )
+
+    def test_evento_dos_nombres_con_guion_se_usa(self):
+        pick = self._pick("Chidekh - Mayot")
+        assert _tennis_lookup_hint(pick, "Chidek") == "Chidekh - Mayot"
+
+    def test_sin_evento_usa_fallback(self):
+        pick = self._pick(None)
+        assert _tennis_lookup_hint(pick, "Cecchinato") == "Cecchinato"
+
+    def test_torneo_sin_fallback_devuelve_evento(self):
+        pick = self._pick("ATP Cincinnati")
+        assert _tennis_lookup_hint(pick, None) == "ATP Cincinnati"

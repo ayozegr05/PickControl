@@ -528,6 +528,80 @@ def _looks_like_bet(text: str) -> bool:
     return bool(_TEAM_VS_TEAM_PATTERN.search(text))
 
 
+# --- Higiene de campos extraídos --------------------------------------
+#
+# El texto de Telegram llega con markdown y emojis que acababan dentro
+# de `seleccion` ("**Chidek gana ****🇫🇷**"): ensucian el matching
+# con proveedores, el dedup por texto y la UI.
+_MARKDOWN_NOISE = re.compile(r"[*_~`]+")
+_EMOJI_NOISE = re.compile(
+    "["
+    "\U0001f000-\U0001faff"  # pictogramas, emoticonos, banderas
+    "\U00002600-\U000027bf"  # símbolos varios + dingbats (❗➡✅)
+    "\U00002b00-\U00002bff"  # flechas/suplementarios (⬆)
+    "\ufe0f\u200d"  # variation selector + ZWJ
+    "]+"
+)
+_LEADING_BULLETS = re.compile(r"^[•·►▶➤→\s]+")
+
+
+def _clean_text_field(value: Optional[str]) -> Optional[str]:
+    """Quita markdown/emojis/bullets de un campo de texto extraído."""
+    if not value:
+        return value
+    cleaned = _MARKDOWN_NOISE.sub("", value)
+    cleaned = _EMOJI_NOISE.sub("", cleaned)
+    cleaned = _LEADING_BULLETS.sub("", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned.rstrip(" -•·").strip() or None
+
+
+# Señales léxicas para inferir `deporte` cuando el path de reglas no lo
+# rellena: sin él, el verificador consulta primero las APIs de fútbol y
+# un pick de tenis quema llamadas a proveedores equivocados.
+_TENIS_SIGNAL = re.compile(
+    r"tenis|\bchall(?:enger)?\.?\b|\batp\b|\bwta\b|\bitf\b|"
+    r"grand\s*slam|tie[\s-]?break",
+    re.IGNORECASE,
+)
+_FUTBOL_SIGNAL = re.compile(
+    r"f[úu]tbol|la\s*liga|premier|champions|bundesliga|serie\s*a\b|"
+    r"ligue\s*1\b|eredivisie|segunda\s*divisi[oó]n|copa\s+del\s+rey",
+    re.IGNORECASE,
+)
+_BALONCESTO_SIGNAL = re.compile(
+    r"baloncesto|basket|\bnba\b|euroleague|euroliga|\bncaa\b|liga\s+endesa",
+    re.IGNORECASE,
+)
+
+
+def _detect_deporte(text: Optional[str]) -> Optional[str]:
+    """Deporte inferido de las señales del mensaje completo."""
+    if not text:
+        return None
+    if _TENIS_SIGNAL.search(text):
+        return "tenis"
+    if _FUTBOL_SIGNAL.search(text):
+        return "fútbol"
+    if _BALONCESTO_SIGNAL.search(text):
+        return "baloncesto"
+    return None
+
+
+def _normalize_pick(pick: ExtractedPick, text: str) -> ExtractedPick:
+    """Limpieza final común a reglas y LLM: quita markdown/emojis de los
+    campos de texto e infiere `deporte` de las señales del mensaje si el
+    extractor no lo rellenó (las pistas deportivas suelen estar en la
+    cabecera — "CHALL RENNES 🎾" — no en la selección)."""
+    pick.seleccion = _clean_text_field(pick.seleccion)
+    pick.evento = _clean_text_field(pick.evento)
+    if pick.es_apuesta and not pick.deporte:
+        pick.deporte = _detect_deporte(text)
+    for pata in pick.patas:
+        _normalize_pick(pata, text)
+    return pick
+
+
 def _rule_extract(
     text: str,
     informante: Optional[str] = None,
@@ -763,7 +837,9 @@ async def extract_pick(
             rule_comb.fecha_evento = _sanitize_event_date(
                 rule_comb.fecha_evento, fecha_referencia
             )
-            return _ensure_combinada_shape(rule_comb, fecha_referencia)
+            return _normalize_pick(
+                _ensure_combinada_shape(rule_comb, fecha_referencia), text
+            )
         llm_comb = await _llm_extract(
             text, api_key, informante=informante, fecha_referencia=fecha_referencia
         )
@@ -772,7 +848,9 @@ async def extract_pick(
         llm_comb.fecha_evento = _sanitize_event_date(
             llm_comb.fecha_evento, fecha_referencia
         )
-        return _ensure_combinada_shape(llm_comb, fecha_referencia)
+        return _normalize_pick(
+            _ensure_combinada_shape(llm_comb, fecha_referencia), text
+        )
 
     rule_result = _rule_extract(
         text, informante=informante, fecha_referencia=fecha_referencia
@@ -781,7 +859,7 @@ async def extract_pick(
         rule_result.fecha_evento = _sanitize_event_date(
             rule_result.fecha_evento, fecha_referencia
         )
-        return rule_result
+        return _normalize_pick(rule_result, text)
 
     llm_result = await _llm_extract(
         text, api_key, informante=informante, fecha_referencia=fecha_referencia
@@ -793,4 +871,5 @@ async def extract_pick(
         # El LLM puede devolver patas aunque el mensaje no tuviera la
         # señal léxica de combinada (p. ej. un slip solo con viñetas).
         llm_result = _ensure_combinada_shape(llm_result, fecha_referencia)
+        return _normalize_pick(llm_result, text)
     return llm_result

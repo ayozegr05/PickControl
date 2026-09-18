@@ -941,6 +941,35 @@ def _handicap_result(player_score: int, opp_score: int, linea: float):
     return ("win" in outcomes), False
 
 
+# Palabras de torneo en `evento`: "Tenis - Chall. Szczecin" es buen
+# contexto para la UI pero un hint inútil para los proveedores — casan
+# por nombre de jugador y "Tenis"/"Challenger" no son jugadores (la
+# búsqueda miss era garantizada y además quemaba cuota de RapidAPI).
+_TENNIS_TOURNAMENT_HINT = re.compile(
+    r"\btenis\b|\bchall(?:enger)?\.?\b|\batp\b|\bwta\b|\bitf\b|"
+    r"grand\s*slam|\btorneo\b|\bmasters\b",
+    re.IGNORECASE,
+)
+
+
+def _tennis_lookup_hint(pick: ParsedPick, fallback: Optional[str]) -> Optional[str]:
+    """Hint de búsqueda para proveedores de tenis.
+
+    `evento` solo se usa si trae un enfrentamiento ("A vs B" o "A - B"
+    sin palabra de torneo). Si solo trae el torneo, se prefiere el
+    jugador extraído de `seleccion` (`fallback`)."""
+    evento = (pick.evento or "").strip()
+    if not evento:
+        return fallback
+    if re.search(r"\bvs\.?\b", evento, re.IGNORECASE):
+        return evento
+    if _TENNIS_TOURNAMENT_HINT.search(evento):
+        return fallback or evento
+    if " - " in evento:
+        return evento
+    return fallback or evento
+
+
 async def _verify_tennis_pick(
     pick: ParsedPick, providers: list[ResultsProvider]
 ) -> Optional[tuple[Optional[bool], bool]]:
@@ -962,7 +991,7 @@ async def _verify_tennis_pick(
     games_pred = _extract_tennis_games_prediction(seleccion, pick.mercado)
     if games_pred:
         team, pred_pairs, player_oriented = games_pred
-        team_hint = pick.evento or team
+        team_hint = _tennis_lookup_hint(pick, team)
         match = await _find_match_across_providers(
             pick.fecha_evento, team_hint, providers, pick.id
         )
@@ -996,7 +1025,7 @@ async def _verify_tennis_pick(
     sets_pred = _extract_tennis_sets_prediction(seleccion, pick.mercado)
     if sets_pred:
         team, s1, s2, player_oriented = sets_pred
-        team_hint = pick.evento or team
+        team_hint = _tennis_lookup_hint(pick, team)
         match = await _find_match_across_providers(
             pick.fecha_evento, team_hint, providers, pick.id
         )
@@ -1035,7 +1064,7 @@ async def _verify_tennis_pick(
     )
     if set_idx is not None and pick.linea is None and set_winner_market:
         player = _extract_tennis_player_name(seleccion)
-        team_hint = pick.evento or player
+        team_hint = _tennis_lookup_hint(pick, player)
         if not team_hint:
             return None, False
         match = await _find_match_across_providers(
@@ -1056,7 +1085,7 @@ async def _verify_tennis_pick(
     # "Habrá tiebreak" / "tiebreak en el partido: sí" — deducible de un
     # set 7-6 en el desglose.
     if _TIEBREAK_PATTERN.search(text):
-        team_hint = pick.evento or _extract_tennis_player_name(seleccion)
+        team_hint = _tennis_lookup_hint(pick, _extract_tennis_player_name(seleccion))
         if not team_hint:
             return None, False
         match = await _find_match_across_providers(
@@ -1078,7 +1107,7 @@ async def _verify_tennis_pick(
         player = _extract_tennis_player_name(
             re.sub(r"\bgana\w*.*$", "", seleccion, flags=re.I)
         )
-        team_hint = pick.evento or player
+        team_hint = _tennis_lookup_hint(pick, player)
         if not team_hint:
             return None, False
         match = await _find_match_across_providers(
@@ -1120,7 +1149,7 @@ async def _verify_tennis_pick(
             # "20 o más juegos" parte en "más" dejando "20 o" — no es un
             # jugador, es la línea.
             player = None
-        team_hint = player or pick.evento
+        team_hint = _tennis_lookup_hint(pick, player)
         if not team_hint:
             return None, False
         match = await _find_match_across_providers(
@@ -1181,7 +1210,7 @@ async def _verify_tennis_pick(
     if not player or subject is None:
         return None, False
     match = await _find_match_across_providers(
-        pick.fecha_evento, pick.evento or player, providers, pick.id
+        pick.fecha_evento, _tennis_lookup_hint(pick, player), providers, pick.id
     )
     if not match:
         return None, False
