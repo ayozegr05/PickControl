@@ -44,11 +44,13 @@ import httpx
 from app.core.logging import get_logger
 from app.services.results.api_tennis import _pair_similar
 from app.services.results.base import (
+    MISSED_TTL_PROVISIONAL,
     MatchResult,
     is_missed,
     is_rate_limited,
     mark_missed,
     mark_rate_limited,
+    miss_is_provisional,
     rate_limit_from,
 )
 
@@ -121,6 +123,20 @@ def _parse_event(event: dict) -> Optional[MatchResult]:
     )
 
 
+def _event_matches_hint(event: dict, team_hint: str) -> bool:
+    """True si el evento (aún sin resultado) involucra al jugador de la
+    pista. Sirve para distinguir "el partido está en vivo" de "el
+    partido no existe en el feed": solo lo segundo merece `missed`."""
+    home = (event.get("homeTeam") or {}).get("name") or ""
+    away = (event.get("awayTeam") or {}).get("name") or ""
+    if not home or not away:
+        return False
+    return (
+        max(_pair_similar(team_hint, home), _pair_similar(team_hint, away))
+        >= _MIN_PLAYER_SIMILARITY
+    )
+
+
 class TennisApi1Provider:
     """Consulta tennisapi1 (Sofascore) por categoría y fecha."""
 
@@ -130,12 +146,15 @@ class TennisApi1Provider:
         self._api_key = api_key
         self._api_host = api_host
         # Eventos por (categoría, fecha): varios picks del mismo día
-        # reutilizan las categorías ya descargadas.
-        self._events_cache: dict[tuple[int, str], list] = {}
+        # reutilizan las categorías ya descargadas. None = fallo de API.
+        self._events_cache: dict[tuple[int, str], Optional[list]] = {}
 
     async def _fetch_events(
         self, client: httpx.AsyncClient, category_id: int, day: datetime
-    ) -> list:
+    ) -> Optional[list]:
+        """Eventos de la categoría/día, [] si vacío y None si la llamada
+        falló (error transitorio: el caller NO debe marcar `missed`,
+        porque la ausencia no es evidencia real)."""
         cache_key = (category_id, day.strftime("%Y-%m-%d"))
         if cache_key in self._events_cache:
             return self._events_cache[cache_key]
@@ -152,14 +171,14 @@ class TennisApi1Provider:
                 },
             )
             response.raise_for_status()
-            events = response.json().get("events") or []
+            events: Optional[list] = response.json().get("events") or []
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
                 mark_rate_limited(_PROVIDER_NAME)
                 logger.warning("[TennisApi1] Cuota agotada; se omite hasta mañana")
             else:
                 logger.warning("[TennisApi1] Error de API (%s): %s", cache_key, exc)
-            events = []
+            events = None
         # Los errores también se cachean dentro de la instancia: un
         # fallo transitorio no debe reintentarse con cada pick del ciclo.
         self._events_cache[cache_key] = events
@@ -168,14 +187,25 @@ class TennisApi1Provider:
     async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:
         if is_rate_limited(_PROVIDER_NAME):
             return None
+        # Evento reciente: la ausencia puede ser "aún no terminó" ->
+        # fallo provisional (TTL de horas, clave "|prov"). Evento ya
+        # pasado: definitivo (15 días).
+        provisional = miss_is_provisional(date)
         miss_key = (
             f"{_PROVIDER_NAME}|{date.strftime('%Y-%m-%d')}|{team_hint.strip().lower()}"
         )
-        if is_missed(miss_key):
+        if provisional:
+            miss_key += "|prov"
+        if is_missed(miss_key, None if not provisional else MISSED_TTL_PROVISIONAL):
             return None
 
         best_match: Optional[MatchResult] = None
         best_score = 0.0
+        # Si el evento se ve en el feed pero aún no terminó, la ausencia
+        # de resultado NO es un fallo de búsqueda: no se marca missed y
+        # el siguiente ciclo del verificador lo reintenta.
+        saw_unfinished = False
+        saw_error = False
 
         async with httpx.AsyncClient(timeout=15) as client:
             for offset in _DATE_OFFSETS:
@@ -183,9 +213,15 @@ class TennisApi1Provider:
                 for category_id in _CATEGORIES:
                     if is_rate_limited(_PROVIDER_NAME):
                         return None
-                    for event in await self._fetch_events(client, category_id, day):
+                    events = await self._fetch_events(client, category_id, day)
+                    if events is None:
+                        saw_error = True
+                        continue
+                    for event in events:
                         match = _parse_event(event)
-                        if not match:
+                        if match is None:
+                            if _event_matches_hint(event, team_hint):
+                                saw_unfinished = True
                             continue
                         score = max(
                             _pair_similar(team_hint, match.home_team),
@@ -198,6 +234,7 @@ class TennisApi1Provider:
                         return best_match  # early-exit: no seguir gastando
 
         if not best_match or best_score < _MIN_PLAYER_SIMILARITY:
-            mark_missed(miss_key)
+            if not saw_unfinished and not saw_error:
+                mark_missed(miss_key)
             return None
         return best_match

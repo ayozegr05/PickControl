@@ -75,6 +75,36 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 Aparcados fuera de la lista: verificación live/en juego, torneos sin
 cobertura de proveedor, hándicap sin sujeto en zona ambigua |línea| 2-3.
 
+### Bugs detectados en pruebas reales (sept-2026)
+
+Diagnosticados tras probar las combinadas en el móvil — pendientes de
+tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
+
+- [x] **A. `missed` prematuro en providers RapidAPI** (arreglado): el
+      verificador intenta en cuanto `fecha_evento < ahora`, o sea antes
+      o durante el partido — y el "no encontrado" quedaba cacheado 15
+      días, matando toda la cobertura Challenger. Ahora: evento <48 h →
+      fallo provisional (TTL 6 h, clave `|prov`); >48 h → definitivo.
+      Además, un error de API (no-cuota) ya no marca `missed`, y
+      tennisapi1 no marca si ve el evento en el feed aún en vivo.
+      Limpieza puntual de `provider_state.json` aplicada.
+- [ ] **B. Higiene de extracción**: `seleccion` conserva markdown/emojis
+      ("**Chidek gana ****🇫🇷**"); `evento` con torneo ("Tenis - Chall.
+      Szczecin") es peor que None (se busca como jugador → miss
+      garantizado + cuota quemada); `deporte=None` en picks de tenis
+      gasta llamadas de fútbol primero.
+- [ ] **C. Evento perdido en picks de tenis por reglas**: cuando el
+      rival solo aparece en el análisis en prosa (formato Bet Fran:
+      "Chidek gana" + "el H2H favorece a Mayot"), el path de reglas no
+      rellena `evento`. Opciones: 2ª pasada LLM solo si `evento=None`,
+      o búsqueda por jugador en tennisapi1 (`/api/tennis/search` → sus
+      partidos, ~2 llamadas y además resuelve nombres parciales tipo
+      "Chidek"→"Chidekh").
+- [ ] **D. Limpieza puntual de datos**: picks >14 días fuera de ventana
+      en Lady Bets (corrección manual o subir `_MAX_VERIFICATION_AGE`
+      para un barrido); combinada id=1201 con patas que son nombres de
+      partido (reclasificar/corregir).
+
 ### 1. Core: verificación de resultados
 
 - [x] **Proveedor de resultados para tenis.** Implementado con cadena

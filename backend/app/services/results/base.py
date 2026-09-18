@@ -17,6 +17,7 @@ from typing import Optional, Protocol
 
 import httpx
 
+from app.core.dates import utc_now
 from app.core.logging import get_logger
 
 logger = get_logger("app.results.base")
@@ -228,6 +229,25 @@ class ResultsProvider(Protocol):
 # reintentando picks irresolubles hasta el 429.
 _STATE_FILE = Path(__file__).resolve().parents[3] / "provider_state.json"
 _MISSED_TTL = timedelta(days=15)
+# Un "no encontrado" sobre un evento reciente NO es definitivo: el
+# verificador intenta el pick en cuanto `fecha_evento < ahora`, o sea
+# antes o durante el partido — el resultado simplemente no existe todavía.
+# Esos fallos se recuerdan solo unas horas (reintento pocas veces al día,
+# no en cada ciclo) bajo una clave distinta ("|prov"): cuando el evento
+# cruza `_MISS_DEFINITIVE_AGE` se consulta la clave definitiva, que no
+# está marcada, y se hace una última búsqueda seria antes de rendirse.
+MISSED_TTL_PROVISIONAL = timedelta(hours=6)
+# Edad a partir de la cual la ausencia de resultado sí es definitiva
+# (día del partido + tolerancia ±1 del nivel anterior ya pasados).
+_MISS_DEFINITIVE_AGE = timedelta(hours=48)
+
+
+def miss_is_provisional(event_date: datetime) -> bool:
+    """True si el evento es tan reciente que un "no encontrado" puede
+    deberse a que el partido aún no terminó o el resultado aún no subió
+    al proveedor. Pasada `_MISS_DEFINITIVE_AGE` la ausencia es real."""
+    return event_date >= utc_now() - _MISS_DEFINITIVE_AGE
+
 
 _STATE: dict[str, dict[str, str]] | None = None
 
@@ -274,17 +294,28 @@ def is_rate_limited(provider_name: str) -> bool:
 
 
 def mark_missed(key: str) -> None:
-    """Recuerda que `key` ya se buscó sin resultado (ver _MISSED_TTL)."""
-    _load_state()["missed"][key] = date_type.today().isoformat()
+    """Recuerda que `key` ya se buscó sin resultado (ver _MISSED_TTL).
+
+    Se guarda con hora (no solo fecha) para que los TTL provisionales
+    sub-diarios (`_MISSED_TTL_PROVISIONAL`) tengan granularidad real.
+    """
+    _load_state()["missed"][key] = utc_now().isoformat()
     _save_state()
 
 
-def is_missed(key: str) -> bool:
-    """True si `key` ya se buscó sin resultado hace menos de _MISSED_TTL."""
+def is_missed(key: str, ttl: Optional[timedelta] = None) -> bool:
+    """True si `key` ya se buscó sin resultado dentro del TTL.
+
+    - `ttl=None` (definitivo): compara por fecha con `_MISSED_TTL` (15 días).
+    - `ttl` explícito (provisional): compara por timestamp — permite
+      ventanas de horas para reintentos de partidos recién terminados.
+    """
     checked_on = _load_state()["missed"].get(key)
     if checked_on is None:
         return False
-    return checked_on >= (date_type.today() - _MISSED_TTL).isoformat()
+    if ttl is None:
+        return checked_on >= (date_type.today() - _MISSED_TTL).isoformat()
+    return checked_on >= (utc_now() - ttl).isoformat()
 
 
 def rate_limit_from(exc: BaseException) -> bool:

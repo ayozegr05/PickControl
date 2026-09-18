@@ -342,3 +342,129 @@ class TestTennisApi1Provider:
         provider = TennisApi1Provider("k", "tennisapi1.p.rapidapi.com")
         assert await provider.find_match(datetime(2026, 9, 15), "Nadal") is None
         assert results_base.is_rate_limited("tennisapi1")
+
+
+class _ErrorClient:
+    """Cliente cuya respuesta siempre lanza HTTPStatusError 500
+    (error transitorio, no de cuota)."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, url, params=None, headers=None):
+        request = httpx.Request("GET", url)
+        response = httpx.Response(500, request=request)
+        raise httpx.HTTPStatusError("boom", request=request, response=response)
+
+
+class TestMissedProvisional:
+    """Un "no encontrado" sobre un evento reciente (<48h) NO es
+    definitivo: el partido puede no haberse jugado aún cuando lo
+    buscamos. Se recuerda con TTL corto (6h) bajo una clave "|prov";
+    el definitivo (15 días) solo se usa para eventos ya pasados."""
+
+    async def test_fallo_reciente_es_provisional_no_definitivo(self, monkeypatch):
+        # Evento de hoy: el fallo se marca provisional, NO definitivo.
+        hoy = datetime.now()
+        calls = []
+        monkeypatch.setattr(
+            tennisapi1.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient(calls, {"events": []}),
+        )
+        provider = TennisApi1Provider("k", "tennisapi1.p.rapidapi.com")
+        assert await provider.find_match(hoy, "Nadal") is None
+
+        prov_key = f"tennisapi1|{hoy.strftime('%Y-%m-%d')}|nadal|prov"
+        def_key = f"tennisapi1|{hoy.strftime('%Y-%m-%d')}|nadal"
+        assert results_base.is_missed(prov_key, results_base.MISSED_TTL_PROVISIONAL)
+        assert not results_base.is_missed(def_key)
+
+    async def test_fallo_antiguo_es_definitivo(self, monkeypatch):
+        # Evento de hace 5 días: la ausencia es real -> definitivo.
+        viejo = datetime(2026, 9, 10)
+        monkeypatch.setattr(
+            tennisapi1.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient([], {"events": []}),
+        )
+        provider = TennisApi1Provider("k", "tennisapi1.p.rapidapi.com")
+        assert await provider.find_match(viejo, "Nadal") is None
+        def_key = f"tennisapi1|{viejo.strftime('%Y-%m-%d')}|nadal"
+        assert results_base.is_missed(def_key)
+
+    async def test_evento_en_vivo_no_marca_missed(self, monkeypatch):
+        # El partido aparece en el feed pero está "inprogress": no es un
+        # fallo de búsqueda, no se marca missed y el siguiente ciclo
+        # vuelve a llamar.
+        hoy = datetime.now()
+        calls = []
+        payload = {
+            "events": [
+                {
+                    "status": {"type": "inprogress"},
+                    "homeTeam": {"name": "Marco Cecchinato"},
+                    "awayTeam": {"name": "Marvin Moeller"},
+                    "homeScore": {"current": 1},
+                    "awayScore": {"current": 0},
+                }
+            ]
+        }
+        monkeypatch.setattr(
+            tennisapi1.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient(calls, payload),
+        )
+        provider = TennisApi1Provider("k", "tennisapi1.p.rapidapi.com")
+        assert await provider.find_match(hoy, "Cecchinato") is None
+        n = len(calls)
+        assert n > 0
+        provider2 = TennisApi1Provider("k", "tennisapi1.p.rapidapi.com")
+        assert await provider2.find_match(hoy, "Cecchinato") is None
+        assert len(calls) > n  # reintenta: no quedó marcado como missed
+
+    async def test_error_api_no_marca_missed(self, monkeypatch):
+        # Un 500 transitorio no es evidencia de ausencia: no se marca
+        # missed y el siguiente ciclo reintenta.
+        hoy = datetime.now()
+        calls = []
+
+        class _CountingErrorClient(_ErrorClient):
+            async def get(self, url, params=None, headers=None):
+                calls.append(url)
+                return await super().get(url, params=params, headers=headers)
+
+        monkeypatch.setattr(
+            tennisapi1.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingErrorClient(),
+        )
+        provider = TennisApi1Provider("k", "tennisapi1.p.rapidapi.com")
+        assert await provider.find_match(hoy, "Nadal") is None
+        n = len(calls)
+        assert n > 0
+        provider2 = TennisApi1Provider("k", "tennisapi1.p.rapidapi.com")
+        assert await provider2.find_match(hoy, "Nadal") is None
+        assert len(calls) > n
+
+    async def test_rapidapi_error_no_marca_missed(self, monkeypatch):
+        calls = []
+
+        class _CountingErrorClient(_ErrorClient):
+            async def get(self, url, params=None, headers=None):
+                calls.append(url)
+                return await super().get(url, params=params, headers=headers)
+
+        monkeypatch.setattr(
+            rapidapi_tennis.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingErrorClient(),
+        )
+        provider = RapidApiTennisProvider("k", "tennis-api-atp-wta-itf.p.rapidapi.com")
+        assert await provider.find_match(datetime.now(), "Cecchinato") is None
+        provider2 = RapidApiTennisProvider("k", "tennis-api-atp-wta-itf.p.rapidapi.com")
+        assert await provider2.find_match(datetime.now(), "Cecchinato") is None
+        assert len(calls) == 2  # reintentó: el error no quedó como missed

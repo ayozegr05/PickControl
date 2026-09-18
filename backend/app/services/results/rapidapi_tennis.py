@@ -33,11 +33,13 @@ import httpx
 from app.core.logging import get_logger
 from app.services.results.api_tennis import _pair_similar
 from app.services.results.base import (
+    MISSED_TTL_PROVISIONAL,
     MatchResult,
     is_missed,
     is_rate_limited,
     mark_missed,
     mark_rate_limited,
+    miss_is_provisional,
     rate_limit_from,
 )
 
@@ -122,7 +124,10 @@ class RapidApiTennisProvider:
 
     async def _fetch_matches(
         self, client: httpx.AsyncClient, player_name: str, year: int
-    ) -> list:
+    ) -> Optional[list]:
+        """Historial del jugador, [] si no tiene datos y None si la
+        llamada falló (error transitorio: el caller NO debe marcar
+        `missed`, porque la ausencia no es evidencia real)."""
         cache_key = f"{player_name.strip().lower()}:{year}"
         if cache_key in self._matches_cache:
             return self._matches_cache[cache_key]
@@ -148,7 +153,10 @@ class RapidApiTennisProvider:
                 logger.warning(
                     "[RapidAPI-Tennis] Error de API (%s): %s", player_name, exc
                 )
-            return []
+            # Se cachea el fallo dentro de la instancia para no reintentar
+            # el mismo jugador en cada pick del ciclo.
+            self._matches_cache[cache_key] = None
+            return None
         data = response.json()
         # El endpoint separa individuales y dobles del jugador; nos
         # interesan ambos (el matching por parejas filtra después).
@@ -161,10 +169,16 @@ class RapidApiTennisProvider:
             return None
         # Si este jugador ya se buscó sin resultado, no se repite la
         # llamada en cada ciclo (la cuota diaria es de ~50 peticiones).
+        # Evento reciente: la ausencia puede ser "aún no terminó" ->
+        # fallo provisional (TTL de horas, clave "|prov"). Evento ya
+        # pasado: definitivo (15 días).
+        provisional = miss_is_provisional(date)
         miss_key = (
             f"{_PROVIDER_NAME}|{date.strftime('%Y-%m-%d')}|{team_hint.strip().lower()}"
         )
-        if is_missed(miss_key):
+        if provisional:
+            miss_key += "|prov"
+        if is_missed(miss_key, None if not provisional else MISSED_TTL_PROVISIONAL):
             return None
         best_match: Optional[MatchResult] = None
         best_score = 0.0
@@ -178,7 +192,10 @@ class RapidApiTennisProvider:
         )
 
         async with httpx.AsyncClient(timeout=15) as client:
-            for match in await self._fetch_matches(client, lookup_name, date.year):
+            matches = await self._fetch_matches(client, lookup_name, date.year)
+            if matches is None:
+                return None  # error de API: no se marca missed
+            for match in matches:
                 winner = (match.get("player1") or {}).get("name")
                 loser = (match.get("player2") or {}).get("name")
                 played = _parse_match_date(match.get("date") or "")
