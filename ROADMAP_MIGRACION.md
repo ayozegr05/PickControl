@@ -96,13 +96,22 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
       solo si trae enfrentamiento ("A vs B" o "A - B"); un torneo tipo
       "Tenis - Chall. Szczecin" cede el hint al jugador de `seleccion`
       (sigue mostrándose en la UI como contexto).
-- [ ] **C. Evento perdido en picks de tenis por reglas**: cuando el
-      rival solo aparece en el análisis en prosa (formato Bet Fran:
-      "Chidek gana" + "el H2H favorece a Mayot"), el path de reglas no
-      rellena `evento`. Opciones: 2ª pasada LLM solo si `evento=None`,
-      o búsqueda por jugador en tennisapi1 (`/api/tennis/search` → sus
-      partidos, ~2 llamadas y además resuelve nombres parciales tipo
-      "Chidek"→"Chidekh").
+- [x] **C.1. Evento perdido en picks de tenis por reglas** (arreglado):
+      `_rule_extract` ahora rellena `evento` gratis si el mensaje trae
+      un enfrentamiento ("A - B" / "A vs B" vía `_extract_eventos`).
+      Cuando el rival solo aparece en la prosa del análisis (formato
+      Bet Fran: "Chidek gana" + "el H2H favorece a Mayot"), `evento`
+      queda a None y se hace **una segunda pasada LLM solo en ese caso**
+      (merge conservador: el pick de reglas es la base; el LLM aporta
+      evento/deporte/mercado/casa → `metodo="rule+llm"`). Los picks ya
+      completos por reglas siguen ahorrando la llamada como antes.
+- [ ] **C.2. Búsqueda por jugador en tennisapi1** (pendiente — revisar
+      junto con por qué "Marco Cecchinato" no apareció en
+      `matches-played` de RapidAPI): `/api/tennis/search` → id → sus
+      partidos, ~2 llamadas en vez del barrido de hasta 9 categorías.
+      Además resuelve nombres parciales ("Chidek"→"Chidekh") en
+      servidor. Interesa por AHORRO DE CUOTA: cada pick irresoluble de
+      Challenger quema hasta 9 req hoy.
 - [ ] **D. Limpieza puntual de datos**: picks >14 días fuera de ventana
       en Lady Bets (corrección manual o subir `_MAX_VERIFICATION_AGE`
       para un barrido); combinada id=1201 con patas que son nombres de

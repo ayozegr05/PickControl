@@ -7,6 +7,7 @@ extracción de fecha del evento.
 from datetime import datetime, timezone
 
 from app.services.telegram.pick_extractor import (
+    ExtractedPick,
     _clean_text_field,
     _detect_deporte,
     _extract_event_date,
@@ -16,6 +17,7 @@ from app.services.telegram.pick_extractor import (
     _normalize_pick,
     _rule_extract,
     _sanitize_event_date,
+    extract_pick,
 )
 
 
@@ -311,3 +313,95 @@ class TestNormalizePick:
         pick.deporte = "tenis"
         pick = _normalize_pick(pick, "Cecchinato gana\nCuota 1.50\nStake 4")
         assert pick.deporte == "tenis"
+
+
+class TestRuleExtractEvento:
+    def test_rellena_evento_si_hay_enfrentamiento_en_el_mensaje(self):
+        text = (
+            "Marco Cecchinato vs Marvin Moeller\n\n"
+            "Cecchinato gana\nCuota 1.50\nStake 4"
+        )
+        pick = _rule_extract(text)
+        assert pick is not None
+        assert pick.evento == "Marco Cecchinato vs Marvin Moeller"
+
+    def test_evento_none_si_el_rival_solo_esta_en_prosa(self):
+        # Formato Bet Fran: el rival solo aparece en el análisis.
+        text = (
+            "**CHALL RENNES **🇫🇷 **🎾**\n\n**Chidek gana ****🇫🇷**\n\n"
+            "**Cuota 1.53📈**\n\n**Stake 3💰**\n\n"
+            "__el H2H global favorece a Mayot 2-1__"
+        )
+        pick = _rule_extract(text)
+        assert pick is not None
+        assert pick.evento is None
+
+
+class TestRuleLlmEnrichment:
+    """Segunda pasada LLM: solo se gasta cuando las reglas dejan el
+    pick sin `evento` (el rival solo aparece en la prosa)."""
+
+    async def test_llm_rellena_evento_cuando_reglas_no_lo_ven(self, monkeypatch):
+        text = (
+            "**CHALL RENNES **🇫🇷 **🎾**\n\n**Chidek gana ****🇫🇷**\n\n"
+            "**Cuota 1.53📈**\n\n**Stake 3💰**\n\n"
+            "__el H2H global favorece a Mayot 2-1__"
+        )
+        llamadas = []
+
+        async def fake_llm(*args, **kwargs):
+            llamadas.append(args)
+            return ExtractedPick(
+                es_apuesta=True,
+                deporte="tenis",
+                evento="Clement Chidekh vs Harold Mayot",
+                mercado="ganador",
+                seleccion="Chidekh gana",
+            )
+
+        monkeypatch.setattr(
+            "app.services.telegram.pick_extractor._llm_extract", fake_llm
+        )
+        pick = await extract_pick(text, api_key="k")
+        assert llamadas  # sí se llamó al LLM
+        assert pick is not None
+        # Merge: evento/deporte/mercado del LLM, seleccion de reglas.
+        assert pick.evento == "Clement Chidekh vs Harold Mayot"
+        assert pick.deporte == "tenis"
+        assert pick.mercado == "ganador"
+        assert pick.seleccion == "Chidek gana"
+        assert pick.metodo == "rule+llm"
+
+    async def test_no_llama_llm_si_reglas_ya_tienen_evento(self, monkeypatch):
+        text = (
+            "Marco Cecchinato vs Marvin Moeller\n\n"
+            "Cecchinato gana\nCuota 1.50\nStake 4"
+        )
+
+        async def fake_llm(*args, **kwargs):
+            raise AssertionError("no debería llamar al LLM")
+
+        monkeypatch.setattr(
+            "app.services.telegram.pick_extractor._llm_extract", fake_llm
+        )
+        pick = await extract_pick(text, api_key="k")
+        assert pick is not None
+        assert pick.evento == "Marco Cecchinato vs Marvin Moeller"
+        assert pick.metodo == "rule"
+
+    async def test_llm_sin_evento_conserva_pick_de_reglas(self, monkeypatch):
+        text = (
+            "**CHALL RENNES **🇫🇷 **🎾**\n\n**Chidek gana ****🇫🇷**\n\n"
+            "**Cuota 1.53📈**\n\n**Stake 3💰**"
+        )
+
+        async def fake_llm(*args, **kwargs):
+            return ExtractedPick(es_apuesta=True, seleccion="Chidek gana")
+
+        monkeypatch.setattr(
+            "app.services.telegram.pick_extractor._llm_extract", fake_llm
+        )
+        pick = await extract_pick(text, api_key="k")
+        assert pick is not None
+        assert pick.seleccion == "Chidek gana"
+        assert pick.metodo == "rule"  # sin evento aportado no cambia

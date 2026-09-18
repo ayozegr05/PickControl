@@ -652,8 +652,15 @@ def _rule_extract(
     if not seleccion:
         return None
 
+    # Enfrentamiento explícito ("A - B" / "A vs B" en alguna línea del
+    # mensaje): se rellena `evento` gratis por reglas. Cuando el rival
+    # solo aparece en la prosa del análisis (formato Bet Fran), evento
+    # queda a None y el caller decide si gasta una pasada LLM extra.
+    evento = next(iter(_extract_eventos(lines)), None)
+
     return ExtractedPick(
         es_apuesta=True,
+        evento=evento,
         seleccion=seleccion,
         cuota=float(cuota_match.group(1).replace(",", ".")),
         stake=float(stake_match.group(1).replace(",", ".")),
@@ -856,6 +863,27 @@ async def extract_pick(
         text, informante=informante, fecha_referencia=fecha_referencia
     )
     if rule_result:
+        if rule_result.es_apuesta and not rule_result.evento:
+            # Las reglas no ven el enfrentamiento cuando solo aparece en
+            # la prosa del análisis ("el H2H favorece a Mayot" en Bet
+            # Fran): una segunda pasada LLM intenta rellenarlo. Solo se
+            # gasta la llamada en este caso — los picks ya completos por
+            # reglas siguen ahorrando el LLM como antes.
+            llm_result = await _llm_extract(
+                text,
+                api_key,
+                informante=informante,
+                fecha_referencia=fecha_referencia,
+            )
+            if llm_result is not None and llm_result.es_apuesta:
+                # Merge conservador: el pick de reglas es la base (su
+                # seleccion/cuota/stake son fiables) y el LLM solo
+                # aporta los campos que las reglas no rellenan.
+                for field in ("evento", "deporte", "mercado", "casa", "explicacion"):
+                    if not getattr(rule_result, field):
+                        setattr(rule_result, field, getattr(llm_result, field))
+                if llm_result.evento:
+                    rule_result.metodo = "rule+llm"
         rule_result.fecha_evento = _sanitize_event_date(
             rule_result.fecha_evento, fecha_referencia
         )
