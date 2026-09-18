@@ -59,7 +59,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 | 1 | Combinadas como sección propia | Hecho | Alto — modelo, extractor, verificador, UI |
 | 2 | Fútbol: primera parte/descanso | Pendiente — sin datos en proveedores | Alto (proveedor nuevo) |
 | 3 | Fútbol: partidos parados (SUSP/ABD/INT) | Manual a propósito | — |
-| 4 | Cuota tipster vs cuota real de mercado | Pendiente | Alto + API de odds (probablemente de pago) |
+| 4 | Cuota tipster vs cuota real de mercado | Backend hecho — falta agregados y UI (ver §5) | Alto, ya implementado con API gratuita |
 | 5 | Baloncesto | Aparcado | Medio |
 | 6 | Álbumes Telegram | Implementado — falta probar con álbum real | Trivial |
 | 7 | Pantalla de análisis global | Hecho | — |
@@ -337,6 +337,61 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
       `client.py` (credenciales obligatorias, singleton, reset).
 - [ ] **Limpieza de usuarios**: decidir si `test@a.com` se mantiene; la
       contraseña actual `123456` es estrictamente temporal.
+
+### 5. Auditoría de cuotas (hito 4: tipster vs mercado)
+
+Implementado con **snapshots propios** (diseño B), no histórico de API:
+no existe histórico gratis con cobertura Challenger/ITF, y cada respuesta
+de la API regala ya la cuota de apertura (`initialFractionalValue`).
+
+Proveedor dedicado: **allsportsapi2** (RapidAPI BASIC $0, misma key, solo
+cambia el host; backend Sofascore → comparte ids de evento con
+tennisapi1, que queda como scavenger). La cuota de resultados no se
+toca: resultados siempre tienen prioridad.
+
+- [x] **Modelo** (migraciones `b2c3d4e5f6a7` + `c2d3e4f5a6b7`):
+      `odds_events` (1 fila/evento: home/away — necesarios para casar la
+      selección con la opción "1"/"2"), `odds_snapshots` (append-only por
+      evento: mercado, opción, línea, cuota, cuota_apertura, flags
+      live/suspended) y `parsed_picks.odds_event_id`.
+- [x] **Provider `app/services/odds/`**: protocolo + impl Sofascore
+      (allsportsapi2 tenis+fútbol, tennisapi1 scavenger). Reutiliza
+      `provider_state.json` (rate_limited/missed) y los extractores del
+      verificador.
+- [x] **Job de snapshots** (`odds/snapshotter.py`, loop en
+      `lifecycle.py`): dedup por evento (N canales = 1 llamada), captura
+      al importar (≈ cuota al publicar), captura de cierre (~3 h
+      pre-inicio) y recuperación post-partido (la API sigue dando
+      apertura+cierre con el partido acabado — cubre caídas cortas).
+      Guarda TODOS los mercados: el mapeo se hace al comparar, así un
+      mapeo futuro no necesita nuevas llamadas.
+- [x] **Mapeo pick→mercado** (`odds/compare.py`): Full time 1/X/2,
+      Match goals / Total games won / Corners 2-Way / Cards con
+      `choice_group` = `linea`, Asian handicap "(N) Equipo", BTTS,
+      Double chance (1X/X2/12 y "Equipo o empate"), Draw no bet, 1er set.
+      Sin equivalente → `mapeado=false`, NULL (no se inventa).
+- [x] **Endpoint** `GET /telegram/parsed-picks/{id}/odds`:
+      cuota_tipster vs apertura / publicación / cierre + derivadas
+      `cuota_disponible` (¿existía la cuota anunciada? → detector de
+      cuotas infladas) y `clv_pct` (% sobre el cierre → el tipster bate
+      al mercado). Tests en `tests/test_odds.py` (29).
+
+Pendiente (siguientes pasos, en orden):
+
+- [ ] **Agregados por canal** (`GET /informantes/{id}/odds-stats` o
+      similar): % de picks con cuota inflada, CLV medio del canal, % que
+      bate el cierre, % mapeado. Es el veredicto global del tipster —
+      un pick aislado no dice nada, el patrón sí. Solo backend.
+- [ ] **UI**: sección "Cuota de mercado" en el detalle del pick
+      (tipster vs apertura/publicación/cierre + badges inflada/CLV) y,
+      con los agregados, resumen por canal en la pantalla de análisis.
+- [ ] **Backfill histórico** (opcional, decidir con datos reales):
+      OddsPapi (`bet36528` en RapidAPI) regala `/v4/historical-odds`
+      ilimitado en el free tier — serviría para auditar picks antiguos
+      vía script tipo `verify_backlog.py`. Cobertura Challenger sin
+      verificar; si no la tiene, solo rellenaría fútbol/top → valor
+      marginal. NO es necesario para producción (los snapshots ya se
+      auto-mantienen y las caídas cortas las cubre el fetch post-partido).
 
 ## Estado actual del entorno
 

@@ -16,6 +16,10 @@ Ver `ROADMAP_MIGRACION.md` para estado de fases y próximos hitos.
   - `app/services/results/` — verificador de resultados por deporte:
     fútbol (football-data.org → API-Football fallback), tenis (TheSportsDB →
     RapidAPI ATP-WTA-ITF → tennisapi1).
+  - `app/services/odds/` — snapshots de cuotas de mercado (auditoría del
+    tipster): provider Sofascore (allsportsapi2 dedicado, tennisapi1
+    scavenger), job periódico `snapshotter.py`, mapeo pick→mercado y
+    comparación en `compare.py`. Ver ROADMAP §5.
 - **Frontend** `Frontend/PickControl/` — Expo + React Native + TypeScript,
   Expo Router (`app/screens/`, `app/dynamic-routes/`), cliente en `src/api/`.
 

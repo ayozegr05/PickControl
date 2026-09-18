@@ -12,6 +12,7 @@ from fastapi import FastAPI
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.services.odds.snapshotter import run_odds_snapshot_cycle
 from app.services.results.verifier import verify_pending_picks
 from app.services.telegram.catchup import run_catchup
 from app.services.telegram.client import get_telegram_client, reset_telegram_client
@@ -50,6 +51,23 @@ async def _run_results_verifier_loop() -> None:
         await asyncio.sleep(interval_seconds)
 
 
+async def _run_odds_snapshotter_loop() -> None:
+    """Captura periódica de cuotas de mercado para los picks.
+
+    Mismo patrón que el verificador: loop en segundo plano que no
+    bloquea el arranque; un fallo de ciclo no tumba la tarea.
+    """
+    settings = get_settings()
+    interval_seconds = settings.odds_snapshot_interval_minutes * 60
+
+    while True:
+        try:
+            await run_odds_snapshot_cycle()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[ODDS_SNAPSHOTTER] Error en el ciclo de snapshots: %s", exc)
+        await asyncio.sleep(interval_seconds)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown de FastAPI: arranca el listener de Telegram como
@@ -81,6 +99,15 @@ async def lifespan(app: FastAPI):
             "la verificación automática de resultados no se ejecutará."
         )
 
+    odds_task: asyncio.Task | None = None
+    if settings.rapidapi_tennis_key:
+        odds_task = asyncio.create_task(_run_odds_snapshotter_loop())
+        logger.info(
+            "[LIFECYCLE] Snapshotter de odds iniciado en segundo plano "
+            "(cada %s min).",
+            settings.odds_snapshot_interval_minutes,
+        )
+
     try:
         yield
     finally:
@@ -105,3 +132,11 @@ async def lifespan(app: FastAPI):
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
             logger.info("[LIFECYCLE] Verificador de resultados detenido.")
+
+        if odds_task is not None:
+            odds_task.cancel()
+            try:
+                await odds_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            logger.info("[LIFECYCLE] Snapshotter de odds detenido.")
