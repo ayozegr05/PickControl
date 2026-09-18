@@ -405,3 +405,49 @@ class TestRuleLlmEnrichment:
         assert pick is not None
         assert pick.seleccion == "Chidek gana"
         assert pick.metodo == "rule"  # sin evento aportado no cambia
+
+
+class TestDeporteNoSoportado:
+    """Deportes sin proveedor de resultados (automovilismo, F1...): el
+    pick se guarda rechazado en vez de quedar pendiente para siempre."""
+
+    def test_motor_detectado_por_senal(self):
+        assert _detect_deporte("GP ESPAÑA - Menos de 18,5 coches") == ("automovilismo")
+
+    def test_pick_motor_queda_rejected(self):
+        pick = _normalize_pick(
+            ExtractedPick(
+                es_apuesta=True,
+                deporte="automovilismo",
+                seleccion="Menos de 19,5 coches",
+                evento="GP Países Bajos",
+                metodo="rule",
+            ),
+            "GP PAÍSES BAJOS\nMenos de 19,5 coches",
+        )
+        assert pick.es_apuesta is False
+        assert pick.metodo == "rejected"
+
+    def test_pick_motor_sin_deporte_lo_detecta_y_rechaza(self):
+        pick = _normalize_pick(
+            ExtractedPick(
+                es_apuesta=True,
+                seleccion="Menos de 18,5 coches",
+                metodo="llm",
+            ),
+            "GP ESPAÑA 🏎️\nMenos de 18,5 coches",
+        )
+        assert pick.deporte == "automovilismo"
+        assert pick.es_apuesta is False
+
+    def test_variante_f1_del_llm(self):
+        pick = _normalize_pick(
+            ExtractedPick(
+                es_apuesta=True,
+                deporte="F1",
+                seleccion="Verstappen gana",
+                metodo="llm",
+            ),
+            "Verstappen gana",
+        )
+        assert pick.es_apuesta is False
