@@ -7,10 +7,13 @@ extracción de fecha del evento.
 from datetime import datetime, timezone
 
 from app.services.telegram.pick_extractor import (
+    _clean_text_field,
+    _detect_deporte,
     _extract_event_date,
     _extract_linea,
     _is_settled_ticket,
     _looks_like_bet,
+    _normalize_pick,
     _rule_extract,
     _sanitize_event_date,
 )
@@ -249,3 +252,62 @@ class TestExtractLinea:
     def test_mas_final_no_pisa_handicap(self):
         # El hándicap con signo tiene prioridad sobre el "+" final.
         assert _extract_linea("Alcaraz -1.5 sets") == -1.5
+
+
+class TestCleanTextField:
+    """Markdown/emojis de Telegram no deben sobrevivir a los campos
+    extraídos (caso real: "**Chidek gana ****🇫🇷**")."""
+
+    def test_quita_markdown_y_emojis(self):
+        assert _clean_text_field("**Chidek gana ****🇫🇷**") == "Chidek gana"
+
+    def test_quita_bullets_y_flechas(self):
+        assert _clean_text_field("➡️ Cecchinato gana") == "Cecchinato gana"
+
+    def test_quita_ruido_mixto(self):
+        assert (
+            _clean_text_field("**__➡️__**** Marco Cecchinato gana **")
+            == "Marco Cecchinato gana"
+        )
+
+    def test_none_y_vacio(self):
+        assert _clean_text_field(None) is None
+        assert _clean_text_field("***") is None
+
+    def test_conserva_texto_limpio(self):
+        assert _clean_text_field("Alcaraz -1.5 sets") == "Alcaraz -1.5 sets"
+
+
+class TestDetectDeporte:
+    def test_detecta_tenis_por_torneo(self):
+        assert _detect_deporte("**CHALL RENNES **🇫🇷 **🎾** Chidek gana") == "tenis"
+
+    def test_detecta_tenis_por_palabra(self):
+        assert _detect_deporte("🎾 TENIS - Chall. Szczecin Cecchinato gana") == "tenis"
+
+    def test_detecta_futbol(self):
+        assert _detect_deporte("⚽ La Liga - Real Madrid gana") == "fútbol"
+
+    def test_sin_senal_devuelve_none(self):
+        assert _detect_deporte("Cuota 1.50 Stake 3") is None
+
+
+class TestNormalizePick:
+    def test_limpia_seleccion_e_infiere_deporte(self):
+        # Caso real Bet Fran: reglas sacaron la selección con ruido y
+        # sin deporte; la señal de tenis está en la cabecera.
+        text = (
+            "**CHALL RENNES **🇫🇷 **🎾**\n\n**Chidek gana ****🇫🇷**\n\n"
+            "**Cuota 1.53📈**\n\n**Stake 3💰**"
+        )
+        pick = _rule_extract(text)
+        assert pick is not None
+        pick = _normalize_pick(pick, text)
+        assert pick.seleccion == "Chidek gana"
+        assert pick.deporte == "tenis"
+
+    def test_no_pisa_deporte_del_llm(self):
+        pick = _rule_extract("Cecchinato gana\nCuota 1.50\nStake 4")
+        pick.deporte = "tenis"
+        pick = _normalize_pick(pick, "Cecchinato gana\nCuota 1.50\nStake 4")
+        assert pick.deporte == "tenis"

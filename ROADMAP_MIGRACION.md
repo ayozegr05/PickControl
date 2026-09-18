@@ -88,11 +88,14 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
       Además, un error de API (no-cuota) ya no marca `missed`, y
       tennisapi1 no marca si ve el evento en el feed aún en vivo.
       Limpieza puntual de `provider_state.json` aplicada.
-- [ ] **B. Higiene de extracción**: `seleccion` conserva markdown/emojis
-      ("**Chidek gana ****🇫🇷**"); `evento` con torneo ("Tenis - Chall.
-      Szczecin") es peor que None (se busca como jugador → miss
-      garantizado + cuota quemada); `deporte=None` en picks de tenis
-      gasta llamadas de fútbol primero.
+- [x] **B. Higiene de extracción** (arreglado): `_normalize_pick` limpia
+      markdown/emojis de `seleccion`/`evento` (también en patas) e
+      infiere `deporte` de señales léxicas del mensaje cuando el path de
+      reglas no lo rellena (un pick de tenis ya no quema llamadas de
+      fútbol). En el verificador, `_tennis_lookup_hint` usa `evento`
+      solo si trae enfrentamiento ("A vs B" o "A - B"); un torneo tipo
+      "Tenis - Chall. Szczecin" cede el hint al jugador de `seleccion`
+      (sigue mostrándose en la UI como contexto).
 - [ ] **C. Evento perdido en picks de tenis por reglas**: cuando el
       rival solo aparece en el análisis en prosa (formato Bet Fran:
       "Chidek gana" + "el H2H favorece a Mayot"), el path de reglas no
