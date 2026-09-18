@@ -146,6 +146,11 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
         API-Football, football-data.org, TheSportsDB y RapidAPI) → 0
         resueltos, sin marcar misses (los errores no contaminan).
         Re-ejecutar cuando renueve la cuota diaria.
+- [ ] **ACCIÓN PENDIENTE (mañana, con cuota renovada)**: ejecutar
+      `backend/scripts/verify_backlog.py --apply` para resolver los
+      ~22 pendientes con datos de Lady Bets (+ resto de canales). De
+      paso, comprobar `matches-played` de RapidAPI con "cecchinato"
+      para cerrar la duda documentada en C.2.
 
 ### 1. Core: verificación de resultados
 
