@@ -105,13 +105,26 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
       (merge conservador: el pick de reglas es la base; el LLM aporta
       evento/deporte/mercado/casa → `metodo="rule+llm"`). Los picks ya
       completos por reglas siguen ahorrando la llamada como antes.
-- [ ] **C.2. Búsqueda por jugador en tennisapi1** (pendiente — revisar
-      junto con por qué "Marco Cecchinato" no apareció en
-      `matches-played` de RapidAPI): `/api/tennis/search` → id → sus
-      partidos, ~2 llamadas en vez del barrido de hasta 9 categorías.
-      Además resuelve nombres parciales ("Chidek"→"Chidekh") en
-      servidor. Interesa por AHORRO DE CUOTA: cada pick irresoluble de
-      Challenger quema hasta 9 req hoy.
+- [x] **C.2. Búsqueda por jugador en tennisapi1** (arreglado): el caso
+      Cecchinato destapó que el partido del Challenger de Szczecin SÍ
+      estaba en Sofascore/tennisapi1 pero no se resolvía — RapidAPI
+      ATP/WTA/ITF devolvía 429 (cuota diaria agotada) y el barrido por
+      categorías costaba hasta 9 req con fecha exacta. Ahora
+      `find_match` hace `/api/tennis/search/{nombre}` → mejor entidad
+      tenista (excluye parejas de dobles "X / Y") →
+      `team/{id}/events/near`, filtra por fecha (±1 día), parsea
+      `previousEvent`/`nextEvent` con el mismo `_parse_event` y aplica
+      el matcher de similitud habitual. Verificado en vivo:
+      `search/cecchinato` → id 44549 y `events/near` devolvió
+      **Cecchinato vs Möller 2-1** (7-6, 6-7, 6-2); también resuelve
+      nombres parciales en servidor ("chidek" → "Clement Chidekh").
+      Coste típico: **2 llamadas/pick** frente a hasta 9, con caché de
+      search y near. El barrido por categorías queda como fallback
+      (jugador sin resultados o eventos near fuera de fecha). Si el
+      partido está en vivo no se marca missed ni se gasta el barrido.
+      Pendiente: revisar por qué "Marco Cecchinato" no apareció en
+      `matches-played` de RapidAPI ATP/WTA/ITF cuando haya cuota
+      (¿Challenger sin cobertura? ¿formato de perfil?).
 - [ ] **D. Limpieza puntual de datos**: picks >14 días fuera de ventana
       en Lady Bets (corrección manual o subir `_MAX_VERIFICATION_AGE`
       para un barrido); combinada id=1201 con patas que son nombres de

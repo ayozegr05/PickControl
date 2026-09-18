@@ -6,8 +6,15 @@ misma cobertura que Sofascore. Se consulta SOLO cuando TheSportsDB y
 son ~50 req/día, compartidos con cualquier otra API RapidAPI de la
 misma cuenta solo a nivel de key — la cuota es por suscripción).
 
-El feed plano por fecha (`/api/tennis/events/{d}/{m}/{y}`) está
-deprecado en origen (devuelve 204). La vía soportada es por categoría:
+Dos vías de búsqueda (verificadas en vivo):
+
+1. **Por jugador** (~2 llamadas): `/api/tennis/search/{nombre}` da el
+   id del jugador — y resuelve nombres parciales en servidor
+   ("chidek" → "Clement Chidekh") — y
+   `/api/tennis/team/{id}/events/near` devuelve `previousEvent` +
+   `nextEvent` con marcador y sets. Es la vía preferida: cubre los
+   partidos recientes, que son justo los que el verificador resuelve.
+2. **Por categoría** (fallback, hasta 9 llamadas):
 
     GET /api/tennis/category/{id}/events/{day}/{month}/{year}
 
@@ -36,8 +43,10 @@ descartan (equipos "A / B") para no falsear picks de individuales.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -58,6 +67,9 @@ logger = get_logger("app.results.tennisapi1")
 
 _PROVIDER_NAME = "tennisapi1"
 _MIN_PLAYER_SIMILARITY = 0.6
+# Tolerancia de la vía por jugador: events/near trae el partido
+# anterior y el siguiente del jugador — el del pick debe caer dentro.
+_PLAYER_DATE_TOLERANCE = timedelta(days=1)
 # Solo fecha exacta: la tolerancia ±1 día ya la da el nivel anterior
 # (RapidApiTennisProvider busca en el historial del jugador). Limitarlo
 # a un día acota el peor caso a len(_CATEGORIES) llamadas por pick.
@@ -137,6 +149,35 @@ def _event_matches_hint(event: dict, team_hint: str) -> bool:
     )
 
 
+def _searchable_name(team_hint: str) -> str:
+    """Primer nombre de la pista para `/search`: "Cecchinato" de
+    "Cecchinato vs Moeller", "Alcaraz" de "Alcaraz / Munar"."""
+    return (
+        re.split(r"[/+&]|\s+-\s+|\s+vs\.?\s+", team_hint, maxsplit=1)[0].strip()
+        or team_hint
+    )
+
+
+def _best_player_id(name: str, results: list) -> Optional[int]:
+    """Id del mejor jugador de tenis en los resultados de /search.
+
+    La API ya ordena por relevancia y resuelve nombres parciales
+    ("chidek" -> "Clement Chidekh"); aun así se exige similitud mínima
+    para no agarrar un jugador distinto si la búsqueda devolvió ruido.
+    """
+    best_id: Optional[int] = None
+    best_score = 0.0
+    for res in results:
+        entity = res.get("entity") or {}
+        if (entity.get("sport") or {}).get("slug") != "tennis":
+            continue
+        score = _pair_similar(name, entity.get("name") or "")
+        if score > best_score:
+            best_score = score
+            best_id = entity.get("id")
+    return best_id if best_score >= _MIN_PLAYER_SIMILARITY else None
+
+
 class TennisApi1Provider:
     """Consulta tennisapi1 (Sofascore) por categoría y fecha."""
 
@@ -148,6 +189,10 @@ class TennisApi1Provider:
         # Eventos por (categoría, fecha): varios picks del mismo día
         # reutilizan las categorías ya descargadas. None = fallo de API.
         self._events_cache: dict[tuple[int, str], Optional[list]] = {}
+        # Búsqueda por jugador: resultados de /search por nombre y
+        # eventos de events/near por id. Mismo criterio: None = fallo.
+        self._search_cache: dict[str, Optional[list]] = {}
+        self._near_cache: dict[int, Optional[list]] = {}
 
     async def _fetch_events(
         self, client: httpx.AsyncClient, category_id: int, day: datetime
@@ -184,6 +229,64 @@ class TennisApi1Provider:
         self._events_cache[cache_key] = events
         return events
 
+    async def _fetch_search(
+        self, client: httpx.AsyncClient, name: str
+    ) -> Optional[list]:
+        """Resultados de `/api/tennis/search/{nombre}`; None si falla."""
+        key = name.strip().lower()
+        if key in self._search_cache:
+            return self._search_cache[key]
+        try:
+            response = await client.get(
+                f"https://{self._api_host}/api/tennis/search/{quote(key)}",
+                headers={
+                    "X-RapidAPI-Key": self._api_key,
+                    "X-RapidAPI-Host": self._api_host,
+                },
+            )
+            response.raise_for_status()
+            results: Optional[list] = response.json().get("results") or []
+        except httpx.HTTPError as exc:
+            if rate_limit_from(exc):
+                mark_rate_limited(_PROVIDER_NAME)
+                logger.warning("[TennisApi1] Cuota agotada; se omite hasta mañana")
+            else:
+                logger.warning("[TennisApi1] Error en search (%s): %s", key, exc)
+            results = None
+        self._search_cache[key] = results
+        return results
+
+    async def _fetch_near(
+        self, client: httpx.AsyncClient, player_id: int
+    ) -> Optional[list]:
+        """`previousEvent` + `nextEvent` del jugador; None si falla."""
+        if player_id in self._near_cache:
+            return self._near_cache[player_id]
+        try:
+            response = await client.get(
+                f"https://{self._api_host}/api/tennis/team/{player_id}" "/events/near",
+                headers={
+                    "X-RapidAPI-Key": self._api_key,
+                    "X-RapidAPI-Host": self._api_host,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            events: Optional[list] = [
+                ev for ev in (data.get("previousEvent"), data.get("nextEvent")) if ev
+            ]
+        except httpx.HTTPError as exc:
+            if rate_limit_from(exc):
+                mark_rate_limited(_PROVIDER_NAME)
+                logger.warning("[TennisApi1] Cuota agotada; se omite hasta mañana")
+            else:
+                logger.warning(
+                    "[TennisApi1] Error en events/near (%s): %s", player_id, exc
+                )
+            events = None
+        self._near_cache[player_id] = events
+        return events
+
     async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:
         if is_rate_limited(_PROVIDER_NAME):
             return None
@@ -208,6 +311,47 @@ class TennisApi1Provider:
         saw_error = False
 
         async with httpx.AsyncClient(timeout=15) as client:
+            # 1) Vía por jugador (~2 llamadas): /search resuelve el id —
+            #    incluidos nombres parciales ("chidek" -> "Chidekh") — y
+            #    events/near trae su partido anterior y siguiente.
+            name = _searchable_name(team_hint)
+            search = await self._fetch_search(client, name)
+            if search is None:
+                return None  # error de API: no se marca missed
+            player_id = _best_player_id(name, search)
+            if player_id is not None:
+                near = await self._fetch_near(client, player_id)
+                if near is None:
+                    return None
+                for event in near:
+                    ts = event.get("startTimestamp")
+                    if ts:
+                        played = datetime.fromtimestamp(ts, timezone.utc).replace(
+                            tzinfo=None
+                        )
+                        if abs(played - date) > _PLAYER_DATE_TOLERANCE:
+                            continue
+                    match = _parse_event(event)
+                    if match is None:
+                        if _event_matches_hint(event, team_hint):
+                            saw_unfinished = True
+                        continue
+                    score = max(
+                        _pair_similar(team_hint, match.home_team),
+                        _pair_similar(team_hint, match.away_team),
+                    )
+                    if score > best_score:
+                        best_score = score
+                        best_match = match
+                if best_match and best_score >= _MIN_PLAYER_SIMILARITY:
+                    return best_match
+                if saw_unfinished:
+                    # Su partido está en near pero en vivo: no se marca
+                    # missed ni se sigue gastando en el barrido.
+                    return None
+
+            # 2) Barrido por categorías (fallback: jugador no
+            #    encontrado o sus eventos near no cubren la fecha).
             for offset in _DATE_OFFSETS:
                 day = date + timedelta(days=offset)
                 for category_id in _CATEGORIES:
