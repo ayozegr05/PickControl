@@ -21,8 +21,15 @@ from app.schemas.analisis import (
     AnalisisGlobal,
     StatsBloque,
 )
+from app.schemas.odds import OddsStatsBloque
+from app.services.odds.compare import (
+    ChannelOddsStats,
+    aggregate_odds_stats,
+    compare_picks,
+)
 from app.services.pick_service import (
     InformanteStatsResult,
+    _es_pick_simple,
     calcular_stats,
     calcular_stats_combinadas,
     calcular_stats_parsed,
@@ -47,6 +54,10 @@ def _media(valores: list[float | None]) -> float | None:
     return round(sum(nums) / len(nums), 2) if nums else None
 
 
+def _odds_bloque(stats: ChannelOddsStats) -> OddsStatsBloque:
+    return OddsStatsBloque(**vars(stats))
+
+
 @router.get("/analisis", response_model=AnalisisGlobal)
 async def analisis_global(
     session: AsyncSession = Depends(get_session),
@@ -65,6 +76,11 @@ async def analisis_global(
     for parsed in parsed_picks:
         if parsed.informante_id is not None:
             parsed_by_informante.setdefault(parsed.informante_id, []).append(parsed)
+
+    # Auditoría de cuotas: una sola pasada por lotes sobre todos los
+    # picks simples; luego cada canal agrega los suyos (sin N+1).
+    simples = [p for p in parsed_picks if _es_pick_simple(p)]
+    odds_comparisons = await compare_picks(session, simples)
 
     picks_by_informante: dict[int, list[Pick]] = {}
     for pick in picks:
@@ -92,6 +108,12 @@ async def analisis_global(
                 ),
                 cuota_media_mia=_media([p.cuota for p in jugados]),
                 combinadas=_to_bloque(calcular_stats_combinadas(telegram)),
+                odds=_odds_bloque(
+                    aggregate_odds_stats(
+                        [p for p in telegram if _es_pick_simple(p)],
+                        odds_comparisons,
+                    )
+                ),
             )
         )
 
@@ -129,4 +151,5 @@ async def analisis_global(
         totales_tipster=_to_bloque(calcular_stats_parsed(parsed_picks)),
         totales_yo=_to_bloque(calcular_stats(picks)),
         totales_combinadas=_to_bloque(calcular_stats_combinadas(parsed_picks)),
+        totales_odds=_odds_bloque(aggregate_odds_stats(simples, odds_comparisons)),
     )

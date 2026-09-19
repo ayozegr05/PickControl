@@ -61,8 +61,10 @@ class PickRead(SQLModel):
     tipo_de_apuesta: str
     acierto: Acierto
     casa: str
-    cantidad_apostada: float
-    cuota: float
+    # En picks de Telegram pueden ser None (el tipster no siempre publica
+    # cuota o stake): nunca se inventan valores por defecto.
+    cantidad_apostada: Optional[float] = None
+    cuota: Optional[float] = None
     fecha: datetime
     source: PickSource
     ganancia: Optional[float] = None

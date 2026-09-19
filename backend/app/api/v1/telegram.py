@@ -14,6 +14,7 @@ from app.models.parsed_pick import ParsedPick
 from app.models.pick import Acierto, Pick, PickSource
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.models.user import User
+from app.schemas.odds import PickOddsRead
 from app.schemas.pick import ParsedPickRead, PickRead
 from app.services.odds.compare import compare_pick
 from app.services.pick_service import calcular_ganancia, to_naive_utc
@@ -29,27 +30,6 @@ class ParsedPickAciertoUpdate(BaseModel):
     # Apuesta anulada/devuelta (p. ej. "push" en hándicap/over-under).
     # Si es True, `acierto` se ignora y se guarda como None.
     anulada: bool = False
-
-
-class PickOddsRead(BaseModel):
-    """Comparación de la cuota del tipster con la cuota real de mercado.
-
-    `mapeado=False` cuando el mercado del pick no tiene equivalente en
-    el proveedor de odds (props de jugador, mercados no cubiertos):
-    las cuotas quedan NULL en vez de inventarse.
-    """
-
-    mapeado: bool
-    mercado_api: str | None = None
-    opcion_api: str | None = None
-    linea_api: str | None = None
-    cuota_tipster: float | None = None
-    cuota_apertura: float | None = None
-    cuota_publicacion: float | None = None
-    cuota_cierre: float | None = None
-    capturas: int = 0
-    cuota_disponible: bool | None = None
-    clv_pct: float | None = None
 
 
 @router.get("/telegram/raw-messages", response_model=list[TelegramRawMessage])

@@ -55,6 +55,13 @@ diario pg_dump a `backend/backups/` con retención 14 días, ignorado por git).
   si `linea` difiere, nunca se fusionan.
 - **Boletos liquidados** (sello GANADOR / línea de premio pagado) se rechazan:
   son marketing del tipster, no picks abiertos.
+- **Par foto-boleto + texto**: los tipsters publican el slip (rival + cuota
+  en OCR) y el pick (stake + título) como mensajes separados a ~2-5 min.
+  `processor.py` los empareja en ventana de 10 min (`_PAIR_WINDOW`,
+  `_looks_like_slip`): el texto se extrae junto al OCR del slip; si la foto
+  ya creó pick se enriquece (nunca duplicar), y en catch-up la foto busca el
+  pick del texto hacia adelante. Los picks emparejados llevan `metodo` con
+  sufijo `+par`.
 - **Retos** (`parsed_picks.es_reto`): tabla y stats aparte.
 - **Combinadas** (self-FK `parsed_picks.combinada_id`, ADR en la migración
   `f1a2b3c4d5e6`): padre `es_combinada=True` + patas como filas normales.

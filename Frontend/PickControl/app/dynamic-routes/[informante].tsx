@@ -24,6 +24,8 @@ import { deletePick, updatePick } from "@/src/api/picks.api";
 import {
   updateParsedPickAcierto,
   jugarParsedPick,
+  getPickOdds,
+  PickOdds,
 } from "@/src/api/parsed-picks.api";
 import { ApiError } from "@/src/api/client";
 import { InformanteStats } from "@/src/types/informante.types";
@@ -48,6 +50,9 @@ export default function InformantDetail() {
     useState<PickItem | null>(null);
   const [selectedTelegramPick, setSelectedTelegramPick] =
     useState<PickItem | null>(null);
+  // Auditoría de cuotas del pick abierto en el modal (tipster vs mercado).
+  const [pickOdds, setPickOdds] = useState<PickOdds | null>(null);
+  const [pickOddsLoading, setPickOddsLoading] = useState(false);
   // "Yo también la jugué": mini-formulario para registrar la apuesta real
   // del usuario (cantidad, cuota y casa conseguidas pueden diferir de las
   // publicadas por el tipster).
@@ -84,6 +89,26 @@ export default function InformantDetail() {
   useEffect(() => {
     fetchInformanteData();
   }, [informante]);
+
+  // Al abrir el detalle de un pick de Telegram, pide su comparación de
+  // cuotas (tipster vs mercado) para la sección "Cuota de mercado".
+  useEffect(() => {
+    setPickOdds(null);
+    if (!selectedTelegramPick) return;
+    let cancelled = false;
+    setPickOddsLoading(true);
+    getPickOdds(selectedTelegramPick.id)
+      .then((odds) => {
+        if (!cancelled) setPickOdds(odds);
+      })
+      .catch((err) => console.error("Error al obtener cuotas:", err))
+      .finally(() => {
+        if (!cancelled) setPickOddsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTelegramPick]);
 
   useEffect(() => {
     if (data) {
@@ -177,14 +202,14 @@ export default function InformantDetail() {
 
   // Función para calcular las ganancias de cada apuesta (en euros)
   const calcularGanancia = (
-    cantidadApostada: number,
-    cuota: number,
+    cantidadApostada: number | null,
+    cuota: number | null,
     acierto: Acierto
   ) => {
     if (!apuestas || apuestas.length === 0) {
       return 0; // Devolvemos número en lugar de string
     }
-    if (acierto === "Pending") {
+    if (acierto === "Pending" || cantidadApostada == null || cuota == null) {
       return 0;
     }
     if (acierto === "True") {
@@ -779,14 +804,18 @@ export default function InformantDetail() {
                           <Text
                             style={[styles.cellText, { fontWeight: "bold" }]}
                           >
-                            {Number(apuesta.cuota).toFixed(2)}
+                            {apuesta.cuota != null
+                              ? Number(apuesta.cuota).toFixed(2)
+                              : "—"}
                           </Text>
                         </View>
                         <View style={[styles.tableCell, styles.border]}>
                           <Text
                             style={[styles.cellText, { fontWeight: "bold" }]}
                           >
-                            {Number(apuesta.cantidadApostada).toFixed(2)}
+                            {apuesta.cantidadApostada != null
+                              ? Number(apuesta.cantidadApostada).toFixed(2)
+                              : "—"}
                           </Text>
                         </View>
                         <View style={[styles.tableCell, styles.border]}>
@@ -832,8 +861,10 @@ export default function InformantDetail() {
                       </Text>
                       <Text style={styles.retoMeta}>
                         {formatearFecha(reto.fecha)} · cuota{" "}
-                        {Number(reto.cuota).toFixed(2)} ·{" "}
-                        {renderPronosticoTelegram(reto.acierto)}
+                        {reto.cuota != null
+                          ? Number(reto.cuota).toFixed(2)
+                          : "—"}{" "}
+                        · {renderPronosticoTelegram(reto.acierto)}
                       </Text>
                     </TouchableOpacity>
                   ))}
@@ -1102,12 +1133,16 @@ export default function InformantDetail() {
                       </View>
                       <View style={[styles.tableCell, styles.border]}>
                         <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                          {Number(apuesta.cuota).toFixed(2)}
+                          {apuesta.cuota != null
+                            ? Number(apuesta.cuota).toFixed(2)
+                            : "—"}
                         </Text>
                       </View>
                       <View style={[styles.tableCell, styles.border]}>
                         <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                          {Number(apuesta.cantidadApostada).toFixed(2)}
+                          {apuesta.cantidadApostada != null
+                            ? Number(apuesta.cantidadApostada).toFixed(2)
+                            : "—"}
                           <Text>€</Text>
                         </Text>
                       </View>
@@ -1230,9 +1265,16 @@ export default function InformantDetail() {
                       Mercado: {selectedTelegramPick.tipoDeApuesta || "-"}
                     </Text>
                     <Text style={styles.detailRow}>
-                      Cuota: {Number(selectedTelegramPick.cuota).toFixed(2)} ·
-                      Stake:{" "}
-                      {Number(selectedTelegramPick.cantidadApostada).toFixed(2)}
+                      Cuota:{" "}
+                      {selectedTelegramPick.cuota != null
+                        ? Number(selectedTelegramPick.cuota).toFixed(2)
+                        : "—"}{" "}
+                      · Stake:{" "}
+                      {selectedTelegramPick.cantidadApostada != null
+                        ? Number(selectedTelegramPick.cantidadApostada).toFixed(
+                            2
+                          )
+                        : "—"}
                       u
                     </Text>
                     <Text style={styles.detailRow}>
@@ -1244,6 +1286,68 @@ export default function InformantDetail() {
                       </Text>
                     ) : null}
                   </View>
+
+                  {pickOddsLoading ? (
+                    <ActivityIndicator
+                      size="small"
+                      color="#ff9f1c"
+                      style={{ marginVertical: 8 }}
+                    />
+                  ) : pickOdds ? (
+                    <View style={styles.oddsBox}>
+                      <Text style={styles.oddsTitle}>Cuota de mercado</Text>
+                      {pickOdds.mapeado ? (
+                        <>
+                          <Text style={styles.oddsRow}>
+                            {pickOdds.mercado_api}
+                            {pickOdds.opcion_api
+                              ? ` · ${pickOdds.opcion_api}`
+                              : ""}
+                            {pickOdds.linea_api
+                              ? ` (${pickOdds.linea_api})`
+                              : ""}
+                          </Text>
+                          <Text style={styles.oddsRow}>
+                            Tipster{" "}
+                            {pickOdds.cuota_tipster?.toFixed(2) ?? "-"} ·
+                            Apertura{" "}
+                            {pickOdds.cuota_apertura?.toFixed(2) ?? "-"} · Al
+                            publicar{" "}
+                            {pickOdds.cuota_publicacion?.toFixed(2) ?? "-"} ·
+                            Cierre {pickOdds.cuota_cierre?.toFixed(2) ?? "-"}
+                          </Text>
+                          <View style={styles.oddsBadges}>
+                            {pickOdds.cuota_disponible === false && (
+                              <Text style={styles.oddsBadgeInflada}>
+                                ⚠ Cuota inflada
+                              </Text>
+                            )}
+                            {pickOdds.cuota_disponible === true && (
+                              <Text style={styles.oddsBadgeOk}>
+                                ✓ Cuota real
+                              </Text>
+                            )}
+                            {pickOdds.clv_pct !== null && (
+                              <Text
+                                style={
+                                  pickOdds.clv_pct >= 0
+                                    ? styles.oddsBadgeOk
+                                    : styles.oddsBadgeInflada
+                                }
+                              >
+                                CLV {pickOdds.clv_pct > 0 ? "+" : ""}
+                                {pickOdds.clv_pct.toFixed(1)}%
+                              </Text>
+                            )}
+                          </View>
+                        </>
+                      ) : (
+                        <Text style={styles.oddsRowMuted}>
+                          Sin mercado comparable en el proveedor
+                        </Text>
+                      )}
+                    </View>
+                  ) : null}
 
                   {apuestas.some(
                     (a) => a.parsedPickId === selectedTelegramPick.id
@@ -1485,6 +1589,46 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: "#ddd",
     marginBottom: 6,
+  },
+  oddsBox: {
+    alignSelf: "stretch",
+    backgroundColor: "#141414",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#333",
+    padding: 10,
+    marginBottom: 10,
+  },
+  oddsTitle: {
+    fontSize: 12,
+    color: "#ff9f1c",
+    fontWeight: "bold",
+    textTransform: "uppercase",
+    marginBottom: 6,
+  },
+  oddsRow: {
+    fontSize: 13,
+    color: "#ddd",
+    marginBottom: 3,
+  },
+  oddsRowMuted: {
+    fontSize: 13,
+    color: "#888",
+  },
+  oddsBadges: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 4,
+  },
+  oddsBadgeOk: {
+    fontSize: 12,
+    color: "#4caf50",
+    fontWeight: "bold",
+  },
+  oddsBadgeInflada: {
+    fontSize: 12,
+    color: "#f44336",
+    fontWeight: "bold",
   },
   detailButtons: {
     flexDirection: "row",

@@ -32,6 +32,14 @@ _HINT_MARGIN_SECONDS = 5.0
 
 _RETRY_HINT = re.compile(r"try again in ([\d.]+)\s*(ms|s)\b", re.IGNORECASE)
 
+# 429 con código `credit_balance_exhausted` / `insufficient_quota` no se
+# resuelve esperando: falta saldo en la cuenta y reintentar es inútil.
+_NO_CREDITS = ("credit_balance_exhausted", "insufficient_quota")
+
+
+def _is_credit_exhausted(exc: RateLimitError) -> bool:
+    return any(code in str(exc) for code in _NO_CREDITS)
+
 
 def _retry_delay(exc: RateLimitError, attempt: int) -> float:
     """Segundos a esperar: hint del error + margen, o backoff por intento."""
@@ -60,7 +68,7 @@ async def call_with_retry(
         try:
             return await factory()
         except RateLimitError as exc:
-            if attempt == max_retries:
+            if attempt == max_retries or _is_credit_exhausted(exc):
                 raise
             delay = _retry_delay(exc, attempt)
             logger.warning(

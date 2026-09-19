@@ -24,8 +24,10 @@ export type RawPick = {
   tipo_de_apuesta: string;
   acierto: Acierto;
   casa: string;
-  cantidad_apostada: number;
-  cuota: number;
+  /** En picks de Telegram pueden ser null (el tipster no siempre
+   * publica cuota o stake): el backend no inventa valores. */
+  cantidad_apostada: number | null;
+  cuota: number | null;
   fecha: string;
   source: PickSource;
   ganancia?: number | null;

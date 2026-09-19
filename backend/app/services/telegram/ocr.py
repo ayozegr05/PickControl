@@ -54,7 +54,14 @@ async def extract_text_from_image(image_path: str, api_key: str | None) -> str |
                                 "type": "text",
                                 "text": (
                                     "Extrae TODO el texto visible de la imagen. "
-                                    "Devuelve solo el texto plano, sin comentarios."
+                                    "Devuelve solo el texto plano, sin comentarios. "
+                                    "Si la imagen es un boleto de apuestas ya "
+                                    "liquidado/cobrado — lo reconocerás por un "
+                                    "sello o marca grande encima del boleto: un "
+                                    "check/tick (✓) de cualquier color "
+                                    "(habitualmente verde), la palabra "
+                                    "GANADOR/GANADA/WON, o un premio ya pagado — "
+                                    "escribe como primera línea 'SELLO: GANADOR'."
                                 ),
                             },
                             {"type": "image_url", "image_url": {"url": data_url}},

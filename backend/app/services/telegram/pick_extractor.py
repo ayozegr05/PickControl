@@ -172,7 +172,9 @@ def _extract_linea(seleccion: str) -> Optional[float]:
     if not seleccion:
         return None
 
-    signed_match = re.search(r"([+-])\s?(\d+(?:[.,]\d+)?)", seleccion)
+    # El signo no puede ir pegado a otro dígito: "0-0" es un marcador,
+    # no el hándicap "-0" (sin el lookbehind salía linea=-0.0).
+    signed_match = re.search(r"(?<!\d)([+-])\s?(\d+(?:[.,]\d+)?)", seleccion)
     if signed_match:
         sign, value = signed_match.groups()
         number = float(value.replace(",", "."))
@@ -218,7 +220,14 @@ _LEG_BULLET_PATTERN = re.compile(r"^\s*[✔✅☑•·▪►➤‣\-–—*]\s*(
 _LEG_NOISE_PATTERN = re.compile(
     r"cuota|stake|unidades|importe|ganancias|ganaste|apostad|"
     r"pron[oó]stico|combinad|acumulador|crea(?:r)?\s|"
-    r"^\d{1,2}\s*[:./-]\s*\d{1,2}",
+    # Footer de juego responsable del boleto ("Apuesta con
+    # responsabilidad. +18") colaba como pata en slips bet365.
+    r"responsabilidad|juega\s+seguro|\+18\b|"
+    # Una línea con viñeta que es un link/CTA ("[Ya lo pegamos](t.me/…)",
+    # "🛍 premiumpay.pro/…") nunca es una selección.
+    r"https?://|t\.me/|\]\(|"
+    # Escalera de reto "1⃣PASO 30€ - 96€": dinero→dinero, no selección.
+    r"\d[\d.,]*\s*€\s*[-–—➜→]+\s*\d[\d.,]*\s*€|" r"^\d{1,2}\s*[:./-]\s*\d{1,2}",
     re.IGNORECASE,
 )
 
@@ -257,11 +266,35 @@ def _classify_leg_market(leg: str) -> Optional[str]:
     return None
 
 
+# Una línea que menciona la competición no es un enfrentamiento:
+# "🎾 TENIS - Copa davis" casa con el patrón "A - B" pero es la
+# cabecera del torneo. Un cruce real nombra dos participantes, no
+# vocabulario de competición.
+_COMPETITION_WORD = re.compile(
+    r"\b(?:copa|liga|league|divisi[oó]n|challenger|atp|wta|itf|"
+    r"champions|euroleague|euroliga|nba|torneo|premier|bundesliga|"
+    r"eredivisie|serie\s+a|ligue|mls|europa\s+league|segunda|primera)\b",
+    re.IGNORECASE,
+)
+
+# En los slips el mercado va tras el nombre separado por guion
+# ("Zizou Bergs - Ganará el encuentro"): el lado derecho no es un
+# participante. Palabras de mercado que nunca son nombre de equipo.
+_MARKET_WORD = re.compile(
+    r"\b(?:ganar[áa]?|ganador|vencedor|total|resultado|ambos|"
+    r"m[aá]s|menos|h[aá]ndicap|empate|marca|descanso|set|juegos|"
+    r"goles|c[oó]rners?|tarjetas?)\b",
+    re.IGNORECASE,
+)
+
+
 def _extract_eventos(lines: list[str]) -> list[str]:
-    """Líneas "EquipoA - EquipoB" / "A vs B" del mensaje, en orden.
+    """Líneas "EquipoA - EquipoB" / "A vs B" / "A v B" del mensaje, en orden.
 
     Se ignoran las líneas con viñeta: una pata tipo "Ambos equipos
     marcan - Sí" casa con el patrón de evento pero es una selección.
+    También las cabeceras de competición ("TENIS - Copa davis"): casan
+    con "A - B" sin ser un cruce.
     """
     eventos = []
     for line in lines:
@@ -269,9 +302,20 @@ def _extract_eventos(lines: list[str]) -> list[str]:
             continue
         match = _TEAM_VS_TEAM_PATTERN.search(line)
         if match:
-            eventos.append(match.group(0))
-        elif re.search(r"\bvs\.?\b", line, re.IGNORECASE):
-            eventos.append(line.strip())
+            # El filtro va sobre el match, no la línea: "LIGA: Alavés -
+            # Valencia" conserva el cruce, "TENIS - Copa davis" no.
+            # Y "Zizou Bergs - Ganará el encuentro" del slip tampoco:
+            # "Ganará" es mercado, no participante.
+            if not _COMPETITION_WORD.search(match.group(0)) and not _MARKET_WORD.search(
+                match.group(0)
+            ):
+                eventos.append(match.group(0))
+        elif re.search(r"\bv(?:s)?\.?\b", line, re.IGNORECASE):
+            # "A vs B" del tipster o "A v B" del boleto (OCR):
+            # "Dominko/Sesko v Cukierman/Shimanov". Aquí la línea
+            # entera es el evento, así que el filtro va sobre ella.
+            if not _COMPETITION_WORD.search(line):
+                eventos.append(line.strip())
     return eventos
 
 
@@ -460,19 +504,33 @@ _POSITIVE_PATTERNS = [
 
 # Dos nombres propios separados por un guion (p. ej. "Levante - Athletic de
 # Bilbao"), la forma más habitual de anunciar un partido sin usar "vs".
-_TEAM_VS_TEAM_PATTERN = re.compile(
-    r"\b[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.]*(?:\s+[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.]*)*"
-    r"\s-\s"
-    r"[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.]*(?:\s+[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.]*)*"
+# Los conectores en minúscula ("de", "del", "la"...) forman parte del
+# nombre: sin ellos "Celta de Vigo - Racing de Santander" se capturaba
+# truncado como "Vigo - Racing".
+_TEAM_NAME = (
+    r"[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.]*"
+    r"(?:\s+(?:(?:de|del|la|los|las|y|da|di|van|von)\s+)?"
+    r"[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.]*)*"
 )
+_TEAM_VS_TEAM_PATTERN = re.compile(rf"\b{_TEAM_NAME}\s-\s{_TEAM_NAME}")
 
 _NEGATIVE_PATTERNS = [
     r"\bpromo\b",
     r"\bacceso\b",
-    r"\bplazas\b",
+    r"\bacc(?:ede|eso)\b",
+    r"\bplazas?\b",
     r"\bsorteo\b",
     r"\bmega\s*reto\b",
+    r"\bretos?\s+del\s+año\b",
     r"\breto\s*especial\b",
+    # Anuncios de escalera de reto/afiliado: "PASO 30€ - 96€",
+    # "RETO 30€ ➜ 10.000€", "empieza a ganar", premiumpay. Una
+    # apuesta real nunca expresa una progresión dinero→dinero
+    # ni vende plazas — y si trajera cuota/stake propios, la
+    # señal fuerte seguiría ganando.
+    r"\d+[\d.,]*\s*€\s*[-–—➜→]+\s*\d+[\d.,]*\s*€",
+    r"\bempieza\s+a\s+ganar\b",
+    r"premiumpay",
     r"\bbuenos\s*días\b",
     r"\bgratis\b",
     r"\benlace\b",
@@ -495,6 +553,15 @@ _NEGATIVE_PATTERNS = [
     r"\bganad[oa]\b",
     r"\bconseguimos\b",
     r"\bclavamos\b",
+    # Caption de celebración bajo el boleto verde reposteado ("otro
+    # verde para adentro", "seguimos sumando"). Solo rechazan si el
+    # mensaje no trae cuota/stake propios — un pick real que dijera
+    # "a por otro verde" + "CUOTA 1.50" sigue entrando.
+    r"\botro\s+verde\b",
+    r"\bseguimos\s+sumando\b",
+    r"\btotal\s+ganado\b",
+    r"\bpara\s+adentro\b",
+    r"haceros\s+ganar",
 ]
 
 # Señales estructurales fuertes: "cuota"/"stake"/"unidades" seguidas de un
@@ -513,7 +580,10 @@ def _looks_like_bet(text: str) -> bool:
     if not text:
         return False
 
-    lowered = text.lower()
+    # Telegram envuelve en markdown ("__Cuota 1.50__"): "_" es carácter
+    # de palabra y rompe los \b de los patrones ("__cuota" no tiene
+    # borde antes de "cuota"). Se quita el formato antes de evaluar.
+    lowered = re.sub(r"[*_~`]+", "", text).lower()
     if any(re.search(pattern, lowered) for pattern in _STRONG_PICK_PATTERNS):
         return True
 
@@ -566,7 +636,8 @@ _TENIS_SIGNAL = re.compile(
 )
 _FUTBOL_SIGNAL = re.compile(
     r"f[úu]tbol|la\s*liga|premier|champions|bundesliga|serie\s*a\b|"
-    r"ligue\s*1\b|eredivisie|segunda\s*divisi[oó]n|copa\s+del\s+rey",
+    r"ligue\s*1\b|eredivisie|segunda\s*divisi[oó]n|copa\s+del\s+rey|"
+    r"\bgoles?\b",
     re.IGNORECASE,
 )
 _BALONCESTO_SIGNAL = re.compile(
@@ -609,12 +680,28 @@ def _detect_deporte(text: Optional[str]) -> Optional[str]:
     return None
 
 
+# Cola de cabecera en mayúsculas pegada a la selección ("Menos de 3,5
+# goles ESPAÑA"): el tipster pone "pick + competición" en la misma
+# línea. Solo se recorta si queda texto en minúscula — una selección
+# íntegra en mayúsculas ("MALLORCA RESULTADO SIN EMPATE") se conserva.
+_TRAILING_CAPS = re.compile(r"(?:\s+[A-ZÁÉÍÓÚÑ]+)+\s*$")
+
+
+def _strip_trailing_competition(seleccion: Optional[str]) -> Optional[str]:
+    if not seleccion:
+        return seleccion
+    trimmed = _TRAILING_CAPS.sub("", seleccion)
+    if trimmed and re.search(r"[a-záéíóúñ]", trimmed):
+        return trimmed.strip()
+    return seleccion
+
+
 def _normalize_pick(pick: ExtractedPick, text: str) -> ExtractedPick:
     """Limpieza final común a reglas y LLM: quita markdown/emojis de los
     campos de texto e infiere `deporte` de las señales del mensaje si el
     extractor no lo rellenó (las pistas deportivas suelen estar en la
     cabecera — "CHALL RENNES 🎾" — no en la selección)."""
-    pick.seleccion = _clean_text_field(pick.seleccion)
+    pick.seleccion = _strip_trailing_competition(_clean_text_field(pick.seleccion))
     pick.evento = _clean_text_field(pick.evento)
     if pick.es_apuesta and not pick.deporte:
         pick.deporte = _detect_deporte(text)
@@ -624,6 +711,26 @@ def _normalize_pick(pick: ExtractedPick, text: str) -> ExtractedPick:
     for pata in pick.patas:
         _normalize_pick(pata, text)
     return pick
+
+
+# Palabras que delatan la línea del pick. Con límites de palabra (\b) —
+# el matching por substring confundía "mover" con "over" y "ganar" con
+# "gana" — y en español, porque los tipsters escriben "Menos de 3,5
+# goles" o "Más de 11 córners", no "under"/"over". "ganar" se excluye a
+# propósito: aparece en la prosa del análisis ("necesita ganar"), no en
+# la etiqueta del pick.
+_SELECCION_KEYWORD = re.compile(
+    r"\b(?:gana(?:r[aá])?|h[aá]ndicap|handicap|over|under|"
+    r"menos\s+de|m[aá]s\s+de|ambos\s+marcan|ambas\s+marcan|empate|"
+    r"doble\s+oportunidad|c[oó]rners?|corners?|tarjetas?|"
+    r"resultado\s+sin\s+empate|draw\s+no\s+bet)\b|"
+    r"(?<!\d)[+-]\s*\d+(?:[.,]\d+)?",
+    re.IGNORECASE,
+)
+
+# Una selección es una etiqueta corta ("Menos de 3,5 goles", "Bergs
+# gana"); por encima de esto es prosa del análisis.
+_SELECCION_MAX_LEN = 120
 
 
 def _rule_extract(
@@ -658,18 +765,15 @@ def _rule_extract(
         low = line.lower()
         if promo_line.search(low):
             continue
-        if any(
-            keyword in low
-            for keyword in (
-                "gana",
-                "hándicap",
-                "handicap",
-                "over",
-                "under",
-                "+1.5",
-                "-1.5",
-            )
-        ) and not low.startswith(("cuota", "stake", "unidades")):
+        # Una selección es una etiqueta corta ("Menos de 3,5 goles");
+        # un párrafo de análisis nunca lo es. Sin la guarda, la prosa
+        # colaba por keywords sueltas ("un Celta que necesita ganar")
+        # y se guardaba entera como `seleccion`.
+        if len(line) > _SELECCION_MAX_LEN:
+            continue
+        if _SELECCION_KEYWORD.search(low) and not low.startswith(
+            ("cuota", "stake", "unidades")
+        ):
             seleccion = line
             break
 
@@ -685,6 +789,7 @@ def _rule_extract(
     return ExtractedPick(
         es_apuesta=True,
         evento=evento,
+        mercado=_classify_leg_market(seleccion),
         seleccion=seleccion,
         cuota=float(cuota_match.group(1).replace(",", ".")),
         stake=float(stake_match.group(1).replace(",", ".")),
@@ -725,7 +830,7 @@ Reglas:
   Una apuesta abierta real es una recomendación de algo que AÚN no se ha jugado.
 - "seleccion" es lo recomendado (ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5"). Si es una combinada/"crear apuesta" (varias selecciones en un mismo boleto), únelas con " + " (ej. "Más de 1 gol + Más de 2 tarjetas").
 - "patas": SOLO si es una combinada/"crear apuesta"/acumulador (varias selecciones en un mismo boleto): un array con UN objeto por selección del boleto, cada uno con la misma estructura {"seleccion", "evento", "mercado", "linea", "deporte", "fecha_evento", "cuota"} y las mismas reglas de formato ("cuota" por pata solo si aparece explícita; si no, null). En una combinada cada pata puede ser de un partido distinto (rellena su "evento" propio) o del mismo partido (bet-builder: repite el mismo "evento" en todas). Si NO es combinada, "patas" = null. Si solo puedes identificar UNA selección, NO es combinada: "patas" = null y trátala como pick simple.
-- "evento" es el partido/competición (ej. "Tenis - Challenger Francia - Cassis"). Si el texto muestra un "EquipoA - EquipoB" o "EquipoA vs EquipoB", usa ese formato completo con ambos equipos — nunca solo uno.
+- "evento" es el enfrentamiento concreto (ej. "Sevilla - Barcelona", "Zizou Bergs vs Jurij Rodionov"). Si el texto muestra "EquipoA - EquipoB" o "EquipoA vs EquipoB", usa ese formato completo con ambos — nunca solo uno. Si los dos participantes aparecen sueltos en el texto sin "vs" (p. ej. el rival solo se menciona en el análisis), forma el evento con ambos nombres ("Bergs vs Rodionov"). Si SOLO aparece la competición ("Copa Davis", "LaLiga") sin los dos participantes, usa la competición tal cual (sirve de pista al verificador en tenis).
 - "mercado" es el tipo de apuesta: usa siempre una de estas etiquetas si aplica: "ganador", "hándicap asiático", "over/under" (o "over/under goles", "over/under juegos" según el deporte). Si es una combinada/"crear apuesta" con varias selecciones, usa "combinada". Si no encaja en ninguna, describe brevemente el mercado.
 - "deporte" debe ser una palabra normalizada y simple: "fútbol", "tenis", "baloncesto", etc.
 - "linea" es el valor numérico de la línea cuando el mercado es hándicap asiático u over/under (ej. 1.5, -1.5, 2.5). Con signo si es hándicap (+1.5 a favor del equipo de "seleccion", -1.5 en contra). Sin signo si es over/under. Si el mercado no tiene línea (p. ej. "ganador"), déjalo null.
@@ -792,7 +897,9 @@ async def _llm_extract(
 # selección y cuota. Se busca sobre el texto original SIN pasar a
 # minúsculas para no confundir el sello con el mercado "ganador" de un
 # pick real.
-_SETTLED_TICKET_PATTERN = re.compile(r"\bGANADOR\b|\bGANADA\b|APUESTA\s+GANADA")
+_SETTLED_TICKET_PATTERN = re.compile(
+    r"\bGANADOR\b|\bGANADA\b|APUESTA\s+GANADA|\bWON\b|(?i:\breturned\b)"
+)
 
 # Boleto cobrado SIN el sello (el OCR a veces lo pierde): la línea de
 # premio pagado es "<importe>€ Ganancias" — importe DELANTE de la

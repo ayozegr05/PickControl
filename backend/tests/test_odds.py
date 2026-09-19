@@ -14,7 +14,13 @@ from app.models.odds_snapshot import OddsEvent, OddsSnapshot
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.services.odds.base import odds_to_decimal
-from app.services.odds.compare import compare_pick, map_pick_choices
+from app.services.odds.compare import (
+    PickOddsComparison,
+    aggregate_odds_stats,
+    compare_pick,
+    compare_picks,
+    map_pick_choices,
+)
 
 EVENT = "sofascore:123"
 
@@ -306,3 +312,119 @@ async def test_endpoint_odds_pick_no_existe(client, auth_headers):
         "/api/v1/telegram/parsed-picks/9999/odds", headers=auth_headers
     )
     assert r.status_code == 404
+
+
+# --- compare_picks (lotes) + aggregate_odds_stats ---------------------------
+
+
+async def test_compare_picks_lote(session):
+    """Dos picks del mismo evento se comparan con una sola pasada:
+    el mapeado sale y el que no casa queda mapeado=False."""
+    pick1 = await _seed_pick(session, "Betis gana")
+    pick2 = await _seed_pick(session, "Mérlín marca", mercado="jugador")
+    pick3 = await _seed_pick(session, "Getafe gana")
+    pick3.odds_event_id = None  # sin evento enlazado
+    session.add(_event())
+    session.add(_snap("Full time", "1", 1.6, apertura=1.7))
+    session.add(_snap("Full time", "2", 5.5, apertura=6.0))
+    await session.commit()
+
+    comparisons = await compare_picks(session, [pick1, pick2, pick3])
+
+    assert comparisons[pick1.id].mapeado is True
+    assert comparisons[pick1.id].opcion_api == "1"
+    assert comparisons[pick2.id].mapeado is False
+    assert comparisons[pick3.id].mapeado is False
+    assert comparisons[pick3.id].cuota_tipster == pick3.cuota
+
+
+def test_aggregate_odds_stats():
+    """Veredicto del canal: % inflada, CLV medio y % que bate el cierre
+    solo sobre los picks donde cada métrica era calculable."""
+    p_inflada = _pick("A")  # cuota 1.9 vs mercado 1.6 -> no existía
+    p_inflada.id = 1
+    p_real = _pick("B", cuota=1.5)
+    p_real.id = 2
+    p_sin_clv = _pick("C", cuota=None)
+    p_sin_clv.id = 3
+    p_sin_evento = _pick("D")
+    p_sin_evento.id = 4
+    p_sin_evento.odds_event_id = None
+
+    def comp(disponible, clv):
+        return PickOddsComparison(
+            mapeado=True,
+            cuota_disponible=disponible,
+            clv_pct=clv,
+        )
+
+    comparisons = {
+        1: comp(disponible=False, clv=10.0),
+        2: comp(disponible=True, clv=-5.0),
+        3: comp(disponible=None, clv=None),
+        4: PickOddsComparison(mapeado=False, cuota_tipster=1.9),
+    }
+    picks = [p_inflada, p_real, p_sin_clv, p_sin_evento]
+    stats = aggregate_odds_stats(picks, comparisons)
+
+    assert stats.picks == 4
+    assert stats.con_evento == 3
+    assert stats.mapeados == 3
+    assert stats.pct_mapeado == 100.0
+    assert stats.auditables == 2
+    assert stats.cuotas_infladas == 1
+    assert stats.pct_cuota_inflada == 50.0
+    assert stats.con_clv == 2
+    assert stats.clv_medio == 2.5  # (10 + -5) / 2
+    assert stats.pct_bate_cierre == 50.0
+
+
+def test_aggregate_odds_stats_vacio():
+    stats = aggregate_odds_stats([], {})
+    assert stats.picks == 0
+    assert stats.clv_medio is None
+    assert stats.pct_cuota_inflada == 0.0
+
+
+async def test_endpoint_odds_stats_informante(client, session, crear_canal):
+    canal = await crear_canal("CanalOdds")
+    pick = await _seed_pick(session)
+    pick.informante_id = canal.id
+    session.add(_event())
+    session.add(_snap("Full time", "1", 1.6, apertura=1.7))
+    await session.commit()
+
+    r = await client.get(f"/api/v1/informante/{canal.nombre}/odds-stats")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["informante"] == "CanalOdds"
+    odds = data["odds"]
+    assert odds["picks"] == 1
+    assert odds["con_evento"] == 1
+    assert odds["mapeados"] == 1
+    assert odds["auditables"] == 1
+    # Tipster @1.9 > mercado 1.6 al publicar -> cuota inflada.
+    assert odds["cuotas_infladas"] == 1
+    assert odds["pct_cuota_inflada"] == 100.0
+    assert odds["con_clv"] == 1
+    assert odds["clv_medio"] is not None
+
+
+async def test_endpoint_odds_stats_informante_no_existe(client):
+    r = await client.get("/api/v1/informante/Fantasma/odds-stats")
+    assert r.status_code == 404
+
+
+async def test_analisis_incluye_odds_por_canal(client, session, crear_canal):
+    canal = await crear_canal("CanalAnalisis")
+    pick = await _seed_pick(session)
+    pick.informante_id = canal.id
+    session.add(_event())
+    session.add(_snap("Full time", "1", 1.6, apertura=1.7))
+    await session.commit()
+
+    data = (await client.get("/api/v1/analisis")).json()
+    c = next(x for x in data["canales"] if x["informante"] == "CanalAnalisis")
+    assert c["odds"]["mapeados"] == 1
+    assert c["odds"]["cuotas_infladas"] == 1
+    assert data["totales_odds"]["mapeados"] >= 1

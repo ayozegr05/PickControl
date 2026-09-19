@@ -20,6 +20,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding="utf-8")
 
+from openai import RateLimitError
 from sqlalchemy import select
 
 from app.core.config import get_settings
@@ -76,15 +77,21 @@ async def main() -> None:
             return
 
         # Fase 2: extracción real (reglas + fallback LLM) y actualización.
-        updated = duplicated = still_not_bet = 0
+        updated = duplicated = still_not_bet = llm_blocked = 0
         for parsed, raw in passing:
             source_text = (raw.extracted_text or raw.text or "").strip()
-            pick = await extract_pick(
-                source_text,
-                settings.openai_api_key,
-                informante=raw.channel_name,
-                fecha_referencia=raw.received_at,
-            )
+            try:
+                pick = await extract_pick(
+                    source_text,
+                    settings.openai_api_key,
+                    informante=raw.channel_name,
+                    fecha_referencia=raw.received_at,
+                )
+            except RateLimitError:
+                # Sin créditos/cuota de OpenAI: este candidato necesitaba el
+                # LLM; se deja como rejected para un próximo intento.
+                llm_blocked += 1
+                continue
             if not pick or not pick.es_apuesta:
                 still_not_bet += 1
                 continue
@@ -92,7 +99,9 @@ async def main() -> None:
             if pick.fecha_evento is None and raw.received_at is not None:
                 pick.fecha_evento = raw.received_at
 
-            duplicate = await _find_duplicate_pick(session, raw.channel_name, pick)
+            duplicate = await _find_duplicate_pick(
+                session, raw.channel_name, pick, raw.received_at
+            )
             if duplicate:
                 duplicated += 1
                 print(
@@ -127,7 +136,8 @@ async def main() -> None:
         await session.commit()
         print(
             f"\nReclasificación completada: {updated} picks recuperados, "
-            f"{duplicated} duplicados, {still_not_bet} siguen sin ser apuesta."
+            f"{duplicated} duplicados, {still_not_bet} siguen sin ser apuesta, "
+            f"{llm_blocked} pendientes por falta de cuota de OpenAI."
         )
 
 

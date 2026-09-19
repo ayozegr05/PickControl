@@ -327,6 +327,42 @@ class PickOddsComparison:
     clv_pct: Optional[float] = None
 
 
+def _comparison_from_match(
+    pick: ParsedPick, matched: MatchedOdds
+) -> PickOddsComparison:
+    """Rellena los puntos temporales y derivadas sobre las filas de la
+    opción casada (apertura / publicación / cierre, disponible, CLV)."""
+    result = PickOddsComparison(
+        mapeado=True,
+        mercado_api=matched.market_name,
+        opcion_api=matched.choice_name,
+        linea_api=matched.choice_group,
+        cuota_tipster=pick.cuota,
+        capturas=len(matched.rows),
+    )
+    for row in matched.rows:
+        if row.cuota_apertura is not None:
+            result.cuota_apertura = row.cuota_apertura
+            break
+    last = matched.rows[-1]
+    result.cuota_cierre = last.cuota
+    if pick.created_at:
+        nearest = min(
+            matched.rows,
+            key=lambda r: abs((r.captured_at - pick.created_at).total_seconds()),
+        )
+        result.cuota_publicacion = nearest.cuota
+    if pick.cuota is not None and result.cuota_publicacion is not None:
+        result.cuota_disponible = pick.cuota <= result.cuota_publicacion
+    if (
+        pick.cuota is not None
+        and result.cuota_cierre is not None
+        and result.cuota_cierre > 0
+    ):
+        result.clv_pct = round((pick.cuota / result.cuota_cierre - 1.0) * 100.0, 2)
+    return result
+
+
 async def compare_pick(session: AsyncSession, pick: ParsedPick) -> PickOddsComparison:
     """Compara la cuota del pick con las snapshots de su evento.
 
@@ -357,31 +393,113 @@ async def compare_pick(session: AsyncSession, pick: ParsedPick) -> PickOddsCompa
     matched = map_pick_choices(pick, event, rows)
     if matched is None:
         return result
+    return _comparison_from_match(pick, matched)
 
-    result.mapeado = True
-    result.mercado_api = matched.market_name
-    result.opcion_api = matched.choice_name
-    result.linea_api = matched.choice_group
-    result.capturas = len(matched.rows)
 
-    for row in matched.rows:
-        if row.cuota_apertura is not None:
-            result.cuota_apertura = row.cuota_apertura
-            break
-    last = matched.rows[-1]
-    result.cuota_cierre = last.cuota
-    if pick.created_at:
-        nearest = min(
-            matched.rows,
-            key=lambda r: abs((r.captured_at - pick.created_at).total_seconds()),
+async def compare_picks(
+    session: AsyncSession, picks: list[ParsedPick]
+) -> dict[int, PickOddsComparison]:
+    """Comparación por lotes, para los agregados por canal.
+
+    Una sola query de `odds_events` y otra de `odds_snapshots` para
+    todos los picks: comparar pick a pick haría un N+1 de cientos de
+    consultas por canal. Devuelve pick.id -> comparación (los picks
+    sin evento o sin mercado equivalente quedan `mapeado=False`).
+    """
+    comparisons: dict[int, PickOddsComparison] = {
+        p.id: PickOddsComparison(mapeado=False, cuota_tipster=p.cuota)
+        for p in picks
+        if p.id is not None
+    }
+    event_ids = {p.odds_event_id for p in picks if p.odds_event_id}
+    if not event_ids:
+        return comparisons
+
+    events = {
+        e.event_ext_id: e
+        for e in (
+            await session.exec(
+                select(OddsEvent).where(OddsEvent.event_ext_id.in_(event_ids))
+            )
+        ).all()
+    }
+    rows_by_event: dict[str, list[OddsSnapshot]] = {}
+    for row in (
+        await session.exec(
+            select(OddsSnapshot)
+            .where(OddsSnapshot.event_ext_id.in_(event_ids))
+            .order_by(OddsSnapshot.captured_at)
         )
-        result.cuota_publicacion = nearest.cuota
-    if pick.cuota is not None and result.cuota_publicacion is not None:
-        result.cuota_disponible = pick.cuota <= result.cuota_publicacion
-    if (
-        pick.cuota is not None
-        and result.cuota_cierre is not None
-        and result.cuota_cierre > 0
-    ):
-        result.clv_pct = round((pick.cuota / result.cuota_cierre - 1.0) * 100.0, 2)
-    return result
+    ).all():
+        rows_by_event.setdefault(row.event_ext_id, []).append(row)
+
+    for pick in picks:
+        if pick.id is None or not pick.odds_event_id:
+            continue
+        event = events.get(pick.odds_event_id)
+        rows = rows_by_event.get(pick.odds_event_id, [])
+        if event is None or not rows:
+            continue
+        matched = map_pick_choices(pick, event, rows)
+        if matched is not None:
+            comparisons[pick.id] = _comparison_from_match(pick, matched)
+    return comparisons
+
+
+@dataclass
+class ChannelOddsStats:
+    """Agregados de la auditoría de cuotas de un conjunto de picks.
+
+    El veredicto global del tipster: un pick aislado no dice nada, el
+    patrón sí. Cada porcentaje usa como denominador solo los picks
+    donde la métrica era calculable (un pick sin cuota de cierre no
+    puede bajar el % de CLV, igual que los pendientes no cuentan en
+    el % de aciertos).
+    """
+
+    picks: int = 0
+    con_evento: int = 0
+    mapeados: int = 0
+    pct_mapeado: float = 0.0
+    auditables: int = 0
+    cuotas_infladas: int = 0
+    pct_cuota_inflada: float = 0.0
+    con_clv: int = 0
+    clv_medio: Optional[float] = None
+    pct_bate_cierre: float = 0.0
+
+
+def aggregate_odds_stats(
+    picks: list[ParsedPick], comparisons: dict[int, PickOddsComparison]
+) -> ChannelOddsStats:
+    """Agrega las comparaciones individuales en el veredicto del canal:
+    % de picks con cuota inflada, CLV medio y % que bate el cierre."""
+    stats = ChannelOddsStats(
+        picks=len(picks),
+        con_evento=sum(1 for p in picks if p.odds_event_id),
+    )
+    clvs: list[float] = []
+    for pick in picks:
+        comparison = comparisons.get(pick.id) if pick.id is not None else None
+        if comparison is None or not comparison.mapeado:
+            continue
+        stats.mapeados += 1
+        if comparison.cuota_disponible is not None:
+            stats.auditables += 1
+            if comparison.cuota_disponible is False:
+                stats.cuotas_infladas += 1
+        if comparison.clv_pct is not None:
+            clvs.append(comparison.clv_pct)
+    if stats.con_evento:
+        stats.pct_mapeado = round(stats.mapeados / stats.con_evento * 100, 2)
+    if stats.auditables:
+        stats.pct_cuota_inflada = round(
+            stats.cuotas_infladas / stats.auditables * 100, 2
+        )
+    stats.con_clv = len(clvs)
+    if clvs:
+        stats.clv_medio = round(sum(clvs) / len(clvs), 2)
+        stats.pct_bate_cierre = round(
+            sum(1 for v in clvs if v > 0) / len(clvs) * 100, 2
+        )
+    return stats

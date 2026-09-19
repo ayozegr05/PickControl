@@ -7,16 +7,19 @@ extracción de fecha del evento.
 from datetime import datetime, timezone
 
 from app.services.telegram.pick_extractor import (
+    _LEG_NOISE_PATTERN,
     ExtractedPick,
     _clean_text_field,
     _detect_deporte,
     _extract_event_date,
+    _extract_eventos,
     _extract_linea,
     _is_settled_ticket,
     _looks_like_bet,
     _normalize_pick,
     _rule_extract,
     _sanitize_event_date,
+    _strip_trailing_competition,
     extract_pick,
 )
 
@@ -225,6 +228,25 @@ class TestIsSettledTicket:
             "Ganancias potenciales: €3.000,00\nAñadir selección"
         )
         assert _is_settled_ticket(text) is False
+
+    def test_sello_won_ingles(self):
+        # Caso real: boleto ya cobrado de casa en inglés — "WON" a nivel
+        # de boleto + "Return <importe>". Las patas usan "Won" (capital)
+        # y no deben disparar el sello.
+        text = (
+            "Accumulator\n+215\n3 choices\nBet MX$50.00\n"
+            "Return MX$157.58\nWON\n"
+            "Hugo Gaston -1.5\nHandicap Games\nWon"
+        )
+        assert _is_settled_ticket(text) is True
+
+    def test_returned_ingles(self):
+        assert _is_settled_ticket("100,00€ Crear apuesta\n€230.00 Returned") is True
+
+    def test_pata_won_minuscula_no_es_sello(self):
+        # "Won" con minúsculas es el estado de una pata dentro de un slip
+        # abierto, no el sello del boleto.
+        assert _is_settled_ticket("Hugo Gaston -1.5\nHandicap Games\nWon") is False
 
 
 class TestExtractLinea:
@@ -451,3 +473,200 @@ class TestDeporteNoSoportado:
             "Verstappen gana",
         )
         assert pick.es_apuesta is False
+
+
+class TestSeleccionKeyword:
+    """La regla que elige la línea del pick: límites de palabra,
+    keywords en español y guarda de longitud contra la prosa."""
+
+    def test_menos_de_es_seleccion_y_no_la_prosa(self):
+        # Caso real Dm7 84473: la línea "Menos de 3,5 goles" no casaba
+        # con ninguna keyword inglesa y el párrafo de análisis se colaba
+        # por el substring "gana" de "necesita ganar".
+        text = (
+            "Este es mi pronóstico para hoy\n\n"
+            "Menos de 3,5 goles ESPAÑA\n\n"
+            "18:30 CUOTA 1.50 STAKE 4\n\n"
+            "El Celta–Racing presenta un escenario favorable para buscar "
+            "menos de 3,5 goles. El conjunto vigués solamente suma cuatro "
+            "puntos y un Celta que necesita ganar, pero que difícilmente "
+            "asumirá riesgos excesivos mientras el marcador permanezca "
+            "igualado en los primeros minutos del encuentro."
+        )
+        pick = _rule_extract(text, informante="TestChannel")
+        assert pick is not None
+        assert "Menos de 3,5" in pick.seleccion
+        assert "necesita ganar" not in pick.seleccion
+        assert pick.linea == 3.5
+
+    def test_mover_no_es_over(self):
+        # "mover el balón" contiene el substring "over" pero no debe
+        # casar: los límites de palabra lo evitan (caso real msg 62978).
+        text = (
+            "Menos de 11.0 corners ESPAÑA\n\n"
+            "CUOTA 1.50\nSTAKE 4\n\n"
+            "El partido entre Sevilla y Barcelona puede desarrollarse "
+            "con un ritmo controlado si el Barcelona consigue dominar "
+            "la posesión y mover el balón con paciencia durante todo "
+            "el encuentro sin apenas sobresaltos en defensa."
+        )
+        pick = _rule_extract(text, informante="TestChannel")
+        assert pick is not None
+        assert "corners" in pick.seleccion.lower()
+        assert "mover el balón" not in pick.seleccion
+
+    def test_prosa_larga_nunca_es_seleccion(self):
+        # Solo hay prosa larga con keyword: sin línea de pick válida la
+        # regla devuelve None y el mensaje pasa al LLM.
+        prosa = (
+            "El equipo llega necesitando ganar tras varias jornadas sin "
+            "conocer la victoria y el técnico ha insistido en que la "
+            "clave será mover el balón con paciencia en campo rival "
+            "durante los noventa minutos de juego."
+        )
+        text = f"CUOTA 1.50\nSTAKE 4\n\n{prosa}"
+        pick = _rule_extract(text, informante="TestChannel")
+        assert pick is None
+
+
+class TestExtractEventos:
+    def test_cabecera_competicion_no_es_evento(self):
+        # "TENIS - Copa davis" casa con el patrón "A - B" pero es la
+        # cabecera del torneo, no el cruce (caso real Lady Bets).
+        lines = ["🎾 TENIS - Copa davis 🏆", "Bergs gana", "STAKE 4"]
+        assert _extract_eventos(lines) == []
+
+    def test_enfrentamiento_normal_sigue_funcionando(self):
+        lines = ["Osasuna - Levante", "Más de 9,5 córners", "STAKE 3"]
+        assert _extract_eventos(lines) == ["Osasuna - Levante"]
+
+    def test_formato_v_de_boleto(self):
+        # Los slips usan "A v B": "Dominko/Sesko v Cukierman/Shimanov".
+        lines = ["Copa Davis", "Dominko/Sesko v Cukierman/Shimanov"]
+        assert _extract_eventos(lines) == ["Dominko/Sesko v Cukierman/Shimanov"]
+
+
+class TestCelebracionVerde:
+    def test_caption_verde_sin_datos_no_es_pick(self):
+        # Caption bajo el boleto ganador reposteado: sin cuota/stake
+        # propios es marketing, no un pick abierto.
+        text = "✅ OTRO VERDE PARA ADENTRO ✅ seguimos sumando mis niños"
+        assert _looks_like_bet(text) is False
+
+    def test_total_ganado_no_es_pick(self):
+        text = "BUENOS DÍAS\nTOTAL GANADO= +1.000€\nEn un ratito otro pick"
+        assert _looks_like_bet(text) is False
+
+    def test_pick_con_senales_fuertes_sobrevive(self):
+        # Un pick real que diga "a por otro verde" pero traiga cuota y
+        # stake propios sigue entrando: las señales fuertes ganan.
+        text = "A por otro verde\nBergs gana\nCuota 1.50 Stake 4"
+        assert _looks_like_bet(text) is True
+
+
+class TestExtractLineaMarcador:
+    def test_marcador_0_0_no_es_linea(self):
+        # "0-0" es un marcador, no el hándicap "-0" (caso real: la
+        # prosa del análisis producía linea=-0.0).
+        assert _extract_linea("incluidos el 0-0 ante la Real Sociedad") is None
+
+
+class TestTeamNamesConConectores:
+    def test_nombre_con_de_y_del_completo(self):
+        # "Celta de Vigo - Racing de Santander": los conectores en
+        # minúscula forman parte del nombre; sin ellos se capturaba
+        # truncado como "Vigo - Racing" (caso real Dm7 Gratuito).
+        lines = ["Celta de Vigo - Racing de Santander", "Menos 3,5 Goles"]
+        assert _extract_eventos(lines) == ["Celta de Vigo - Racing de Santander"]
+
+
+class TestStripTrailingCompetition:
+    def test_cola_competicion_en_mayusculas(self):
+        # "pick + cabecera de competición" en la misma línea del tipster.
+        assert _strip_trailing_competition("Menos de 3,5 goles ESPAÑA") == (
+            "Menos de 3,5 goles"
+        )
+
+    def test_seleccion_toda_en_mayusculas_se_conserva(self):
+        # Si no queda texto en minúscula tras el recorte, la selección
+        # era íntegramente en mayúsculas y no se toca.
+        assert _strip_trailing_competition("MALLORCA RESULTADO SIN EMPATE") == (
+            "MALLORCA RESULTADO SIN EMPATE"
+        )
+
+    def test_sin_cola_no_cambia(self):
+        assert _strip_trailing_competition("Bergs gana") == "Bergs gana"
+
+
+class TestPromosYRetos:
+    """P.2/P.3: anuncios de afiliado y escaleras de reto no son picks."""
+
+    def test_escalera_reto_pasos_no_es_pick(self):
+        # Caso real AllSportsPicks: "ESPECIAL 5 CREAR APUESTA" con la
+        # escalera del reto (30€→96€→307€...) se parseaba como
+        # combinada de 5 patas. Dinero→dinero nunca es una selección.
+        text = (
+            "✅ ESPECIAL 5 CREAR APUESTA\n"
+            "1⃣PASO 30€ - 96€\n2⃣PASO 96€ - 307€\n"
+            "3⃣PASO 307€ - 983€\n🛍 https://premiumpay.pro/2032/A"
+        )
+        assert _looks_like_bet(text) is False
+
+    def test_anuncio_reto_del_ano_no_es_pick(self):
+        text = (
+            "🚨 HOY: RETO 30€ ➜ 10.000€ 🚨\nESPECIAL CREAR APUESTA\n"
+            "✅ [Ya lo pegamos hace 1 semana](https://t.me/+capy)"
+        )
+        assert _looks_like_bet(text) is False
+
+    def test_cta_plaza_empieza_a_ganar_no_es_pick(self):
+        text = (
+            "PRIMER PASO DEL RETO DEL AÑO 🍾 YA DISPONIBLE\n"
+            "Desde HOY EMPIEZA A GANAR 🫵\n"
+            "ACCEDE AQUÍ TU PLAZA DEL RETO CON DESCUENTO"
+        )
+        assert _looks_like_bet(text) is False
+
+    def test_pick_con_enlace_de_afiliado_sobrevive(self):
+        # Un pick real que cuelga un link al final sigue entrando:
+        # las señales fuertes tienen precedencia sobre los negativos.
+        text = "Bergs gana\nCuota 1.50\nStake 4\nhttps://premiumpay.pro/x"
+        assert _looks_like_bet(text) is True
+
+    def test_supercuota_marca_no_es_pick(self):
+        # Anuncio de cuota mejorada de la casa: "SUPERCUOTA ELCHE-REAL
+        # MADRID GANA REAL MADRID 1.30 → 5.00 REGÍSTRATE".
+        text = (
+            "SUPERCUOTA\nELCHE-REAL MADRID\nGANA REAL MADRID\n1.30 → 5.00\nREGÍSTRATE"
+        )
+        assert _looks_like_bet(text) is False
+
+    def test_boleto_cobrado_celebrado_no_es_pick(self):
+        # Repost del boleto ya pagado con celebración ("ha ganado").
+        text = (
+            "€150.00 Single\nPetr Bar Biryukov 1.53\nTo Win Match\n"
+            "€230.00 Returned\n\nQue barbaridad, con que facilidad ha ganado"
+        )
+        assert _looks_like_bet(text) is False
+
+
+class TestMarkdownEnFiltro:
+    def test_cuota_entre_marcas_markdown_cuenta(self):
+        # "__Cuota 1.50__": "_" es carácter de palabra y anulaba el \b
+        # del patrón — un pick real quedaba rechazado (pick 435 Cretu).
+        text = "**Cretu** __gana__\n__Cuota 1.50__\n__Stake 3__"
+        assert _looks_like_bet(text) is True
+
+
+class TestLegNoiseLinks:
+    def test_link_markdown_no_es_pata(self):
+        assert _LEG_NOISE_PATTERN.search("[Ya lo pegamos](https://t.me/x)")
+
+    def test_url_pelada_no_es_pata(self):
+        assert _LEG_NOISE_PATTERN.search("https://premiumpay.pro/2032/A")
+
+    def test_escalera_euros_no_es_pata(self):
+        assert _LEG_NOISE_PATTERN.search("1⃣PASO 30€ - 96€")
+
+    def test_pata_normal_no_es_ruido(self):
+        assert not _LEG_NOISE_PATTERN.search("Zizou Bergs gana el partido")
