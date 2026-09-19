@@ -26,8 +26,10 @@ export interface PickItem {
   tipoDeApuesta: string;
   acierto: Acierto;
   casa: string;
-  cantidadApostada: number;
-  cuota: number;
+  /** En picks de Telegram pueden ser null (el tipster no siempre
+   * publica cuota o stake). La UI muestra "—" en ese caso. */
+  cantidadApostada: number | null;
+  cuota: number | null;
   fecha: string; // ISO 8601
   source: PickSource;
   ganancia?: number;

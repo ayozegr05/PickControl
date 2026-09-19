@@ -4,6 +4,8 @@ from typing import Optional
 
 from sqlmodel import SQLModel
 
+from app.schemas.odds import OddsStatsBloque
+
 
 class StatsBloque(SQLModel):
     """Métricas agregadas de un grupo de apuestas/picks."""
@@ -34,6 +36,9 @@ class AnalisisCanal(SQLModel):
     # Combinadas del canal (solo padres): sección propia, fuera de las
     # stats de picks simples.
     combinadas: Optional[StatsBloque] = None
+    # Auditoría de cuotas del canal (tipster vs mercado): cuotas
+    # infladas, CLV medio y % que bate el cierre.
+    odds: Optional[OddsStatsBloque] = None
 
 
 class AnalisisDeporte(SQLModel):
@@ -53,3 +58,5 @@ class AnalisisGlobal(SQLModel):
     totales_yo: StatsBloque
     # Combinadas agregadas de todos los canales (solo padres).
     totales_combinadas: Optional[StatsBloque] = None
+    # Auditoría de cuotas agregada de todos los canales.
+    totales_odds: Optional[OddsStatsBloque] = None

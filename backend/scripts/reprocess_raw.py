@@ -16,6 +16,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding="utf-8")
 
+from openai import RateLimitError
 from sqlalchemy import select
 
 from app.core.config import get_settings
@@ -58,12 +59,17 @@ async def main() -> None:
                 print(f"  [{raw.id}] sin texto, salto.")
                 continue
 
-            pick = await extract_pick(
-                source_text,
-                settings.openai_api_key,
-                informante=raw.channel_name,
-                fecha_referencia=raw.received_at,
-            )
+            try:
+                pick = await extract_pick(
+                    source_text,
+                    settings.openai_api_key,
+                    informante=raw.channel_name,
+                    fecha_referencia=raw.received_at,
+                )
+            except RateLimitError:
+                # Sin cuota de OpenAI: se deja processed=False para reintento.
+                print(f"  [{raw.id}] pendiente: OpenAI sin cuota (429).")
+                continue
             if not pick:
                 continue
 

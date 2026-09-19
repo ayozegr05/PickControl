@@ -3,6 +3,7 @@
 from sqlmodel import SQLModel
 
 from app.models.informante import InformanteBase
+from app.schemas.odds import OddsStatsBloque
 from app.schemas.pick import PickRead
 
 
@@ -44,6 +45,14 @@ class InformanteStats(SQLModel):
     combinadas_porcentaje: float = 0.0
     combinadas_yield_pct: float = 0.0
     combinadas_pendientes: int = 0
+
+
+class InformanteOddsStats(SQLModel):
+    """Respuesta de GET /informante/{nombre}/odds-stats: agregados de
+    la auditoría de cuotas del canal (veredicto global del tipster)."""
+
+    informante: str
+    odds: OddsStatsBloque
 
 
 class InformanteSummary(SQLModel):

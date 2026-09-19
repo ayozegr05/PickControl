@@ -59,7 +59,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 | 1 | Combinadas como sección propia | Hecho | Alto — modelo, extractor, verificador, UI |
 | 2 | Fútbol: primera parte/descanso | Pendiente — sin datos en proveedores | Alto (proveedor nuevo) |
 | 3 | Fútbol: partidos parados (SUSP/ABD/INT) | Manual a propósito | — |
-| 4 | Cuota tipster vs cuota real de mercado | Backend hecho — falta agregados y UI (ver §5) | Alto, ya implementado con API gratuita |
+| 4 | Cuota tipster vs cuota real de mercado | Hecho y backend probado en vivo (endpoints + snapshots reales OK) — falta solo revisar la UI en móvil (ver §5) | Alto, ya implementado con API gratuita |
 | 5 | Baloncesto | Aparcado | Medio |
 | 6 | Álbumes Telegram | Implementado — falta probar con álbum real | Trivial |
 | 7 | Pantalla de análisis global | Hecho | — |
@@ -151,6 +151,115 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
       ~22 pendientes con datos de Lady Bets (+ resto de canales). De
       paso, comprobar `matches-played` de RapidAPI con "cecchinato"
       para cerrar la duda documentada en C.2.
+- [x] **E. Emparejado foto-boleto + texto del pick** (arreglado): los
+      tipsters publican DOS mensajes por pick — la foto del slip (rival
+      + cuota en el OCR) y el texto (stake + título). Se procesaban
+      independientes: picks sin rival/cuota, `evento`=competición
+      ("TENIS - Copa davis") y duplicados. Ahora `processor.py`
+      empareja en ventana de 10 min (`_PAIR_WINDOW`): el texto busca
+      el slip previo (`_find_pair_slip`, filtro `_looks_like_slip` con
+      marcadores de boleto y rechazo de liquidados) y extrae sobre
+      `texto + OCR` combinados; si la foto ya creó pick, se enriquece
+      en vez de duplicar (`_enrich_paired_pick`, `metodo="+par"`). En
+      catch-up (orden nuevo→viejo) la foto enriquece el pick del texto
+      mirando hacia adelante (`_find_pair_text_pick`). Si la extracción
+      combinada no ve apuesta, reintenta con el mensaje solo.
+- [x] **F. Selección-prosa y evento-competición** (arreglado):
+      `_SELECCION_KEYWORD` con `\b` + español ("menos de", "más de",
+      "córners"...) — "mover" ya no casa con "over" ni "ganar" con
+      "gana" — y guarda de longitud (`_SELECCION_MAX_LEN`=120) para que
+      el análisis nunca sea la selección. `_extract_eventos`: patrón
+      "A v B" de slips, conectores minúsculas en nombres ("Celta de
+      Vigo"), y filtros `_COMPETITION_WORD`/`_MARKET_WORD` (cabeceras
+      tipo "TENIS - Copa davis" o mercados tipo "Bergs - Ganará el
+      encuentro" ya no se confunden con cruces). `_extract_linea` ya no
+      saca "-0" de marcadores "0-0". `_rule_extract` rellena `mercado`
+      con `_classify_leg_market` ("resultado sin empate" → "empate no
+      válido"). `_normalize_pick` recorta la cola de competición en
+      mayúsculas de `seleccion` ("...goles ESPAÑA").
+- [x] **G. Boletos liquidados y celebraciones** (arreglado): el prompt
+      OCR pide `SELLO: GANADOR` si ve el tick/sello de cobrado de
+      cualquier diseño (visión, no solo el texto "GANADOR"). Negativos
+      nuevos para captions de verde reposteado ("otro verde", "seguimos
+      sumando", "total ganado") — solo filtran si el mensaje no trae
+      cuota/stake propios. Footer "Apuesta con responsabilidad" ya no
+      cuela como pata de combinada.
+- [x] **H. Cuota/stake NULL ya no se inventan como 1.00** (arreglado):
+      `_parsed_to_read` pasaba `cuota or 1.0`/`stake or 1.0` — la UI
+      mostraba "1.00" ficticio. `PickRead.cuota`/`cantidad_apostada`
+      ahora son `Optional` y la vista de canal muestra "—".
+- [x] **Backfill aplicado** (`scripts/fix_reported_picks.py`): los 7
+      casos reportados re-extraídos con el pipeline nuevo — Lady Bets/
+      Bet Fran ahora tienen `Bergs vs Rodionov` + cuota 1.5, Mallorca
+      `Mallorca - Real Sociedad B` + mercado "resultado sin empate" +
+      cuota 1.5, dobles `Dominko/Sesko vs Cukierman/Shimanov` + 1.53,
+      Dm7 títulos limpios ("Menos de 3,5 goles", "Menos de 11.0
+      corners"), duplicado foto+texto de Dm7 Gratuito fusionado (pick
+      1463 eliminado), y la combinada de CopetePicks con patas limpias.
+      Además `_clean_text_field` aplicado a los 19 picks con markdown
+      residual en `seleccion`/`apuesta`/`evento`.
+
+### Pendientes detectados tras el fix de emparejado (sept-2026)
+
+- [x] **P.1. Backfill masivo de cuota/stake NULL** — RESUELTO
+      (sept-2026): `scripts/backfill_pairs.py` recorre todos los
+      textos con pick simple incompleto (cuota/stake NULL o evento
+      que no es un cruce real), busca el slip pareja en la ventana
+      `_PAIR_WINDOW`, re-extrae sobre `texto + OCR` combinados y
+      enriquece con `_enrich_paired_pick`. Guardas anti-regresión:
+      `_patas_son_reales` (descarta combinadas fantasma con patas
+      tipo "CHALL SZCZECIN"/"Siempre con cabeza"), `_era_multi`
+      (no degrada una selección múltiple a simple) y "mejora neta"
+      (solo escribe si el evento pasa a ser cruce real o se
+      rellenan cuota/stake). Elimina el pick duplicado de la foto
+      (y sus patas) cuando ambos mensajes crearon pick. Dry-run
+      por defecto, `--apply` para escribir; idempotente.
+      Resultado: 55 incompletos con slip → 29 enriquecidos +
+      1 duplicado eliminado; quedan ~29 con cuota NULL sin
+      pareja aprovechable (fotos sin OCR → P.8, o picks sin
+      boleto).
+- [x] **P.2. Promos coladas como picks** — RESUELTO (sept-2026):
+      nuevos negativos en `_NEGATIVE_PATTERNS` — escalera dinero→dinero
+      ("30€ - 96€", "30€ ➜ 10.000€"), `reto del año`, `empieza a
+      ganar`, `premiumpay`, `accede`, `plaza` singular. Además
+      `_LEG_NOISE_PATTERN` rechaza patas que son URL/link markdown o
+      escalera €→€. Bug corregido: `_looks_like_bet` quitaba markdown
+      ANTES de evaluar `\b` ("__Cuota 1.50__" no casaba y un pick real
+      se rechazaba). Limpieza: 20 picks marcados `es_apuesta=False` /
+      `metodo='rejected'` — incluye 2 promos verificadas como acierto
+      que inflaban stats (supercuota MARCA 692, repost cobrado 753).
+- [x] **P.3. Anuncios de reto como "picks"** — RESUELTO (sept-2026):
+      los anuncios de reto/escalera ahora se rechazan directamente
+      (`es_apuesta=False`) por los negativos anteriores; no solo van
+      a `es_reto`. Los picks reales DENTRO de un reto ("PASO 2: X gana
+      STAKE 3") siguen entrando porque las señales fuertes
+      (cuota/stake+num) tienen precedencia.
+- [ ] **P.4. Verificación pendiente**: ~22 picks de Lady Bets (+ resto)
+      siguen pendientes → `scripts/verify_backlog.py --apply` cuando
+      renueven cuotas. Y duda abierta de C.2: por qué "Marco
+      Cecchinato" no salía en `matches-played` de RapidAPI.
+- [x] **P.5. Cobertura de Segunda División** — RESUELTO (sept-2026):
+      el pick 1528 `Mallorca - Real Sociedad B` se verificó con
+      `acierto=True` tras el backfill de P.1 — la cadena de
+      proveedores cubre la competición.
+- [ ] **P.6. Residuos de cabecera en `seleccion`**: el patrón "pick +
+      competición en la misma línea" puede dejar restos en formatos que
+      aún no hemos visto — vigilar nuevas extracciones.
+- [x] **P.7. Retry de OCR tras 429** — RESUELTO (sept-2026):
+      `scripts/retry_ocr.py` recuperó los 296+35 OCR pendientes
+      (0 fallos; solo queda 1 foto sin fichero, msg 78734). Después:
+      `reclassify_rejected.py --apply` recuperó 35+2 picks de slips
+      rechazados, `reprocess_raw.py` creó picks para las fotos sin
+      pick previo y `backfill_pairs.py --apply` enriqueció 29 textos
+      más con el OCR nuevo. Incidencia: la cuenta de OpenAI se quedó
+      sin créditos a mitad del proceso (`credit_balance_exhausted`) —
+      `call_with_retry` ya NO reintenta ese error (es permanente, no
+      rate limit) y los scripts cuentan esos candidatos como
+      "pendientes por cuota" en vez de abortar. Sellos de boleto
+      cobrado en inglés (`WON`/`Returned`) añadidos a
+      `_SETTLED_TICKET_PATTERN`.
+- [ ] **P.8. UI móvil sin revisar**: la sección "Cuota de mercado" del
+      hito 4 aún no se ha visto en Expo.
 
 ### 1. Core: verificación de resultados
 
@@ -257,12 +366,12 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
       cacheadas — no cuesta llamadas extra. Quedan fuera a propósito
       los parados a mitad (`SUSP`/`ABD`/`INT`): con marcador parcial
       hay mercados ya decididos que la casa paga — siguen pendientes.
-- [ ] **Comparar cuota del tipster vs cuota real de mercado**: contrastar la
+- [x] **Comparar cuota del tipster vs cuota real de mercado**: contrastar la
       cuota publicada por el informante contra la cuota disponible en APIs de
       apuestas (The Odds API, Pinnacle, Betfair...) en el momento de la
       publicación. Detecta cuotas infladas que el usuario nunca pudo coger de
       verdad — clave para comparar el yield publicado del tipster con el yield
-      real alcanzable.
+      real alcanzable. Implementación completa en §5.
 
 ### 2. Robustez de la extracción
 
@@ -376,15 +485,39 @@ toca: resultados siempre tienen prioridad.
       cuotas infladas) y `clv_pct` (% sobre el cierre → el tipster bate
       al mercado). Tests en `tests/test_odds.py` (29).
 
-Pendiente (siguientes pasos, en orden):
+- [x] **Agregados por canal** (`GET /informante/{nombre}/odds-stats`):
+      % de picks con cuota inflada, CLV medio del canal, % que bate el
+      cierre, % mapeado — el veredicto global del tipster (un pick
+      aislado no dice nada, el patrón sí). `compare_picks` hace la
+      comparación por lotes (1 query de eventos + 1 de snapshots, sin
+      N+1) y `aggregate_odds_stats` agrega solo sobre los picks donde
+      cada métrica era calculable. El mismo bloque `odds` llega por
+      canal en `GET /analisis` (`AnalisisCanal.odds`) y agregado global
+      (`totales_odds`).
+- [x] **UI**: sección "Cuota de mercado" en el detalle del pick
+      (`[informante].tsx`: mercado/opción de la API, tipster vs
+      apertura/publicación/cierre + badges "Cuota inflada"/"Cuota
+      real"/CLV) y resumen por canal en la pantalla de análisis
+      (`auditoria.tsx`, `OddsLine`: mapeados, CLV medio, % bate cierre,
+      % cuotas infladas — también en el resumen global).
 
-- [ ] **Agregados por canal** (`GET /informantes/{id}/odds-stats` o
-      similar): % de picks con cuota inflada, CLV medio del canal, % que
-      bate el cierre, % mapeado. Es el veredicto global del tipster —
-      un pick aislado no dice nada, el patrón sí. Solo backend.
-- [ ] **UI**: sección "Cuota de mercado" en el detalle del pick
-      (tipster vs apertura/publicación/cierre + badges inflada/CLV) y,
-      con los agregados, resumen por canal en la pantalla de análisis.
+Pendiente:
+
+- [~] **Probar en vivo**: backend verificado en vivo (2026-09-19):
+      snapshotter capturando (6 eventos / 96 snapshots / 8 picks
+      enlazados), `GET /parsed-picks/{id}/odds` y
+      `/informante/{nombre}/odds-stats` responden con datos reales
+      (CLV y detección de cuotas infladas funcionando — ej. pick 753
+      cuota tipster 1.53 vs mercado 2.1 → inflada detectada).
+      **Falta solo revisar la UI en el móvil.**
+      Nota: al arrancar se detectó y corrigió un bug de truncamiento
+      — el extractor a veces vuelca el análisis completo en
+      `seleccion`/`apuesta` y el INSERT en `parsed_picks` reventaba por
+      varchar(255/500), haciendo rollback del raw entero y reintentos
+      infinitos del catch-up. `processor._fit` ahora trunca cada campo
+      a su límite real de columna. PENDIENTE de calidad: el LLM sigue
+      metiendo el análisis largo en `seleccion` (no revienta, pero el
+      dato es feo) — revisar prompt/normalización del extractor.
 - [ ] **Backfill histórico** (opcional, decidir con datos reales):
       OddsPapi (`bet36528` en RapidAPI) regala `/v4/historical-odds`
       ilimitado en el free tier — serviría para auditar picks antiguos

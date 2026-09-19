@@ -19,7 +19,12 @@ from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.services.pick_service import get_or_create_informante, to_naive_utc
-from app.services.telegram.pick_extractor import ExtractedPick, extract_pick
+from app.services.telegram.pick_extractor import (
+    ExtractedPick,
+    _is_settled_ticket,
+    _looks_like_bet,
+    extract_pick,
+)
 
 logger = get_logger("app.telegram")
 
@@ -33,6 +38,19 @@ _DUPLICATE_TEXT_SIMILARITY_WITH_MATCHING_CUOTA = 0.6
 # "Real Madrid gana" (texto) vs "GANA REAL MADRID" (OCR de la misma
 # promo), donde el orden de las palabras cambia entre imagen y texto.
 _DUPLICATE_WORD_SET_SIMILARITY = 0.85
+
+
+def _fit(value: str | None, limit: int) -> str | None:
+    """Trunca un campo a su límite de columna en `parsed_picks`.
+
+    El extractor a veces copia la prosa del análisis entera en
+    `seleccion`/`apuesta` (varchar 255/500 en la migración
+    cd2dfbe83713): sin el corte el INSERT entero falla y el pick se
+    pierde. El raw queda guardado igualmente — es la auditoría real.
+    """
+    if value is not None and len(value) > limit:
+        return value[:limit]
+    return value
 
 
 def _text_similarity(a: str, b: str) -> float:
@@ -92,6 +110,136 @@ def _word_subset(a: str, b: str) -> bool:
     words_a = {w for w in re.findall(r"\w+", a.lower()) if w not in _STOPWORDS}
     words_b = {w for w in re.findall(r"\w+", b.lower()) if w not in _STOPWORDS}
     return len(words_a) >= 2 and words_a <= words_b
+
+
+# Ventana para emparejar la foto del boleto con el texto del pick: los
+# tipsters publican el slip (rival + cuota en el OCR) y a los pocos
+# minutos el texto (stake + título limpio). 10 min cubre los ~5 min
+# observados sin juntar picks distintos.
+_PAIR_WINDOW = timedelta(minutes=10)
+
+# Marcadores de que el OCR es un boleto/carta de apuestas (y no una
+# captura de chat ni una promo de casa). Basta uno: no aparecen en otro
+# tipo de imagen.
+_SLIP_MARKER = re.compile(
+    r"sencillas?|\bsimple\b|\bimp(?:orte)?:|ganar[áa]\s+el\s+encuentro|"
+    r"ganador\s+del\s+encuentro|crear\s+apuesta|hoja\s+de\s+apuestas|"
+    r"ganancias|cerrar\s+apuesta|añadir\s+selecci[oó]n|boleto|"
+    r"m[aá]s/menos|total\s+de\s+(?:goles|juegos)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_slip(ocr_text: str | None) -> bool:
+    """True si el OCR tiene pinta de boleto de apuestas ABIERTO.
+
+    Un slip liquidado (sello "GANADOR" reposteado como prueba) no es
+    pareja válida: su rival/cuota pertenecen al pick de ayer.
+    """
+    if not ocr_text:
+        return False
+    return bool(_SLIP_MARKER.search(ocr_text)) and not _is_settled_ticket(ocr_text)
+
+
+async def _find_pair_slip(
+    session: AsyncSession,
+    channel_id: int,
+    when: datetime | None,
+    message_id: int,
+) -> TelegramRawMessage | None:
+    """La foto-boleto más reciente del mismo canal ANTES del texto.
+
+    Empareja el caso habitual (foto → texto a los ~2-5 min): el slip
+    aporta rival y cuota que el texto no trae.
+    """
+    if when is None:
+        return None
+    query = (
+        select(TelegramRawMessage)
+        .where(TelegramRawMessage.channel_id == channel_id)
+        .where(TelegramRawMessage.media_path.isnot(None))  # type: ignore[union-attr]
+        .where(TelegramRawMessage.extracted_text.isnot(None))  # type: ignore[union-attr]
+        .where(TelegramRawMessage.message_id < message_id)
+        .where(TelegramRawMessage.received_at >= when - _PAIR_WINDOW)
+        .where(TelegramRawMessage.received_at <= when)
+        .order_by(TelegramRawMessage.received_at.desc())  # type: ignore[arg-type]
+    )
+    for candidate in (await session.exec(query)).all():
+        if _looks_like_slip(candidate.extracted_text):
+            return candidate
+    return None
+
+
+async def _find_pick_of_raw(session: AsyncSession, raw_id: int) -> ParsedPick | None:
+    """El pick simple (no combinada, no reto, no pata) de un raw."""
+    query = (
+        select(ParsedPick)
+        .where(ParsedPick.raw_message_id == raw_id)
+        .where(ParsedPick.es_apuesta == True)  # noqa: E712
+        .where(ParsedPick.es_combinada == False)  # noqa: E712
+        .where(ParsedPick.es_reto == False)  # noqa: E712
+        .where(ParsedPick.combinada_id == None)  # noqa: E711
+    )
+    return (await session.exec(query)).first()
+
+
+async def _find_pair_text_pick(
+    session: AsyncSession,
+    channel_id: int,
+    when: datetime | None,
+    message_id: int,
+) -> tuple[ParsedPick, TelegramRawMessage] | None:
+    """Pick ya creado por el TEXTO posterior a la foto.
+
+    El catch-up procesa los mensajes de nuevo a viejo: cuando llega la
+    foto, el texto de su pareja ya puede estar guardado con un pick
+    incompleto (sin rival ni cuota). En ese caso la foto lo enriquece.
+    """
+    if when is None:
+        return None
+    query = (
+        select(ParsedPick, TelegramRawMessage)
+        .join(
+            TelegramRawMessage,
+            TelegramRawMessage.id == ParsedPick.raw_message_id,  # type: ignore[arg-type]
+        )
+        .where(TelegramRawMessage.channel_id == channel_id)
+        .where(TelegramRawMessage.media_path.is_(None))  # type: ignore[union-attr]
+        .where(TelegramRawMessage.message_id > message_id)
+        .where(TelegramRawMessage.received_at >= when)
+        .where(TelegramRawMessage.received_at <= when + _PAIR_WINDOW)
+        .where(ParsedPick.es_apuesta == True)  # noqa: E712
+        .where(ParsedPick.es_combinada == False)  # noqa: E712
+        .where(ParsedPick.es_reto == False)  # noqa: E712
+        .where(ParsedPick.combinada_id == None)  # noqa: E711
+        .order_by(TelegramRawMessage.received_at.asc())  # type: ignore[arg-type]
+    )
+    row = (await session.exec(query)).first()
+    return (row[0], row[1]) if row else None
+
+
+def _enrich_paired_pick(target: ParsedPick, pick: ExtractedPick) -> None:
+    """Sobreescribe los campos del pick con la extracción combinada
+    (OCR del boleto + texto del tipster): ve el rival en la foto y el
+    stake en el texto, así que es estrictamente mejor que cada fuente
+    por separado. Conserva el valor previo cuando el nuevo es None."""
+    target.apuesta = _fit(pick.seleccion, 500) or target.apuesta
+    target.seleccion = _fit(pick.seleccion, 255) or target.seleccion
+    target.deporte = _fit(pick.deporte, 100) or target.deporte
+    target.evento = _fit(pick.evento, 255) or target.evento
+    target.mercado = _fit(pick.mercado, 100) or target.mercado
+    target.casa = _fit(pick.casa, 100) or target.casa
+    target.explicacion = pick.explicacion or target.explicacion
+    if pick.cuota is not None:
+        target.cuota = pick.cuota
+    if pick.stake is not None:
+        target.stake = pick.stake
+    if pick.linea is not None:
+        target.linea = pick.linea
+    target.fecha_evento = pick.fecha_evento or target.fecha_evento
+    target.metodo = f"{pick.metodo or 'llm'}+par"
+    if pick.confianza is not None:
+        target.confianza = pick.confianza
 
 
 # Campos que el mensaje duplicado puede aportar al pick original cuando
@@ -200,6 +348,41 @@ async def _find_duplicate_pick(
     return None
 
 
+async def _persist_patas(
+    db_session: AsyncSession,
+    parent: ParsedPick,
+    pick: ExtractedPick,
+    informante_id: int,
+    channel: str,
+    es_reto: bool,
+) -> None:
+    """Una fila por pata (self-FK): cada una se verifica por separado
+    con el verificador normal y el padre se liquida en conjunto
+    (ver verifier.settle_combinada)."""
+    for orden, pata in enumerate(pick.patas):
+        leg = ParsedPick(
+            raw_message_id=parent.raw_message_id,
+            informante_id=informante_id,
+            combinada_id=parent.id,
+            orden=orden,
+            es_apuesta=True,
+            apuesta=_fit(pata.seleccion, 500),
+            deporte=_fit(pata.deporte, 100),
+            evento=_fit(pata.evento, 255),
+            mercado=_fit(pata.mercado, 100),
+            seleccion=_fit(pata.seleccion, 255),
+            cuota=pata.cuota,
+            casa=_fit(pick.casa, 100),
+            informante=_fit(channel, 255),
+            fecha_evento=pata.fecha_evento,
+            linea=pata.linea,
+            metodo=pick.metodo,
+            confianza=pick.confianza,
+            es_reto=es_reto,
+        )
+        db_session.add(leg)
+
+
 @dataclass
 class IncomingTelegramMessage:
     """Mensaje entrante ya normalizado, listo para su futuro procesado."""
@@ -236,7 +419,9 @@ async def process_incoming_message(
     )
     logger.info("[TELEGRAM_PROCESSOR] Mensaje listo para procesar: %s", message)
 
-    source_text = (extracted_text or text or "").strip()
+    # Una foto con caption ya es un par foto+texto en un solo mensaje:
+    # el OCR trae rival/cuota y el caption puede traer el stake.
+    source_text = "\n\n".join(filter(None, [extracted_text, text])).strip()
     naive_message_date = to_naive_utc(message_date) if message_date else None
 
     async def _persist(db_session: AsyncSession) -> None:
@@ -255,10 +440,47 @@ async def process_incoming_message(
 
         settings = get_settings()
         pick = None
+        # Emparejado foto-boleto + texto del pick (ver _PAIR_WINDOW):
+        # `pair_pick` es el pick que la foto previa ya creó (caso en
+        # vivo: foto primero); `forward_pick` es el pick que el texto
+        # posterior ya creó (caso catch-up, que procesa nuevo→viejo).
+        pair_pick = None
+        forward_pick = None
+        extraction_text = source_text
         if settings.openai_api_key and source_text:
+            if not media_path and text and _looks_like_bet(text):
+                slip_raw = await _find_pair_slip(
+                    db_session, channel_id, naive_message_date, message_id
+                )
+                if slip_raw is not None:
+                    pair_pick = await _find_pick_of_raw(db_session, slip_raw.id)
+                    extraction_text = f"{text}\n\n{slip_raw.extracted_text}"
+                    logger.info(
+                        "[TELEGRAM_PROCESSOR] msg %s emparejado con boleto %s "
+                        "del canal %s.",
+                        message_id,
+                        slip_raw.message_id,
+                        channel,
+                    )
+            elif media_path and extracted_text and _looks_like_slip(extracted_text):
+                forward = await _find_pair_text_pick(
+                    db_session, channel_id, naive_message_date, message_id
+                )
+                if forward is not None:
+                    forward_pick, forward_raw = forward
+                    # El texto del pick primero (título limpio) y el OCR
+                    # del boleto después (rival/cuota como contexto).
+                    extraction_text = f"{forward_raw.text}\n\n{source_text}"
+                    logger.info(
+                        "[TELEGRAM_PROCESSOR] boleto %s emparejado con "
+                        "texto-pick del msg %s del canal %s.",
+                        message_id,
+                        forward_raw.message_id,
+                        channel,
+                    )
             try:
                 pick = await extract_pick(
-                    source_text,
+                    extraction_text,
                     settings.openai_api_key,
                     informante=channel,
                     fecha_referencia=naive_message_date,
@@ -271,6 +493,27 @@ async def process_incoming_message(
                     channel,
                 )
                 pick = None
+
+            # Si la extracción combinada no vio apuesta, la pareja era
+            # falsa: reintenta con el mensaje solo.
+            if extraction_text != source_text and (pick is None or not pick.es_apuesta):
+                pair_pick = None
+                forward_pick = None
+                try:
+                    pick = await extract_pick(
+                        source_text,
+                        settings.openai_api_key,
+                        informante=channel,
+                        fecha_referencia=naive_message_date,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "[TELEGRAM_PROCESSOR] Error extrayendo pick del "
+                        "mensaje %s del canal %s.",
+                        message_id,
+                        channel,
+                    )
+                    pick = None
 
         if pick is not None:
             # Auditoría de fechas: permite cotejar la fecha real del
@@ -297,96 +540,104 @@ async def process_incoming_message(
             raw.processed = True
             db_session.add(raw)
 
-            duplicate = None
-            if pick.es_apuesta:
-                duplicate = await _find_duplicate_pick(
-                    db_session, channel, pick, naive_message_date
-                )
-
-            if duplicate:
-                logger.info(
-                    "[TELEGRAM_PROCESSOR] Pick duplicado en canal %s (ya existe "
-                    "ParsedPick id=%s): '%s' ~ '%s'. No se crea de nuevo.",
-                    channel,
-                    duplicate.id,
-                    pick.seleccion,
-                    duplicate.seleccion,
-                )
-                # El duplicado puede traer datos que el original no
-                # tenía (la foto trae la cuota, el texto el stake...).
-                if _merge_pick_data(duplicate, pick):
-                    db_session.add(duplicate)
-                    logger.info(
-                        "[TELEGRAM_PROCESSOR] Datos del duplicado fusionados "
-                        "en pick id=%s.",
-                        duplicate.id,
-                    )
-            else:
-                informante = await get_or_create_informante(
-                    db_session, channel, es_canal_telegram=True
-                )
-                # Los "retos" del tipster ("RETO X3 GRATIS"...) van a su
-                # propia sección, fuera de las apuestas diarias. El texto
-                # del reto suele venir en la caption o en el cuerpo del
-                # mensaje, así que se mira ambos (texto + OCR).
-                es_reto = bool(
-                    re.search(
-                        r"\breto\b",
-                        f"{text or ''} {extracted_text or ''}",
-                        re.IGNORECASE,
-                    )
-                )
-                es_combinada = pick.es_apuesta and len(pick.patas) >= 2
-                parsed = ParsedPick(
-                    raw_message_id=raw.id,
-                    informante_id=informante.id,
-                    es_apuesta=pick.es_apuesta,
-                    apuesta=pick.seleccion,
-                    deporte=pick.deporte,
-                    evento=pick.evento,
-                    mercado=pick.mercado,
-                    seleccion=pick.seleccion,
-                    cuota=pick.cuota,
-                    stake=pick.stake,
-                    casa=pick.casa,
-                    informante=channel,
-                    explicacion=pick.explicacion,
-                    fecha_evento=pick.fecha_evento,
-                    linea=pick.linea,
-                    metodo=pick.metodo,
-                    confianza=pick.confianza,
-                    es_reto=es_reto,
-                    es_combinada=es_combinada,
-                )
-                db_session.add(parsed)
-
-                if es_combinada:
-                    # Una fila por pata (self-FK): cada una se verifica
-                    # por separado con el verificador normal y el padre
-                    # se liquida en conjunto (ver verifier.settle_combinada).
+            if pick.es_apuesta and (pair_pick is not None or forward_pick is not None):
+                # La pareja foto+texto ya tiene su pick: la extracción
+                # combinada lo enriquece (rival/cuota del boleto, stake
+                # del texto) en lugar de crear un duplicado.
+                target = pair_pick or forward_pick
+                assert target is not None
+                _enrich_paired_pick(target, pick)
+                if len(pick.patas) >= 2 and not target.es_combinada:
+                    target.es_combinada = True
                     await db_session.flush()
-                    for orden, pata in enumerate(pick.patas):
-                        leg = ParsedPick(
-                            raw_message_id=raw.id,
-                            informante_id=informante.id,
-                            combinada_id=parsed.id,
-                            orden=orden,
-                            es_apuesta=True,
-                            apuesta=pata.seleccion,
-                            deporte=pata.deporte,
-                            evento=pata.evento,
-                            mercado=pata.mercado,
-                            seleccion=pata.seleccion,
-                            cuota=pata.cuota,
-                            casa=pick.casa,
-                            informante=channel,
-                            fecha_evento=pata.fecha_evento,
-                            linea=pata.linea,
-                            metodo=pick.metodo,
-                            confianza=pick.confianza,
-                            es_reto=es_reto,
+                    await _persist_patas(
+                        db_session,
+                        target,
+                        pick,
+                        target.informante_id,
+                        channel,
+                        target.es_reto,
+                    )
+                db_session.add(target)
+                logger.info(
+                    "[TELEGRAM_PROCESSOR] Pick id=%s enriquecido con la "
+                    "pareja foto+texto (msg %s del canal %s).",
+                    target.id,
+                    message_id,
+                    channel,
+                )
+            else:
+                duplicate = None
+                if pick.es_apuesta:
+                    duplicate = await _find_duplicate_pick(
+                        db_session, channel, pick, naive_message_date
+                    )
+
+                if duplicate:
+                    logger.info(
+                        "[TELEGRAM_PROCESSOR] Pick duplicado en canal %s (ya existe "
+                        "ParsedPick id=%s): '%s' ~ '%s'. No se crea de nuevo.",
+                        channel,
+                        duplicate.id,
+                        pick.seleccion,
+                        duplicate.seleccion,
+                    )
+                    # El duplicado puede traer datos que el original no
+                    # tenía (la foto trae la cuota, el texto el stake...).
+                    if _merge_pick_data(duplicate, pick):
+                        db_session.add(duplicate)
+                        logger.info(
+                            "[TELEGRAM_PROCESSOR] Datos del duplicado fusionados "
+                            "en pick id=%s.",
+                            duplicate.id,
                         )
-                        db_session.add(leg)
+                else:
+                    informante = await get_or_create_informante(
+                        db_session, channel, es_canal_telegram=True
+                    )
+                    # Los "retos" del tipster ("RETO X3 GRATIS"...) van a su
+                    # propia sección, fuera de las apuestas diarias. El texto
+                    # del reto suele venir en la caption o en el cuerpo del
+                    # mensaje, así que se mira ambos (texto + OCR).
+                    es_reto = bool(
+                        re.search(
+                            r"\breto\b",
+                            f"{text or ''} {extracted_text or ''}",
+                            re.IGNORECASE,
+                        )
+                    )
+                    es_combinada = pick.es_apuesta and len(pick.patas) >= 2
+                    parsed = ParsedPick(
+                        raw_message_id=raw.id,
+                        informante_id=informante.id,
+                        es_apuesta=pick.es_apuesta,
+                        apuesta=_fit(pick.seleccion, 500),
+                        deporte=_fit(pick.deporte, 100),
+                        evento=_fit(pick.evento, 255),
+                        mercado=_fit(pick.mercado, 100),
+                        seleccion=_fit(pick.seleccion, 255),
+                        cuota=pick.cuota,
+                        stake=pick.stake,
+                        casa=_fit(pick.casa, 100),
+                        informante=_fit(channel, 255),
+                        explicacion=pick.explicacion,
+                        fecha_evento=pick.fecha_evento,
+                        linea=pick.linea,
+                        metodo=pick.metodo,
+                        confianza=pick.confianza,
+                        es_reto=es_reto,
+                        es_combinada=es_combinada,
+                    )
+                    db_session.add(parsed)
+
+                    if es_combinada:
+                        # Una fila por pata (self-FK): cada una se verifica
+                        # por separado con el verificador normal y el padre
+                        # se liquida en conjunto (ver verifier.settle_combinada).
+                        await db_session.flush()
+                        await _persist_patas(
+                            db_session, parsed, pick, informante.id, channel, es_reto
+                        )
         elif not source_text:
             # Sin texto (ni extraído ni crudo), no hay nada que procesar.
             raw.processed = True

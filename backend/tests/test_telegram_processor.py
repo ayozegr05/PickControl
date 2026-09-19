@@ -198,3 +198,306 @@ class TestProcessIncomingMessage:
         assert parsed.es_apuesta is False
         assert parsed.informante_id is not None
         assert parsed.informante == "Test Channel"
+
+
+# OCR típico de un slip abierto de bet365 (caso real Lady Bets 13610):
+# trae rival y cuota, pero no stake ni "cuota"/"stake" explícitos.
+SLIP_OCR = (
+    "2.000,00€ Sencillas\n"
+    "Zizou Bergs 1.50\n"
+    "Ganará el encuentro\n"
+    "Jurij Rodionov\n"
+    "Zizou Bergs\n"
+    "Imp:\n"
+    "2.000,00€\n"
+    "Ganancias\n"
+    "3.000,00€\n"
+    "Cerrar apuesta 2.000,00€"
+)
+
+
+def _photo_raw(message_id: int, ocr: str, when) -> TelegramRawMessage:
+    return TelegramRawMessage(
+        channel_id=1,
+        message_id=message_id,
+        channel_name="Canal",
+        text="",
+        media_path=f"media/{message_id}.jpg",
+        extracted_text=ocr,
+        processed=True,
+        received_at=when,
+    )
+
+
+@pytest.mark.asyncio
+class TestPhotoTextPairing:
+    """Emparejado boleto (OCR) + texto del pick en ventana de 10 min."""
+
+    async def test_texto_tras_boleto_extrae_con_ocr_combinado(
+        self, session, fake_settings, monkeypatch
+    ):
+        """En vivo (foto primero): el texto se extrae junto al OCR del
+        slip, así que el pick sale con rival y cuota de la foto."""
+        from datetime import datetime
+
+        when = datetime(2026, 9, 19, 10, 13)
+        session.add(_photo_raw(100, SLIP_OCR, when))
+        await session.commit()
+
+        captured = {}
+
+        async def fake_extract(text, *args, **kwargs):
+            captured["text"] = text
+            return ExtractedPick(
+                es_apuesta=True,
+                seleccion="Bergs gana",
+                evento="Zizou Bergs vs Jurij Rodionov",
+                cuota=1.5,
+                stake=4.0,
+                metodo="llm",
+                confianza=0.9,
+            )
+
+        monkeypatch.setattr(
+            "app.services.telegram.processor.extract_pick", fake_extract
+        )
+
+        await process_incoming_message(
+            session=session,
+            channel="Canal",
+            channel_id=1,
+            message_id=101,
+            text="TENIS - Copa davis\nBergs gana\nSTAKE 4",
+            message_date=datetime(2026, 9, 19, 10, 15),
+        )
+
+        # El extractor vio el OCR del slip concatenado al texto.
+        assert "Jurij Rodionov" in captured["text"]
+        assert "Bergs gana" in captured["text"]
+
+        apuestas = (
+            (
+                await session.exec(
+                    select(ParsedPick).where(
+                        ParsedPick.es_apuesta == True  # noqa: E712
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(apuestas) == 1
+        assert apuestas[0].evento == "Zizou Bergs vs Jurij Rodionov"
+        assert apuestas[0].cuota == 1.5
+        assert apuestas[0].stake == 4.0
+
+    async def test_texto_enriquece_pick_que_la_foto_ya_creo(
+        self, session, fake_settings, monkeypatch
+    ):
+        """Caso Dm7 Gratuito: la foto sola ya creó un pick (evento
+        perfecto pero sin cuota/stake); el texto lo enriquece en lugar
+        de crear un duplicado."""
+        from datetime import datetime
+
+        when = datetime(2026, 9, 19, 6, 36)
+        photo = _photo_raw(100, SLIP_OCR, when)
+        session.add(photo)
+        await session.flush()
+        session.add(
+            ParsedPick(
+                raw_message_id=photo.id,
+                es_apuesta=True,
+                seleccion="Menos 3,5 Goles",
+                evento="Celta de Vigo - Racing de Santander",
+            )
+        )
+        await session.commit()
+
+        async def fake_extract(text, *args, **kwargs):
+            return ExtractedPick(
+                es_apuesta=True,
+                seleccion="Menos de 3,5 goles",
+                evento="Celta de Vigo - Racing de Santander",
+                cuota=1.5,
+                stake=4.0,
+                metodo="rule",
+                confianza=0.85,
+            )
+
+        monkeypatch.setattr(
+            "app.services.telegram.processor.extract_pick", fake_extract
+        )
+
+        await process_incoming_message(
+            session=session,
+            channel="Canal",
+            channel_id=1,
+            message_id=101,
+            text="Menos de 3,5 goles\nCUOTA 1.50\nSTAKE 4",
+            message_date=datetime(2026, 9, 19, 6, 38),
+        )
+
+        apuestas = (
+            (
+                await session.exec(
+                    select(ParsedPick).where(
+                        ParsedPick.es_apuesta == True  # noqa: E712
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        # Un solo pick: el de la foto enriquecido con cuota y stake.
+        assert len(apuestas) == 1
+        assert apuestas[0].cuota == 1.5
+        assert apuestas[0].stake == 4.0
+        assert "+par" in (apuestas[0].metodo or "")
+
+    async def test_boleto_enriquece_pick_del_texto_ya_guardado(
+        self, session, fake_settings, monkeypatch
+    ):
+        """Caso catch-up (nuevo→viejo): el texto ya se procesó con un
+        pick incompleto; cuando llega la foto después, enriquece ese
+        pick mirando hacia adelante."""
+        from datetime import datetime
+
+        when_text = datetime(2026, 9, 19, 10, 15)
+        text_raw = TelegramRawMessage(
+            channel_id=1,
+            message_id=101,
+            channel_name="Canal",
+            text="TENIS - Copa davis\nBergs gana\nSTAKE 4",
+            processed=True,
+            received_at=when_text,
+        )
+        session.add(text_raw)
+        await session.flush()
+        session.add(
+            ParsedPick(
+                raw_message_id=text_raw.id,
+                es_apuesta=True,
+                seleccion="Bergs gana",
+                evento="TENIS - Copa davis",
+                stake=4.0,
+            )
+        )
+        await session.commit()
+
+        async def fake_extract(text, *args, **kwargs):
+            return ExtractedPick(
+                es_apuesta=True,
+                seleccion="Bergs gana",
+                evento="Zizou Bergs vs Jurij Rodionov",
+                cuota=1.5,
+                stake=4.0,
+                metodo="llm",
+                confianza=0.9,
+            )
+
+        monkeypatch.setattr(
+            "app.services.telegram.processor.extract_pick", fake_extract
+        )
+
+        await process_incoming_message(
+            session=session,
+            channel="Canal",
+            channel_id=1,
+            message_id=100,
+            text="",
+            media_path="media/100.jpg",
+            extracted_text=SLIP_OCR,
+            message_date=datetime(2026, 9, 19, 10, 13),
+        )
+
+        apuestas = (
+            (
+                await session.exec(
+                    select(ParsedPick).where(
+                        ParsedPick.es_apuesta == True  # noqa: E712
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(apuestas) == 1
+        assert apuestas[0].evento == "Zizou Bergs vs Jurij Rodionov"
+        assert apuestas[0].cuota == 1.5
+
+    async def test_foto_sin_pinta_de_boleto_no_empareja(
+        self, session, fake_settings, monkeypatch
+    ):
+        """Una captura de chat (sin marcadores de slip) no se fusiona
+        con el pick del texto."""
+        from datetime import datetime
+
+        when = datetime(2026, 9, 19, 10, 13)
+        session.add(_photo_raw(100, "buen pick ayer cracks 😎", when))
+        await session.commit()
+
+        captured = {}
+
+        async def fake_extract(text, *args, **kwargs):
+            captured["text"] = text
+            return ExtractedPick(
+                es_apuesta=True,
+                seleccion="Bergs gana",
+                stake=4.0,
+                metodo="rule",
+                confianza=0.85,
+            )
+
+        monkeypatch.setattr(
+            "app.services.telegram.processor.extract_pick", fake_extract
+        )
+
+        await process_incoming_message(
+            session=session,
+            channel="Canal",
+            channel_id=1,
+            message_id=101,
+            text="Bergs gana\nCuota 1.50 Stake 4",
+            message_date=datetime(2026, 9, 19, 10, 15),
+        )
+
+        assert "buen pick ayer" not in captured["text"]
+
+    async def test_boleto_liquidado_no_empareja(
+        self, session, fake_settings, monkeypatch
+    ):
+        """El repost del verde (sello GANADOR) no es pareja válida: su
+        rival/cuota pertenecen al pick de ayer."""
+        from datetime import datetime
+
+        settled = "SELLO: GANADOR\n" + SLIP_OCR
+        when = datetime(2026, 9, 19, 10, 4)
+        session.add(_photo_raw(99, settled, when))
+        await session.commit()
+
+        captured = {}
+
+        async def fake_extract(text, *args, **kwargs):
+            captured["text"] = text
+            return ExtractedPick(
+                es_apuesta=True,
+                seleccion="Bergs gana",
+                stake=4.0,
+                metodo="rule",
+                confianza=0.85,
+            )
+
+        monkeypatch.setattr(
+            "app.services.telegram.processor.extract_pick", fake_extract
+        )
+
+        await process_incoming_message(
+            session=session,
+            channel="Canal",
+            channel_id=1,
+            message_id=101,
+            text="Bergs gana\nCuota 1.50 Stake 4",
+            message_date=datetime(2026, 9, 19, 10, 15),
+        )
+
+        assert "Jurij Rodionov" not in captured["text"]

@@ -51,8 +51,14 @@ export default function Analysis() {
       // Organizar apuestas por informante
       const apuestasPorInformante: Record<string, Apuesta[]> = {};
       picks.forEach((pick) => {
-        // Solo incluir apuestas que no estén pendientes
-        if (pick.acierto !== "Pending") {
+        // Solo incluir apuestas que no estén pendientes y tengan
+        // cuota/cantidad (en picks de Telegram pueden ser null: no se
+        // inventan valores para el cálculo de ROI).
+        if (
+          pick.acierto !== "Pending" &&
+          pick.cantidadApostada != null &&
+          pick.cuota != null
+        ) {
           if (!apuestasPorInformante[pick.informante]) {
             apuestasPorInformante[pick.informante] = [];
           }

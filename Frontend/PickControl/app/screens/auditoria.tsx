@@ -17,6 +17,7 @@ import {
   AnalisisGlobal,
   AnalisisCanal,
   StatsBloque,
+  OddsBloque,
 } from "@/src/api/analisis.api";
 
 function yieldColor(y: number): string {
@@ -52,6 +53,35 @@ function StatsLine({ label, stats }: { label: string; stats: StatsBloque }) {
         </Text>
       </Text>
     </View>
+  );
+}
+
+// Auditoría de cuotas: veredicto del tipster contra el mercado
+// (cuotas infladas, CLV medio y % que bate el cierre).
+function OddsLine({ odds }: { odds: OddsBloque }) {
+  if (odds.mapeados === 0) return null;
+  return (
+    <Text style={styles.jugadasText}>
+      Mercado: {odds.mapeados}/{odds.con_evento} mapeados
+      {odds.clv_medio !== null && (
+        <>
+          {" · "}
+          <Text style={{ color: yieldColor(odds.clv_medio), fontWeight: "bold" }}>
+            CLV {odds.clv_medio > 0 ? "+" : ""}
+            {odds.clv_medio.toFixed(1)}%
+          </Text>
+        </>
+      )}
+      {odds.con_clv > 0 && <> · bate cierre {odds.pct_bate_cierre.toFixed(0)}%</>}
+      {odds.cuotas_infladas > 0 && (
+        <>
+          {" · "}
+          <Text style={{ color: "#f44336", fontWeight: "bold" }}>
+            {odds.pct_cuota_inflada.toFixed(0)}% cuotas infladas
+          </Text>
+        </>
+      )}
+    </Text>
   );
 }
 
@@ -124,6 +154,8 @@ export default function AuditoriaScreen() {
             )}
           </Text>
         )}
+
+        {canal.odds && <OddsLine odds={canal.odds} />}
       </View>
     );
   };
@@ -159,6 +191,7 @@ export default function AuditoriaScreen() {
               <Text style={styles.sectionTitle}>Resumen</Text>
               <StatsLine label="Tipsters" stats={data.totales_tipster} />
               <StatsLine label="Yo" stats={data.totales_yo} />
+              {data.totales_odds && <OddsLine odds={data.totales_odds} />}
             </View>
 
             {/* Por deporte */}

@@ -86,6 +86,35 @@ export async function updateParsedPickAcierto(
   });
 }
 
+export type PickOdds = {
+  /** False cuando el mercado del pick no tiene equivalente en el
+   * proveedor (props de jugador, mercados no cubiertos) o el pick no
+   * se enlazó a un evento: las cuotas quedan null, no se inventan. */
+  mapeado: boolean;
+  mercado_api: string | null;
+  opcion_api: string | null;
+  linea_api: string | null;
+  cuota_tipster: number | null;
+  cuota_apertura: number | null;
+  /** Cuota de mercado más cercana a la hora de publicación del pick. */
+  cuota_publicacion: number | null;
+  cuota_cierre: number | null;
+  capturas: number;
+  /** true = la cuota anunciada existía en mercado al publicar;
+   * false = cuota inflada/irreproducible. */
+  cuota_disponible: boolean | null;
+  /** % sobre el cierre: positivo = el tipster batió al mercado. */
+  clv_pct: number | null;
+};
+
+/** Cuota publicada por el tipster vs cuota real de mercado
+ * (apertura / publicación / cierre + CLV y detector de cuotas infladas). */
+export async function getPickOdds(id: number): Promise<PickOdds> {
+  return apiRequest<PickOdds>(`/telegram/parsed-picks/${id}/odds`, {
+    auth: true,
+  });
+}
+
 export type JugarPickPayload = {
   /** Importe real apostado por el usuario (obligatorio). */
   cantidadApostada: number;

@@ -14,9 +14,16 @@ from app.db.postgres import get_session
 from app.models.informante import Informante
 from app.models.parsed_pick import ParsedPick
 from app.models.pick import Acierto, Pick, PickSource
-from app.schemas.informante import InformanteStats, InformanteSummary
+from app.schemas.informante import (
+    InformanteOddsStats,
+    InformanteStats,
+    InformanteSummary,
+)
+from app.schemas.odds import OddsStatsBloque
 from app.schemas.pick import CombinadaPata, PickRead
+from app.services.odds.compare import aggregate_odds_stats, compare_picks
 from app.services.pick_service import (
+    _es_pick_simple,
     calcular_stats,
     calcular_stats_combinadas,
     calcular_stats_combinado,
@@ -84,8 +91,10 @@ def _parsed_to_read(
         tipo_de_apuesta=parsed.mercado or "",
         acierto=_parsed_to_acierto(parsed),
         casa=parsed.casa or "",
-        cantidad_apostada=parsed.stake or 1.0,
-        cuota=parsed.cuota or 1.0,
+        # Sin inventar: si el tipster no publicó cuota/stake quedan
+        # NULL y la UI muestra "—" en vez de un 1.00 ficticio.
+        cantidad_apostada=parsed.stake,
+        cuota=parsed.cuota,
         fecha=parsed.fecha_evento or parsed.created_at,
         source=PickSource.TELEGRAM,
         ganancia=ganancias.get(parsed.id),
@@ -180,6 +189,41 @@ async def obtener_stats_informante(
         combinadas_porcentaje=combinadas_stats.porcentaje_aciertos,
         combinadas_yield_pct=combinadas_stats.yield_pct,
         combinadas_pendientes=combinadas_stats.total_pendientes,
+    )
+
+
+@router.get("/informante/{nombre}/odds-stats", response_model=InformanteOddsStats)
+async def odds_stats_informante(
+    nombre: str, session: AsyncSession = Depends(get_session)
+) -> InformanteOddsStats:
+    """Agregados de la auditoría de cuotas del canal.
+
+    % de picks con cuota inflada (la anunciada no existía en mercado al
+    publicar), CLV medio y % que bate el cierre — el veredicto global
+    del tipster: un pick aislado no dice nada, el patrón sí.
+    """
+    informante = (
+        await session.exec(select(Informante).where(Informante.nombre == nombre))
+    ).first()
+
+    if informante is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No se encontró el informante.",
+        )
+
+    parsed_picks = (
+        await session.exec(
+            select(ParsedPick).where(ParsedPick.informante_id == informante.id)
+        )
+    ).all()
+    # Mismo filtro que las stats de simples: fuera retos, combinadas y
+    # patas — su cuota/stake atípicos distorsionarían el veredicto.
+    simples = [p for p in parsed_picks if _es_pick_simple(p)]
+    comparisons = await compare_picks(session, simples)
+    stats = aggregate_odds_stats(simples, comparisons)
+    return InformanteOddsStats(
+        informante=informante.nombre, odds=OddsStatsBloque(**vars(stats))
     )
 
 
