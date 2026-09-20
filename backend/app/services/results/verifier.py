@@ -42,6 +42,7 @@ from app.core.dates import utc_now
 from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
+from app.services.results.allsports_tennis import AllSportsTennisProvider
 from app.services.results.api_football import ApiFootballProvider
 from app.services.results.api_tennis import ApiTennisProvider, _pair_similar
 from app.services.results.base import (
@@ -1359,6 +1360,16 @@ async def _get_providers() -> list[ResultsProvider]:
         providers.append(
             TennisApi1Provider(
                 settings.rapidapi_tennis_key, settings.rapidapi_tennisapi1_host
+            )
+        )
+        # Último recurso: allsportsapi2 (Sofascore). `events/previous`
+        # paginado cubre el historial completo del jugador — rescata
+        # Challenger/ITF/dobles de hace días que `events/near` de
+        # tennisapi1 ya no alcanza. Comparte cuota con el snapshotter
+        # de odds (misma suscripción).
+        providers.append(
+            AllSportsTennisProvider(
+                settings.rapidapi_tennis_key, settings.rapidapi_allsports_host
             )
         )
     return providers
