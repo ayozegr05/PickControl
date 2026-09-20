@@ -143,35 +143,56 @@ class TestFetchMessageContent:
         client.download_media.assert_not_awaited()
 
 
+def _activa_canal(monkeypatch):
+    """Marca -100100 como canal activo con nombre 'Canal'."""
+    monkeypatch.setattr(handlers, "active_channel_ids", lambda: {-100100})
+    monkeypatch.setattr(handlers, "channel_name_for", lambda cid: "Canal")
+
+
 class TestNewMessageHandler:
     async def test_miembro_de_album_se_ignora(self, monkeypatch):
         """Los mensajes con grouped_id los procesa el handler de Album."""
+        _activa_canal(monkeypatch)
         proc = AsyncMock()
         monkeypatch.setattr(handlers, "process_incoming_message", proc)
-        handler = handlers._make_new_message_handler("canal")
+        handler = handlers._make_new_message_handler()
 
         event = SimpleNamespace(
             message=_msg(grouped_id=999),
             client=SimpleNamespace(),
             chat_id=-100100,
-            get_chat=AsyncMock(return_value=SimpleNamespace(title="Canal")),
+        )
+        await handler(event)
+        proc.assert_not_awaited()
+
+    async def test_canal_no_monitorizado_se_ignora(self, monkeypatch):
+        """El handler global descarta mensajes de chats no activos."""
+        monkeypatch.setattr(handlers, "active_channel_ids", lambda: {-100100})
+        proc = AsyncMock()
+        monkeypatch.setattr(handlers, "process_incoming_message", proc)
+        handler = handlers._make_new_message_handler()
+
+        event = SimpleNamespace(
+            message=_msg(),
+            client=SimpleNamespace(),
+            chat_id=-100999,
         )
         await handler(event)
         proc.assert_not_awaited()
 
     async def test_mensaje_normal_se_procesa(self, monkeypatch):
+        _activa_canal(monkeypatch)
         proc = AsyncMock()
         fetch = AsyncMock(return_value=("texto pick", None, None))
         monkeypatch.setattr(handlers, "process_incoming_message", proc)
         monkeypatch.setattr(handlers, "fetch_message_content", fetch)
-        handler = handlers._make_new_message_handler("canal")
+        handler = handlers._make_new_message_handler()
 
         msg = _msg(id=42, text="texto pick")
         event = SimpleNamespace(
             message=msg,
             client=SimpleNamespace(),
             chat_id=-100100,
-            get_chat=AsyncMock(return_value=SimpleNamespace(title="Canal")),
         )
         await handler(event)
 
@@ -186,12 +207,13 @@ class TestNewMessageHandler:
 
 class TestAlbumHandler:
     async def test_cada_foto_es_un_pick_y_hereda_caption(self, monkeypatch):
+        _activa_canal(monkeypatch)
         proc = AsyncMock()
         # Las fotos del álbum no llevan texto propio; fetch devuelve "".
         fetch = AsyncMock(return_value=("", "/media/f.jpg", "ocr"))
         monkeypatch.setattr(handlers, "process_incoming_message", proc)
         monkeypatch.setattr(handlers, "fetch_message_content", fetch)
-        handler = handlers._make_album_handler("canal")
+        handler = handlers._make_album_handler()
 
         m1 = _msg(id=1, text="STAKE 4 del pack", media=MessageMediaPhoto())
         m2 = _msg(id=2, text="", media=MessageMediaPhoto())
@@ -199,7 +221,6 @@ class TestAlbumHandler:
             messages=[m1, m2],
             client=SimpleNamespace(),
             chat_id=-100100,
-            get_chat=AsyncMock(return_value=SimpleNamespace(title="Canal")),
         )
         await handler(event)
 

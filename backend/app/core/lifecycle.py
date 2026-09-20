@@ -15,6 +15,10 @@ from app.core.logging import get_logger
 from app.services.odds.snapshotter import run_odds_snapshot_cycle
 from app.services.results.verifier import verify_pending_picks
 from app.services.telegram.catchup import run_catchup
+from app.services.telegram.channels import (
+    refresh_channel_cache,
+    seed_channels_from_env,
+)
 from app.services.telegram.client import get_telegram_client, reset_telegram_client
 from app.services.telegram.handlers import register_handlers
 
@@ -24,10 +28,12 @@ logger = get_logger("app.lifecycle")
 async def _run_telegram_listener() -> None:
     settings = get_settings()
     client = get_telegram_client()
+    await seed_channels_from_env()
     register_handlers(client)
 
     await client.start(phone=settings.telegram_phone)
     logger.info("[TELEGRAM_LISTENER] Cliente de Telegram conectado y escuchando.")
+    await refresh_channel_cache(client)
     await run_catchup(client)
     await client.run_until_disconnected()
 

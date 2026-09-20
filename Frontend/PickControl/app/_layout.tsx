@@ -13,6 +13,7 @@ export default function Layout() {
           <Stack.Screen name="screens/add-pick" />
           <Stack.Screen name="screens/parsed-picks" />
           <Stack.Screen name="screens/my-picks" />
+          <Stack.Screen name="screens/canales" />
           <Stack.Screen name="dynamic-routes/[informante]" />
         </Stack>
       </AuthProvider>

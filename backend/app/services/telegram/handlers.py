@@ -1,8 +1,9 @@
 """Registro de handlers de eventos de Telegram (Telethon).
 
-Escucha los mensajes nuevos de los canales configurados en
-`TELEGRAM_TARGET_CHANNEL` (lista separada por comas) y los reenvía al
-procesador de `processor.py` para guardarlos en base de datos.
+Se registran handlers GLOBALES (NewMessage + Album) que filtran cada
+evento por el set de canales activos de la tabla `channels`
+(`channels.py`). Así añadir/quitar canales desde la app no requiere
+re-registrar handlers ni reiniciar el listener.
 """
 
 import os
@@ -12,6 +13,7 @@ from telethon.tl.types import MessageMediaPhoto
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.services.telegram.channels import active_channel_ids, channel_name_for
 from app.services.telegram.ocr import extract_text_from_image
 from app.services.telegram.processor import process_incoming_message
 
@@ -59,22 +61,21 @@ async def fetch_message_content(
     return text, media_path, extracted_text
 
 
-def _make_new_message_handler(target_label: str):
-    """Fabrica un handler con el nombre del canal cerrado en el closure."""
+def _make_new_message_handler():
+    """Handler global de mensajes nuevos, filtrado por canales activos."""
 
     async def _on_new_message(event: events.NewMessage.Event) -> None:
+        chat_id = event.chat_id
+        if chat_id is None or chat_id not in active_channel_ids():
+            return
+
         message = event.message
         # Los miembros de un álbum también disparan NewMessage; los
         # procesa el handler de Album, que agrupa y comparte la caption.
         if getattr(message, "grouped_id", None) is not None:
             return
 
-        chat_entity = await event.get_chat()
-        chat_name = (
-            getattr(chat_entity, "title", None)
-            or getattr(chat_entity, "username", None)
-            or str(target_label)
-        )
+        chat_name = channel_name_for(chat_id)
 
         text, media_path, extracted_text = await fetch_message_content(
             event.client, message
@@ -88,7 +89,7 @@ def _make_new_message_handler(target_label: str):
 
         await process_incoming_message(
             channel=chat_name,
-            channel_id=event.chat_id,
+            channel_id=chat_id,
             message_id=message.id,
             text=text,
             media_path=media_path,
@@ -99,7 +100,7 @@ def _make_new_message_handler(target_label: str):
     return _on_new_message
 
 
-def _make_album_handler(target_label: str):
+def _make_album_handler():
     """Handler para álbumes (varias fotos enviadas como un solo mensaje).
 
     Un "pack" de picks suele llegar como álbum: N boletos con un mismo
@@ -109,12 +110,11 @@ def _make_album_handler(target_label: str):
     """
 
     async def _on_album(event: events.Album.Event) -> None:
-        chat_entity = await event.get_chat()
-        chat_name = (
-            getattr(chat_entity, "title", None)
-            or getattr(chat_entity, "username", None)
-            or str(target_label)
-        )
+        chat_id = event.chat_id
+        if chat_id is None or chat_id not in active_channel_ids():
+            return
+
+        chat_name = channel_name_for(chat_id)
 
         messages = list(event.messages)
         # Caption del álbum: el texto de cualquiera de sus mensajes (Telegram
@@ -136,7 +136,7 @@ def _make_album_handler(target_label: str):
             )
             await process_incoming_message(
                 channel=chat_name,
-                channel_id=event.chat_id,
+                channel_id=chat_id,
                 message_id=message.id,
                 text=text or shared_caption,
                 media_path=media_path,
@@ -148,29 +148,18 @@ def _make_album_handler(target_label: str):
 
 
 def register_handlers(client: TelegramClient) -> None:
-    """Registra un listener de mensajes nuevos por cada canal configurado.
+    """Registra los handlers globales de mensajes y álbumes.
 
-    Si `TELEGRAM_TARGET_CHANNEL` no está configurado, no registra nada
-    para no lanzar el cliente a escuchar "todo".
+    No filtran por canal al registrarse: cada evento se comprueba contra
+    `active_channel_ids()` (tabla `channels`), de modo que el CRUD de
+    canales desde la app surte efecto sin reiniciar el listener.
     """
-    settings = get_settings()
-    targets = parse_target_channels(settings.telegram_target_channel or "")
-
-    if not targets:
-        logger.warning(
-            "[TELEGRAM_LISTENER] TELEGRAM_TARGET_CHANNEL no está configurado; "
-            "no se registrará ningún listener."
-        )
-        return
-
-    for target in targets:
-        # Telethon acepta usernames ("mi_canal") o ids numéricos.
-        # Normalizamos posibles formatos: 123, -123, -100123...
-        chat = to_telegram_chat_id(target) if looks_like_id(target) else target
-
-        client.on(events.NewMessage(chats=[chat]))(_make_new_message_handler(target))
-        client.on(events.Album(chats=[chat]))(_make_album_handler(target))
-        logger.info("[TELEGRAM_LISTENER] Escuchando canal objetivo: %s", target)
+    client.on(events.NewMessage())(_make_new_message_handler())
+    client.on(events.Album())(_make_album_handler())
+    logger.info(
+        "[TELEGRAM_LISTENER] Handlers globales registrados "
+        "(filtro dinámico por tabla channels)"
+    )
 
 
 def looks_like_id(value: str) -> bool:
