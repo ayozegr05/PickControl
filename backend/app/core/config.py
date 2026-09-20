@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     # tennisapi1 y misma key de cuenta — pero cuota diaria propia, así
     # los snapshots no compiten con la verificación de resultados.
     rapidapi_allsports_host: str = "allsportsapi2.p.rapidapi.com"
+    # Stats/marcadores de fútbol sin ventana de fechas: "FootApi"
+    # (footapi7, mismo backend Sofascore). Reutiliza RAPIDAPI_TENNIS_KEY
+    # (la key es por cuenta) y tiene cuota diaria propia — rescata los
+    # mercados de estadísticas que API-Football ya no puede consultar
+    # fuera de su ventana ±1 día del plan gratis.
+    rapidapi_footapi_host: str = "footapi7.p.rapidapi.com"
     # Cada cuántos minutos corre el snapshotter de odds en segundo
     # plano. Cadencia corta para capturar bien el cierre de cuotas.
     odds_snapshot_interval_minutes: float = 30.0

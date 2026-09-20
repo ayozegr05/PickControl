@@ -632,12 +632,40 @@ tipsters no publican ese mercado hoy. Implementar cuando aparezca el
 primero; el diseño sería `resolve_halftime()` en el verifier + mapeo de
 variantes del mercado en el extractor.
 
-## Decisiones pendientes para la próxima sesión (21-sep-2026)
+## Provider de stats footapi7 + rescate CSV (implementado 21-sep-2026)
 
-1. **Mercados de stats completos** (tarjetas/córners/tiros): usar Sofascore
-   `/statistics` (periodo ALL) como fuente extra del verifier — rescataría
-   los ~6 pendientes actuales y dejaría de depender de la ventana ±1 día
-   de API-Football para esos mercados.
+El punto 1 de la lista anterior quedó implementado así:
+
+- **`FootApiStatsProvider`** (`app/services/results/footapi_stats.py`):
+  fútbol vía `footapi7.p.rapidapi.com` (dato de Sofascore servido por
+  RapidAPI — `api.sofascore.com` directo está bloqueado por Cloudflare,
+  403 confirmado). Reutiliza `RAPIDAPI_TENNIS_KEY` (la key es de cuenta
+  RapidAPI; footapi7 tiene cuota BASIC diaria propia, independiente de
+  tennisapi1/allsportsapi2). Sin ventana de fechas: un partido terminado
+  devuelve marcador y stats semanas después.
+- Flujo: `/api/search/{equipo}` → mejor entidad `sport.slug=football` →
+  `/api/team/{id}/matches/previous/{page}` (~30 eventos/página, máx 2
+  páginas) → match por `match_score` + tolerancia ±1 día →
+  `/api/match/{id}/statistics` (solo periodo `ALL`; `1ST`/`2ND` quedan
+  para el hito de primera parte). Stats traducidas a las claves
+  canónicas de API-Football ("Corner kicks"→"Corner Kicks"...) para que
+  el verifier no cambie. Cachés de búsqueda/eventos/stats por pasada;
+  403/429 marcan cuota agotada hasta mañana (no cuentan como miss).
+- **Cadena de fútbol**: football-data → API-Football → **footapi7** →
+  (tenis después). Cubre stats fuera de ventana y marcadores de ligas
+  menores.
+- **`scripts/backfill_stats_csv.py`**: rescate semanal/manual con los
+  CSVs gratis de football-data.co.uk (22 ligas; URL apex sin www, que
+  redirige). Dry-run por defecto, `--apply` para escribir, `--days`,
+  `--leagues`. Excluye padres/patas de combinada y mercado "combinada"
+  legado. Tras aplicar reliquida combinadas con `_settle_combinadas`.
+- Tests: `tests/test_footapi_stats.py` (5: marcador, no-terminado,
+  equipo inexistente, mapeo de stats canónicas, integración con
+  `verify_pick`).
+
+## Decisiones pendientes para la próxima sesión
+
+1. ~~Mercados de stats completos~~ → **hecho** (sección anterior).
 2. **Probar en vivo el CRUD de canales**: arrancar backend y abrir
    `app/screens/canales.tsx` en Expo — verificar picker de `iter_dialogs`,
    alta/baja dinámica y catch-up post-alta.
