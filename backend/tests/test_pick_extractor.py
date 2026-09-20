@@ -702,3 +702,40 @@ class TestFixtureFromSlipOcr:
         from app.services.telegram.pick_extractor import _fixture_from_slip_ocr
 
         assert _fixture_from_slip_ocr("SERIE A\nMÁS DE 7.0 CÓRNERS") is None
+
+
+class TestPatasFromJoined:
+    """Red de seguridad que parte el "A + B + C" de `seleccion` en patas
+    (la usan el extractor en vivo y el backfill de combinadas legadas)."""
+
+    def test_pata_que_empieza_en_digito_con_mercado_se_conserva(self):
+        from app.services.telegram.pick_extractor import _patas_from_joined
+
+        pick = ExtractedPick(
+            es_apuesta=True,
+            seleccion=(
+                "Elias Ymer - Ganará el encuentro + " "1° set - Más de 7.5 juegos"
+            ),
+        )
+        patas = _patas_from_joined(pick)
+        assert len(patas) == 2
+        assert patas[1].seleccion == "1° set - Más de 7.5 juegos"
+
+    def test_trozo_numerico_suelto_sigue_fuera(self):
+        from app.services.telegram.pick_extractor import _patas_from_joined
+
+        pick = ExtractedPick(es_apuesta=True, seleccion="Atlético gana + 263 + 105")
+        patas = _patas_from_joined(pick)
+        assert [p.seleccion for p in patas] == ["Atlético gana"]
+
+    def test_eventos_alineados_reparten_en_orden(self):
+        from app.services.telegram.pick_extractor import _patas_from_joined
+
+        pick = ExtractedPick(
+            es_apuesta=True,
+            seleccion="Juventus + Celtic",
+            evento="Juventus vs NEC + Celtic vs Ferencvarosi TC",
+        )
+        patas = _patas_from_joined(pick)
+        assert patas[0].evento == "Juventus vs NEC"
+        assert patas[1].evento == "Celtic vs Ferencvarosi TC"

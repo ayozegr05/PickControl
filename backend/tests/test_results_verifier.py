@@ -1388,6 +1388,83 @@ class TestPlayerProps:
         acierto, anulada = await verify_pick(pick, [provider])
         assert (acierto, anulada) == (None, True)
 
+    def test_detecta_prop_notacion_slip(self):
+        # "2+ faltas" (notación bet365) = "2 o más" = over 1.5, aunque
+        # la línea del pick se parseara mal ("Romero - 2+" -> -2.0).
+        from app.services.results.verifier import _detect_player_prop
+
+        result = _detect_player_prop(
+            "Ivan Romero - 2+ faltas cometidas",
+            "over/under",
+            -2.0,
+            "Osasuna - Levante",
+        )
+        assert result == ("Ivan Romero", ("fouls.committed",), "over", 1.5)
+
+    async def test_prop_faltas_notacion_slip_resuelve(self):
+        players = _players(
+            played=["Ivan Romero"], stats={"Ivan Romero": {"fouls.committed": 3}}
+        )
+        provider = _StubPropProvider(players=players)
+        pick = _pick(
+            "Ivan Romero - 2+ faltas cometidas",
+            "over/under",
+            linea=-2.0,
+            evento="Osasuna - Levante",
+        )
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (True, False)
+
+    async def test_prop_remates_a_puerta_vocabulario_bet365(self):
+        # "remates a puerta" es el "tiros a puerta" de bet365.
+        players = _players(
+            played=["Ante Budimir"], stats={"Ante Budimir": {"shots.on": 2}}
+        )
+        provider = _StubPropProvider(players=players)
+        pick = _pick(
+            "Ante Budimir: 2+ remates a puerta",
+            "over/under",
+            linea=1.5,
+            evento="Osasuna - Levante",
+        )
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_prop_se_resuelve_antes_que_stat_de_equipo(self):
+        # "Ivan Romero - 2+ faltas" con stats de equipo disponibles:
+        # el prop gana — el total del partido no es el del jugador.
+        players = _players(
+            played=["Ivan Romero"], stats={"Ivan Romero": {"fouls.committed": 1}}
+        )
+        provider = _StubPropProvider(
+            stats=_stats({"Fouls": 12}, {"Fouls": 15}),
+            players=players,
+        )
+        pick = _pick(
+            "Ivan Romero - 2+ faltas cometidas",
+            "over/under",
+            linea=1.5,
+            evento="Osasuna - Levante",
+        )
+        acierto, anulada = await verify_pick(pick, [provider])
+        # 1 falta suya < 1.5 -> fallo; como stat de equipo sería acierto.
+        assert (acierto, anulada) == (False, False)
+
+    async def test_stat_de_equipo_sin_jugador_sigue_por_stats(self):
+        # "Más de 2.5 tarjetas" sin nombre: el prop no detecta jugador
+        # y se resuelve con las stats del partido como antes.
+        provider = _StubPropProvider(
+            stats=_stats({"Yellow Cards": 3}, {"Yellow Cards": 1}),
+        )
+        pick = _pick(
+            "Más de 2.5 tarjetas",
+            "over/under tarjetas",
+            linea=2.5,
+            evento="Osasuna - Levante",
+        )
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True  # 4 > 2.5
+
     async def test_prop_via_fallback_over_under(self):
         # Mercado "over/under" + nombre que no casa con ningún equipo:
         # cae al fallback de prop de jugador.
