@@ -655,9 +655,14 @@ El punto 1 de la lista anterior quedó implementado así:
   páginas) → match por `match_score` + tolerancia ±1 día →
   `/api/match/{id}/statistics` (periodos `ALL` y `1ST` — este último
   habilita mercados de córners/tarjetas de 1ª parte). Stats traducidas
-  a las claves
-  canónicas de API-Football ("Corner kicks"→"Corner Kicks"...) para que
-  el verifier no cambie. Cachés de búsqueda/eventos/stats por pasada;
+  a las claves canónicas de API-Football ("Corner kicks"→"Corner
+  Kicks"...) para que el verifier no cambie. Además `/incidents`
+  (goles/tarjetas con jugador y minuto) y `/lineups` (minutos + stats
+  por jugador) implementan `find_match_events`/`find_match_players`:
+  los mercados de jugador ("X marca", "X marca o asiste", "X recibe
+  tarjeta") y los props con número ("X más de 1.5 tiros a puerta")
+  también se resuelven fuera de la ventana ±1 día. Cachés de
+  búsqueda/eventos/stats por pasada;
   403/429 marcan cuota agotada hasta mañana (no cuentan como miss).
 - **Cadena de fútbol**: football-data → API-Football → **footapi7** →
   (tenis después). Cubre stats fuera de ventana y marcadores de ligas
@@ -667,9 +672,11 @@ El punto 1 de la lista anterior quedó implementado así:
   redirige). Dry-run por defecto, `--apply` para escribir, `--days`,
   `--leagues`. Excluye padres/patas de combinada y mercado "combinada"
   legado. Tras aplicar reliquida combinadas con `_settle_combinadas`.
-- Tests: `tests/test_footapi_stats.py` (5: marcador, no-terminado,
-  equipo inexistente, mapeo de stats canónicas, integración con
-  `verify_pick`).
+- Tests: `tests/test_footapi_stats.py` (11: marcador, no-terminado,
+  equipo inexistente, stats canónicas, incidents→MatchEvents con
+  propia puerta excluida, lineups→MatchPlayers con minutos, e
+  integración con `verify_pick` para córners, "X marca", "no jugó →
+  anulada" y prop de tiros a puerta).
 
 ## Decisiones pendientes para la próxima sesión
 
