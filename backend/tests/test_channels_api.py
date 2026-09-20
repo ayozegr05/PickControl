@@ -171,6 +171,43 @@ class TestCrearCanal:
         assert resp.json()["id"] == existing.id
         assert resp.json()["activo"] is True
 
+    async def test_reanadir_rescata_eliminado(
+        self, client, auth_headers, session, telegram_api_mocks
+    ):
+        """Re-añadir un canal borrado reactiva la misma fila (no duplica)."""
+        existing = await _channel(
+            session,
+            target="viejo",
+            activo=False,
+            eliminado=True,
+            channel_id=-1006,
+        )
+        entity = _FakeTlChannel(id=6, title="Viejo", username="viejo")
+        entity.marked_id = -1006
+        resolve = AsyncMock(return_value=(entity, -1006))
+
+        import app.api.v1.channels as api_mod
+
+        original = api_mod.resolve_channel_target
+        api_mod.resolve_channel_target = resolve
+        try:
+            resp = await client.post(
+                "/api/v1/channels",
+                json={"target": "@viejo"},
+                headers=auth_headers,
+            )
+        finally:
+            api_mod.resolve_channel_target = original
+
+        assert resp.status_code == 201
+        assert resp.json()["id"] == existing.id
+        assert resp.json()["activo"] is True
+        await session.refresh(existing)
+        assert existing.eliminado is False
+        # Y vuelve a aparecer en el listado.
+        lista = await client.get("/api/v1/channels", headers=auth_headers)
+        assert any(c["id"] == existing.id for c in lista.json())
+
     async def test_canal_no_encontrado_404(
         self, client, auth_headers, telegram_api_mocks
     ):
@@ -233,12 +270,16 @@ class TestActualizarYBorrar:
 
         resp = await client.delete(f"/api/v1/channels/{ch.id}", headers=auth_headers)
         assert resp.status_code == 204
-        # Borrado lógico: la fila sigue en la lista como inactiva para
-        # poder reactivarla; el raw también se conserva (auditoría).
+        # Borrado lógico: la fila se conserva (auditoría) marcada como
+        # eliminada e inactiva, y desaparece del listado de canales.
         canal = await session.get(Channel, ch.id)
         assert canal is not None
         assert canal.activo is False
+        assert canal.eliminado is True
         assert (await session.exec(select(TelegramRawMessage))).first() is not None
+
+        lista = await client.get("/api/v1/channels", headers=auth_headers)
+        assert all(c["id"] != ch.id for c in lista.json())
 
     async def test_borrar_inexistente_404(self, client, auth_headers):
         resp = await client.delete("/api/v1/channels/999", headers=auth_headers)
