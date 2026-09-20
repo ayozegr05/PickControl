@@ -264,14 +264,23 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
 ### 1. Core: verificación de resultados
 
 - [x] **Proveedor de resultados para tenis.** Implementado con cadena
-      de 3 niveles gratuita (api-sports.io NO tiene tenis y
+      de 4 niveles gratuita (api-sports.io NO tiene tenis y
       api-tennis.com solo da trial de 14 días):
       1) `ApiTennisProvider` → **TheSportsDB** (gratis sin registro, key
          pública "3"; ATP/WTA Tour y Grand Slams);
       2) `RapidApiTennisProvider` → **Tennis API - ATP WTA ITF**
          (RapidAPI, historial por jugador; Challenger/ITF);
       3) `TennisApi1Provider` → **tennisapi1** (RapidAPI, datos de
-         Sofascore por categoría+fecha: ATP/WTA/Challenger/ITF/Copas).
+         Sofascore por categoría+fecha: ATP/WTA/Challenger/ITF/Copas);
+      4) `AllSportsTennisProvider` → **allsportsapi2** (Sofascore,
+         `/api/tennis/team/{id}/events/previous/{page}` — ~30 eventos
+         históricos por página). Cierra el hueco de tenis menor:
+         tennisapi1 solo alcanza ±1 partido por jugador (`events/near`),
+         mientras `events/previous` cubre semanas de Challenger/ITF y
+         **dobles** (la pareja es entidad propia; matching pair-aware
+         por tokens — los apellidos cortos tipo "Pel" no pasaban el
+         umbral de `_pair_similar`). Comparte suscripción/cuota con el
+         snapshotter de cuotas (mismo NAME en provider_state).
       Cada proveedor solo se consulta si el anterior falla o agotó su
       cuota (~50 req/día por suscripción): un 403/429 lo marca como sin
       cuota hasta mañana y el siguiente pick ni lo intenta (ver
