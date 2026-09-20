@@ -4,6 +4,8 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+import { registerForPushNotifications } from "@/src/notifications/push";
+
 type AuthContextType = {
   isAuthenticated: boolean;
   userName: string | null;
@@ -28,6 +30,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const storedUserName = await AsyncStorage.getItem("userName");
       setIsAuthenticated(!!token);
       setUserName(storedUserName);
+      if (token) {
+        // Registro push en segundo plano: best-effort, nunca bloquea.
+        void registerForPushNotifications();
+      }
     } catch (error) {
       console.error("Error checking auth:", error);
     }
@@ -39,6 +45,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       await AsyncStorage.setItem("userName", name);
       setIsAuthenticated(true);
       setUserName(name);
+      void registerForPushNotifications();
     } catch (error) {
       console.error("Error storing token:", error);
     }

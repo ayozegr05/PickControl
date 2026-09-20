@@ -42,6 +42,7 @@ from app.core.dates import utc_now
 from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
+from app.services.notifications.push import notify_settled_picks
 from app.services.results.allsports_tennis import AllSportsTennisProvider
 from app.services.results.api_football import ApiFootballProvider
 from app.services.results.api_tennis import ApiTennisProvider, _pair_similar
@@ -1969,12 +1970,13 @@ async def settle_combinada(session: AsyncSession, parent: ParsedPick) -> bool:
     return True
 
 
-async def _settle_combinadas(session: AsyncSession) -> int:
+async def _settle_combinadas(session: AsyncSession) -> list[int]:
     """Pasa de liquidación de combinadas tras verificar las patas.
 
-    Devuelve cuántas combinadas cambiaron de estado en esta pasada. Se
-    procesan también las resueltas por "auto": una corrección manual en
-    una pata puede reabrir la combinada.
+    Devuelve los ids de las combinadas que cambiaron de estado en esta
+    pasada (para el hook de notificaciones). Se procesan también las
+    resueltas por "auto": una corrección manual en una pata puede
+    reabrir la combinada.
     """
     parents = (
         await session.exec(
@@ -1986,10 +1988,10 @@ async def _settle_combinadas(session: AsyncSession) -> int:
             )
         )
     ).all()
-    settled = 0
+    settled: list[int] = []
     for parent in parents:
         if await settle_combinada(session, parent):
-            settled += 1
+            settled.append(parent.id)
     return settled
 
 
@@ -2010,6 +2012,11 @@ async def verify_pending_picks() -> int:
 
     now = utc_now()
     verified_count = 0
+    # Ids liquidados en esta pasada (simples + padres de combinadas) —
+    # se notifican por push tras el commit. Un pick ya liquidado no
+    # vuelve a entrar en `pending`, así que no hay notificaciones
+    # duplicadas en pasadas repetidas.
+    settled_ids: list[int] = []
 
     async with AsyncSessionLocal() as session:
         result = await session.exec(
@@ -2047,6 +2054,7 @@ async def verify_pending_picks() -> int:
                 pick.verificado_por = "auto"
                 session.add(pick)
                 verified_count += 1
+                settled_ids.append(pick.id)
                 logger.info(
                     "[RESULTS_VERIFIER] Pick id=%s ('%s') verificado: "
                     "acierto=%s anulada=%s",
@@ -2061,12 +2069,19 @@ async def verify_pending_picks() -> int:
         # conjunto — una pata perdida la tumba, las anuladas se excluyen.
         combinadas_settled = await _settle_combinadas(session)
         if combinadas_settled:
+            settled_ids.extend(combinadas_settled)
             logger.info(
                 "[RESULTS_VERIFIER] Combinadas liquidadas en esta pasada: %s",
-                combinadas_settled,
+                len(combinadas_settled),
             )
 
         await session.commit()
+
+    # Push "apuesta liquidada" — solo llega a usuarios que marcaron
+    # "Yo también la jugué" (el filtro está dentro de la función). Va
+    # tras el commit y es best-effort: nunca rompe la verificación.
+    if settled_ids:
+        await notify_settled_picks(settled_ids)
 
     logger.info(
         "[RESULTS_VERIFIER] Verificación completada: %s/%s picks resueltos.",

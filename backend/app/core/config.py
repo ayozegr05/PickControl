@@ -92,6 +92,12 @@ class Settings(BaseSettings):
     # Reutiliza RAPIDAPI_TENNIS_KEY; el histórico es ilimitado en el
     # plan gratis — solo lo consume scripts/backfill_historical_odds.py.
     rapidapi_oddspapi_host: str = "bet36528.p.rapidapi.com"
+    # Notificaciones push vía Expo Push API (gratis, sin Firebase para
+    # el caso básico). `push_notifications_enabled` apaga el envío sin
+    # tocar código (dev/tests); `expo_access_token` solo hace falta para
+    # volúmenes altos — el envío normal no requiere token.
+    push_notifications_enabled: bool = True
+    expo_access_token: str | None = None
     # Cada cuántos minutos corre el snapshotter de odds en segundo
     # plano. Cadencia corta para capturar bien el cierre de cuotas.
     odds_snapshot_interval_minutes: float = 30.0

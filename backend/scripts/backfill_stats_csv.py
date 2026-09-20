@@ -281,7 +281,7 @@ async def _run(
         await session.commit()
         settled = await _settle_combinadas(session)
         await session.commit()
-        print(f"[CSV] Combinadas liquidadas tras el rescate: {settled}")
+        print(f"[CSV] Combinadas liquidadas tras el rescate: {len(settled)}")
 
     print(
         f"[CSV] {'APLICADO' if apply else 'DRY-RUN'}: "
