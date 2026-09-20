@@ -212,6 +212,15 @@ _COMBINADA_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Palabras de mercado: un trozo de seleccion unido por " + " que
+# empieza en dígito solo es pata si trae alguna ("1° set - Más de
+# 7.5 juegos" sí; "263" o "+7.5" sueltos no).
+_LEG_MARKET_WORD = re.compile(
+    r"m[aá]s|menos|gol|c[oó]rner|esquina|tarjeta|juego|set|gana|victoria|"
+    r"marca|anota|asist|empate|h[aá]ndicap|descanso|remate|falta|over|under",
+    re.IGNORECASE,
+)
+
 # Viñeta que precede a cada pata en el texto/OCR del boleto.
 _LEG_BULLET_PATTERN = re.compile(r"^\s*[✔✅☑•·▪►➤‣\-–—*]\s*(?P<leg>\S.*)$")
 
@@ -410,7 +419,11 @@ def _patas_from_joined(pick: ExtractedPick) -> list[ExtractedPick]:
     eventos = [e.strip() for e in pick.evento.split(" + ")] if pick.evento else []
     patas = []
     for idx, part in enumerate(parts):
-        if len(part) < 3 or re.match(r"^[+-]?\s*\d", part):
+        if len(part) < 3:
+            continue
+        # Trozo numérico suelto ("263", "+7.5") no es pata — pero una
+        # pata puede empezar en dígito ("1° set - Más de 7.5 juegos").
+        if re.match(r"^[+-]?\s*\d", part) and not _LEG_MARKET_WORD.search(part):
             continue
         patas.append(
             ExtractedPick(

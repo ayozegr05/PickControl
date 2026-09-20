@@ -357,6 +357,16 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
         cada registro etiquetado como combinada (dry-run por defecto,
         `--apply` para escribir) — los falsos positivos se reclasifican
         solos y los raws no se tocan.
+      - Migración de legados: `scripts/backfill_combinada_legs.py`
+        parte las primeras combinadas (guardadas como fila única con
+        `mercado="combinada"` y selección unida por " + ") en padre +
+        patas, reusando `_patas_from_joined`/`_ensure_combinada_shape`
+        del extractor. Post-proceso por pata: "Más 1.5"/"2+ faltas" →
+        over/under con línea N-0.5, nombre suelto → "ganador". El
+        verifier ganó además la notación "N+" (= "N o más"), el
+        vocabulario "remates" de bet365 en props, y el prop de jugador
+        se intenta antes que la stat de equipo (un "Ivan Romero - 2+
+        faltas" ya no resuelve contra las faltas del partido).
 - [x] **Partidos aplazados/cancelados → anulada**: implementado. Si el
       fixture consta `POSTPONED`/`CANCELLED` (football-data) o
       `PST`/`CANC` (API-Football) y la `fecha_evento` lleva más de 72 h

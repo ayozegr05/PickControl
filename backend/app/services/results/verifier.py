@@ -179,7 +179,8 @@ _LINEA_PATTERN = re.compile(r"[+-]\s?\d+(?:[.,]\d+)?")
 # para revisión manual hasta tener un proveedor de estadísticas.
 _OU_NON_GOALS_PATTERN = re.compile(
     r"c[oó]rner|esquina|tarjeta|card|booking|amarilla|roja|tiro|shot|"
-    r"falta|foul|fuera\s+de\s+juego|offside|juego|set|punto|coche|saque",
+    r"falta|foul|fuera\s+de\s+juego|offside|juego|set|punto|coche|saque|"
+    r"remate",
     re.IGNORECASE,
 )
 # "Más de 0.5 goles 1ª parte": el marcador final no dice nada del
@@ -661,26 +662,28 @@ def _resolve_player_market(
 _PLAYER_PROP_SUBJECTS: tuple[tuple[re.Pattern, tuple[str, ...]], ...] = (
     (
         re.compile(
-            r"tiro[s]?\s+a\s+(?:puerta|porter[ií]a)|on\s+target|a\s+porter[ií]a",
+            r"(?:tiro|remate)[s]?\s+a\s+(?:puerta|porter[ií]a)|on\s+target|"
+            r"a\s+porter[ií]a",
             re.IGNORECASE,
         ),
         ("shots.on",),
     ),
-    (re.compile(r"tiro|disparo|shot", re.IGNORECASE), ("shots.total",)),
+    (re.compile(r"tiro|disparo|shot|remate", re.IGNORECASE), ("shots.total",)),
     (re.compile(r"falta|foul", re.IGNORECASE), ("fouls.committed",)),
     (re.compile(r"tarjeta|card", re.IGNORECASE), ("cards.yellow", "cards.red")),
     (re.compile(r"asist", re.IGNORECASE), ("goals.assists",)),
     (re.compile(r"gol", re.IGNORECASE), ("goals.total",)),
 )
-# "2 o más tiros" = total >= 2 = over 1.5.
-_AT_LEAST_PATTERN = re.compile(r"(\d+)\s*o\s+m[aá]s", re.IGNORECASE)
+# "2 o más tiros" / "2+ remates" (notación de slip) = total >= 2 = over 1.5.
+_AT_LEAST_PATTERN = re.compile(r"(\d+)\s*(?:\+|o\s+m[aá]s)", re.IGNORECASE)
 _LINE_TEXT_PATTERN = re.compile(
     r"(?:m[aá]s|menos|over|under)\s+de\s+(\d+(?:[.,]\d+)?)", re.IGNORECASE
 )
 # Relleno que no forma parte del nombre del jugador en un prop.
 _PROP_NOISE = re.compile(
     r"\d+\s*o\s+m[aá]s|m[aá]s\s+de|menos\s+de|\bover\b|\bunder\b|"
-    r"\d+(?:[.,]\d+)?|tiro[s]?|a\s+(?:puerta|porter[ií]a)|dispar\w*|"
+    r"\d+(?:[.,]\d+)?|tiro[s]?|remate[s]?|a\s+(?:puerta|porter[ií]a)|"
+    r"dispar\w*|"
     r"falta[s]?|tarjeta[s]?|gol(?:es)?|asistenc\w*|cometid\w*|recibid\w*|"
     r"total\s+de|que\s+(?:marca|anota|recibe)|jugador|\by\b|\be\b|\bo\b",
     re.IGNORECASE,
@@ -732,9 +735,10 @@ def _detect_player_prop(
     resolved_linea = linea
     at_least = _AT_LEAST_PATTERN.search(text)
     if at_least:
+        # "2+"/"2 o más" fija la línea a N-0.5 — preferible a la del
+        # pick, que puede haberse parseado mal (p. ej. "Romero - 2+").
         direction = "over"
-        if resolved_linea is None:
-            resolved_linea = int(at_least.group(1)) - 0.5
+        resolved_linea = int(at_least.group(1)) - 0.5
     if resolved_linea is None:
         m = _LINE_TEXT_PATTERN.search(text)
         if m:
@@ -1681,12 +1685,15 @@ async def verify_pick(
         return _resolve_asian_handicap(match, team_hint, pick.linea)
 
     if es_over_under and pick.linea is not None:
+        ou_text = f"{pick.seleccion or ''} {pick.mercado or ''}"
         direction = _detect_over_under_direction(
             pick.seleccion
         ) or _detect_over_under_direction(pick.mercado or "")
+        if not direction and _AT_LEAST_PATTERN.search(ou_text):
+            # Notación de slip "2+ faltas" = "2 o más" = over.
+            direction = "over"
         if not direction:
             return None, False
-        ou_text = f"{pick.seleccion or ''} {pick.mercado or ''}"
         # Over/under es sobre el total del partido o sobre un equipo
         # concreto; en ambos casos necesitamos un nombre de equipo para
         # localizar el partido en la API.
@@ -1700,10 +1707,26 @@ async def verify_pick(
         if not team_hint:
             return None, False
         if _OU_NON_GOALS_PATTERN.search(ou_text):
-            # Córners/tarjetas/tiros...: no resoluble con el marcador,
-            # pero API-Football sí tiene /fixtures/statistics (solo
-            # dentro de la ventana de fechas del plan gratis). En 1ª
-            # parte se usan las stats del periodo "1ST" (footapi7).
+            # Prop de jugador primero ("Ivan Romero - 2+ faltas"): si la
+            # selección nombra un jugador hay que resolver contra sus
+            # stats, no contra las del equipo — la guarda de tokens del
+            # evento ya descarta nombres de equipo.
+            prop = _detect_player_prop(
+                pick.seleccion or "", pick.mercado, pick.linea, pick.evento
+            )
+            if prop and pick.evento:
+                player, prop_keys, prop_dir, prop_linea = prop
+                players = await _find_players_across_providers(
+                    pick.fecha_evento, pick.evento, providers_for_sport, pick.id
+                )
+                if players is not None:
+                    return _resolve_player_prop(
+                        players, player, prop_keys, prop_dir, prop_linea
+                    )
+            # Córners/tarjetas/tiros de equipo: no resoluble con el
+            # marcador, pero API-Football sí tiene /fixtures/statistics
+            # (solo dentro de la ventana de fechas del plan gratis). En
+            # 1ª parte se usan las stats del periodo "1ST" (footapi7).
             stat_keys = _stat_keys_for(ou_text)
             if stat_keys:
                 stats = await (
@@ -1717,21 +1740,6 @@ async def verify_pick(
                     )
                     if result != (None, False):
                         return result
-            # Sujeto sin stat de equipo, o el "equipo" no casó con
-            # ninguno: quizá es un prop de jugador ("Budimir más de
-            # 1.5 tiros a puerta").
-            prop = _detect_player_prop(
-                pick.seleccion or "", pick.mercado, pick.linea, pick.evento
-            )
-            if prop and pick.evento:
-                player, prop_keys, prop_dir, prop_linea = prop
-                players = await _find_players_across_providers(
-                    pick.fecha_evento, pick.evento, providers_for_sport, pick.id
-                )
-                if players is not None:
-                    return _resolve_player_prop(
-                        players, player, prop_keys, prop_dir, prop_linea
-                    )
             return None, False
         if pick.linea >= _AMBIGUOUS_LINE_MIN and not _GOALS_PATTERN.search(ou_text):
             # Línea alta sin la palabra "gol": en fútbol casi seguro son
