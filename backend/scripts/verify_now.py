@@ -17,6 +17,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding="utf-8")
 
+from app.models.informante import Informante  # noqa: F401  (FK de ParsedPick)
+from app.models.telegram_raw_message import TelegramRawMessage  # noqa: F401
 from app.services.results.verifier import verify_pending_picks
 
 
