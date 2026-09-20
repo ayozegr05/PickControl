@@ -22,6 +22,12 @@ Ver `ROADMAP_MIGRACION.md` para estado de fases y próximos hitos.
     `_ht_view()` en el verifier (stats 1H vía `find_match_stats_1h` de
     footapi7); sin dato HT el pick queda pendiente, nunca se resuelve
     con el marcador final.
+  - `app/services/notifications/` — push vía Expo Push API (`push.py`,
+    best-effort: nunca rompe ingesta/verificación; `DeviceNotRegistered`
+    desactiva el token). Tokens en `device_tokens` (CRUD `/devices`);
+    hooks en `processor.py` (pick nuevo) y `verifier.py` (liquidación
+    solo a usuarios con "Yo también la jugué"). Kill-switch:
+    `PUSH_NOTIFICATIONS_ENABLED`.
   - `app/services/odds/` — snapshots de cuotas de mercado (auditoría del
     tipster): provider Sofascore (allsportsapi2 dedicado, tennisapi1
     scavenger), job periódico `snapshotter.py`, mapeo pick→mercado y

@@ -21,6 +21,7 @@ from app.core.config import get_settings
 # Importa los modelos para que queden registrados en SQLModel.metadata
 # y Alembic pueda detectarlos al autogenerar migraciones.
 from app.models.channel import Channel  # noqa: F401
+from app.models.device_token import DeviceToken  # noqa: F401
 from app.models.informante import Informante  # noqa: F401
 from app.models.odds_snapshot import OddsEvent, OddsSnapshot  # noqa: F401
 from app.models.parsed_pick import ParsedPick  # noqa: F401

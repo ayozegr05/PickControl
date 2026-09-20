@@ -4,6 +4,7 @@ Guarda el mensaje crudo y, si hay clave de OpenAI, intenta extraer un pick
 mediante el extractor híbrido (reglas + LLM).
 """
 
+import asyncio
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -18,6 +19,7 @@ from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
+from app.services.notifications.push import notify_new_pick
 from app.services.pick_service import get_or_create_informante, to_naive_utc
 from app.services.telegram.pick_extractor import (
     ExtractedPick,
@@ -436,6 +438,12 @@ async def process_incoming_message(
     # el OCR trae rival/cuota y el caption puede traer el stake.
     source_text = "\n\n".join(filter(None, [extracted_text, text])).strip()
     naive_message_date = to_naive_utc(message_date) if message_date else None
+    # Picks nuevos creados en este mensaje — se notifican por push tras
+    # el commit (la notificación abre su propia sesión: antes del commit
+    # la fila todavía no existiría para ella). Solo el pick "principal":
+    # las patas de una combinada no notifican (las crea _persist_patas),
+    # y los duplicados/enriquecidos tampoco (no son picks nuevos).
+    created_pick_ids: list[int] = []
 
     async def _persist(db_session: AsyncSession) -> None:
         raw = TelegramRawMessage(
@@ -642,6 +650,10 @@ async def process_incoming_message(
                         es_combinada=es_combinada,
                     )
                     db_session.add(parsed)
+                    if pick.es_apuesta:
+                        # flush para tener parsed.id antes del commit.
+                        await db_session.flush()
+                        created_pick_ids.append(parsed.id)
 
                     if es_combinada:
                         # Una fila por pata (self-FK): cada una se verifica
@@ -663,6 +675,17 @@ async def process_incoming_message(
     else:
         async with AsyncSessionLocal() as session:
             await _persist(session)
+
+    # Push "nuevo pick" — fire-and-forget: una notificación nunca debe
+    # bloquear ni tumbar la ingesta. Tras el commit la fila ya existe.
+    for pick_id in created_pick_ids:
+        try:
+            asyncio.create_task(notify_new_pick(pick_id))
+        except RuntimeError:
+            logger.debug(
+                "[TELEGRAM_PROCESSOR] Push omitida para pick %s (sin loop).",
+                pick_id,
+            )
 
     logger.info(
         "[TELEGRAM_PROCESSOR] Mensaje %s del canal %s guardado en BD",

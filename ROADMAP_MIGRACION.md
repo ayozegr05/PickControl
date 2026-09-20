@@ -64,7 +64,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 | 6 | Álbumes Telegram | Implementado — falta probar con álbum real | Trivial |
 | 7 | Pantalla de análisis global | Hecho | — |
 | 8 | "Yo también la jugué" | Hecho | — |
-| 9 | Notificaciones push | Pendiente | Medio |
+| 9 | Notificaciones push | Hecho — backend (DeviceToken + Expo Push + hooks) y registro en la app; falta probar en dispositivo físico | Medio |
 | 10 | CRUD de canales desde la app | Hecho — backend verificado en vivo (endpoints, toggle dinámico, catch-up por canales de BD); falta solo revisión visual de la pantalla en Expo | Medio |
 | 11 | Deploy real (servidor + PostgreSQL + HTTPS) | Pendiente | Medio-alto |
 | 12 | Backups: script `backup_db.py` | Hecho | — |
@@ -438,7 +438,22 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
       es justo lo que habilita comparar "yield tipster vs yield tuyo".
       Idempotente: un doble tap devuelve la apuesta ya creada, no duplica.
       Si ya existe, el modal muestra "✓ Ya la tienes registrada".
-- [ ] **Notificaciones push** cuando llega un pick nuevo.
+- [x] **Notificaciones push** (hecho): tabla `device_tokens` (upsert por
+      token, reasigna si el móvil cambia de cuenta, `enabled=False` cuando
+      Expo responde `DeviceNotRegistered` — la fila se conserva);
+      `POST/DELETE /api/v1/devices` autenticados; servicio
+      `notifications/push.py` contra Expo Push API en lotes de 100,
+      best-effort total (un fallo nunca rompe ingesta ni liquidación,
+      kill-switch `PUSH_NOTIFICATIONS_ENABLED`). Dos disparadores:
+      pick nuevo en `processor.py` tras el commit (combinadas solo el
+      padre; duplicados no notifican) y liquidación en
+      `verify_pending_picks` solo a usuarios con "Yo también la jugué"
+      (`picks.parsed_pick_id`) — sin duplicados en pasadas repetidas.
+      Frontend: `expo-notifications` + `src/notifications/push.ts`
+      (permiso → `getExpoPushTokenAsync` con el projectId de EAS →
+      registro autenticado) enganchado a `AuthContext` tras login y al
+      arrancar con sesión. Pendiente: probar en dispositivo físico
+      (Expo Go no soporta push remotas).
 - [x] **CRUD de canales en BD** (hecho): tabla `channels` como fuente de
       verdad; `TELEGRAM_TARGET_CHANNEL` queda como bootstrap
       (`seed_channels_from_env` si la tabla está vacía). Handlers globales
@@ -719,7 +734,7 @@ El punto 1 de la lista anterior quedó implementado así:
 2. **Probar en vivo el CRUD de canales**: arrancar backend y abrir
    `app/screens/canales.tsx` en Expo — verificar picker de `iter_dialogs`,
    alta/baja dinámica y catch-up post-alta.
-3. **Notificaciones push (hito 9)**: pospuesto por decisión — se implementa
-   cuando la base (extracción + verificación) esté fina. Diseño apuntado:
-   notificar pick nuevo (`es_apuesta`, combinadas solo el padre) y
-   liquidación solo de picks marcados "Yo también la jugué".
+3. ~~Notificaciones push (hito 9)~~ → **hecho** (ver lista anterior);
+   falta solo la prueba en dispositivo físico: las push remotas no
+   funcionan en Expo Go — hace falta development build o la app
+   instalada.

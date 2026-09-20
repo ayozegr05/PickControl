@@ -89,7 +89,7 @@ async def main(apply: bool, delay: float) -> None:
             await session.commit()
             print(
                 f"\nResueltos: {resolved}. "
-                f"Padres de combinadas re-liquidados: {settled}."
+                f"Padres de combinadas re-liquidados: {len(settled)}."
             )
         else:
             print(f"\nDRY-RUN: {resolved} se resolverían. Usa --apply para escribir.")
