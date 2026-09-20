@@ -37,6 +37,7 @@ from app.models.user import User  # noqa: F401
 from app.services.telegram.pick_extractor import (
     _SELECCION_KEYWORD,
     _extract_eventos,
+    _fixture_from_slip_ocr,
     extract_pick,
 )
 from app.services.telegram.processor import (
@@ -124,27 +125,8 @@ def _seleccion_casa_con_evento(seleccion: str | None, evento: str | None) -> boo
     )
 
 
-_FIXTURE_V_LINE = re.compile(r"^(.{2,50}?)\s+v\s+(.{2,50}?)$", re.IGNORECASE)
-_FIXTURE_SCORE_LINE = re.compile(r"^(.{2,40}?)\s+\d+\s*[-–—]?\s*\d+\s+(.{2,40}?)$")
-
-
-def _fixture_from_slip_ocr(ocr_text: str | None) -> str | None:
-    """El cruce "A v B" o "A 0-0 B" que el boleto en vivo imprime en su
-    propia línea — cuando el LLM devuelve la cabecera de liga ("Italia -
-    Serie A") en vez del partido ("Como - Parma")."""
-    if not ocr_text:
-        return None
-    score_line = v_line = None
-    for line in ocr_text.splitlines():
-        line = line.strip()
-        m = _FIXTURE_SCORE_LINE.match(line)
-        if m and score_line is None:
-            score_line = f"{m.group(1)} - {m.group(2)}"
-            continue
-        m = _FIXTURE_V_LINE.match(line)
-        if m and v_line is None:
-            v_line = f"{m.group(1)} - {m.group(2)}"
-    return score_line or v_line
+# `_fixture_from_slip_ocr` vive en pick_extractor (la usa también el
+# pipeline en vivo como fallback post-LLM).
 
 
 async def main() -> None:
