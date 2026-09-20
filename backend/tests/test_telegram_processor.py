@@ -501,3 +501,90 @@ class TestPhotoTextPairing:
         )
 
         assert "Jurij Rodionov" not in captured["text"]
+
+
+# OCR real de un boleto EN VIVO de bet365 (caso AllSportsPicks raw 8171):
+# el tipster publica la captura en directo — sin "Sencillas" ni importe,
+# pero con la cabecera de stats y la línea "Mercado - Submercado".
+LIVE_SLIP_OCR = (
+    "España - La Liga\n"
+    "Celta de Vigo 0 0 Racing Santander\n"
+    "Estadísticas\n"
+    "Estadísticas de jugador\n"
+    "09:50\n"
+    "Más de 7.0\n"
+    "Total - Córners\n"
+    "Celta de Vigo v Racing Santander\n"
+    "1.50"
+)
+
+
+class TestLiveSlipMarker:
+    """El formato de boleto en vivo de bet365 también es pareja válida."""
+
+    def test_slip_en_vivo_con_stats_de_jugador_es_boleto(self):
+        from app.services.telegram.processor import _looks_like_slip
+
+        assert _looks_like_slip(LIVE_SLIP_OCR) is True
+
+    def test_slip_en_vivo_descanso_es_boleto(self):
+        from app.services.telegram.processor import _looks_like_slip
+
+        ocr = (
+            "Andorra - Primera División\n"
+            "Sporting Club d'Escaldes 0 - 2 FC Santa Coloma\n"
+            "Estadísticas\nLínea de tiempo\n45:00\nDESCANSO\n"
+            "Menos de 4.5\nEncuentro - Goles\n1.61"
+        )
+        assert _looks_like_slip(ocr) is True
+
+    def test_foto_sin_marcadores_no_es_boleto(self):
+        from app.services.telegram.processor import _looks_like_slip
+
+        assert _looks_like_slip("Gran día de fútbol hoy en la liga") is False
+
+
+@pytest.mark.asyncio
+class TestFindPairSlipBidirectional:
+    """`_find_pair_slip` encuentra el boleto tanto si llega antes del
+    texto como después (el tipster publica el pick y luego la captura)."""
+
+    async def test_slip_posterior_al_texto_empareja(self, session):
+        from datetime import datetime, timedelta
+
+        from app.services.telegram.processor import _find_pair_slip
+
+        when = datetime(2026, 9, 20, 16, 45)
+        session.add(_photo_raw(200, LIVE_SLIP_OCR, when + timedelta(minutes=2)))
+        await session.commit()
+
+        slip = await _find_pair_slip(session, 1, when, 199)
+        assert slip is not None
+        assert slip.message_id == 200
+
+    async def test_slip_fuera_de_ventana_no_empareja(self, session):
+        from datetime import datetime, timedelta
+
+        from app.services.telegram.processor import _find_pair_slip
+
+        when = datetime(2026, 9, 20, 16, 45)
+        session.add(_photo_raw(200, LIVE_SLIP_OCR, when + timedelta(minutes=30)))
+        await session.commit()
+
+        assert await _find_pair_slip(session, 1, when, 199) is None
+
+    async def test_elige_el_slip_mas_cercano_en_tiempo(self, session):
+        """Entre un slip 1 min antes y otro 5 min después, gana el más
+        cercano: el posterior pertenece a otro pick."""
+        from datetime import datetime, timedelta
+
+        from app.services.telegram.processor import _find_pair_slip
+
+        when = datetime(2026, 9, 20, 16, 45)
+        session.add(_photo_raw(200, LIVE_SLIP_OCR, when - timedelta(minutes=1)))
+        session.add(_photo_raw(201, LIVE_SLIP_OCR, when + timedelta(minutes=5)))
+        await session.commit()
+
+        slip = await _find_pair_slip(session, 1, when, 199)
+        assert slip is not None
+        assert slip.message_id == 200

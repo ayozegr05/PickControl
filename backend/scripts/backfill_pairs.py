@@ -81,6 +81,72 @@ def _patas_son_reales(pick) -> bool:
     )
 
 
+# Palabras de mercado que no forman parte del nombre del equipo. Sirven
+# para aislar los tokens de equipo dentro de una selección.
+_TEAM_WORDS_STOP = re.compile(
+    r"^(?:gana|ganar[aá]?|ganador|empate|partido|encuentro|m[aá]s|menos|"
+    r"over|under|c[oó]rners?|tarjetas?|goles?|juegos?|sets?|h[aá]ndicap|"
+    r"handicap|asi[aá]tico|doble|oportunidad|ambos|equipos|marc[ao]n?|"
+    r"asiste|s[íi]|no|stake|cuota|recibir[aá]|recibe|jugador|anotar[aá]n?|"
+    r"anota|primer[ao]?|segundo[ao]?|tiempo|parte|descanso|total|"
+    r"superior|inferior|gana|win|odds)$",
+    re.IGNORECASE,
+)
+
+
+def _team_tokens(seleccion: str | None) -> list[str]:
+    """Tokens de equipo (>=4 letras, no palabra de mercado) de la
+    selección. "Empate o Real Sociedad" -> ["real", "sociedad"];
+    "Más de 7.0 córners" -> []."""
+    words = re.findall(r"[a-záéíóúñü]+", (seleccion or "").lower())
+    return [w for w in words if len(w) >= 4 and not _TEAM_WORDS_STOP.fullmatch(w)]
+
+
+def _seleccion_casa_con_evento(seleccion: str | None, evento: str | None) -> bool:
+    """Guarda anti-mispair: si la selección nombra un equipo, TODOS sus
+    tokens deben aparecer (exacto o casi: "Adalh" vs "Adahl" por OCR) en
+    el evento. Si no, el slip probablemente pertenecía a OTRA apuesta del
+    tipster en la misma ventana (caso real: texto "Empate o Real
+    Sociedad" emparejado con slip "Sabadell - Real Oviedo" — "real" solo
+    no basta)."""
+    from difflib import SequenceMatcher
+
+    tokens = _team_tokens(seleccion)
+    if not tokens or not evento:
+        return True  # línea de mercado pura: nada que contrastar
+    ev_words = re.findall(r"[a-záéíóúñü]+", evento.lower())
+    return all(
+        any(
+            t == w or (len(t) >= 4 and SequenceMatcher(None, t, w).ratio() >= 0.8)
+            for w in ev_words
+        )
+        for t in tokens
+    )
+
+
+_FIXTURE_V_LINE = re.compile(r"^(.{2,50}?)\s+v\s+(.{2,50}?)$", re.IGNORECASE)
+_FIXTURE_SCORE_LINE = re.compile(r"^(.{2,40}?)\s+\d+\s*[-–—]?\s*\d+\s+(.{2,40}?)$")
+
+
+def _fixture_from_slip_ocr(ocr_text: str | None) -> str | None:
+    """El cruce "A v B" o "A 0-0 B" que el boleto en vivo imprime en su
+    propia línea — cuando el LLM devuelve la cabecera de liga ("Italia -
+    Serie A") en vez del partido ("Como - Parma")."""
+    if not ocr_text:
+        return None
+    score_line = v_line = None
+    for line in ocr_text.splitlines():
+        line = line.strip()
+        m = _FIXTURE_SCORE_LINE.match(line)
+        if m and score_line is None:
+            score_line = f"{m.group(1)} - {m.group(2)}"
+            continue
+        m = _FIXTURE_V_LINE.match(line)
+        if m and v_line is None:
+            v_line = f"{m.group(1)} - {m.group(2)}"
+    return score_line or v_line
+
+
 async def main() -> None:
     settings = get_settings()
     if not settings.openai_api_key:
@@ -150,11 +216,34 @@ async def main() -> None:
                 )
                 continue
 
+            # Rescate de cruce: el LLM a veces devuelve la cabecera de
+            # liga ("Italia - Serie A") aunque el OCR tenga "Como v
+            # Parma" en una línea propia.
+            if not _extract_eventos([pick.evento or ""]):
+                fixture = _fixture_from_slip_ocr(slip.extracted_text)
+                if fixture:
+                    pick.evento = fixture
+
+            # Guarda anti-mispair: si la selección nombra un equipo que
+            # no está en el evento nuevo, el slip era de OTRA apuesta
+            # del tipster dentro de la misma ventana de 10 min.
+            if not _seleccion_casa_con_evento(
+                pick.seleccion or pick_row.seleccion, pick.evento
+            ):
+                print(
+                    f"  msg {raw.message_id} ({raw.channel_name}, "
+                    f"pick {pick_row.id}): evento {pick.evento!r} no casa "
+                    "con la selección (¿slip de otra apuesta?), salto."
+                )
+                continue
+
             # Mejora neta: el cruce pasa a ser real, o se rellenan
             # cuota/stake. Si no aporta nada (solo reordena la
             # selección o inventa patas), no merece el riesgo.
-            evento_mejora = bool(pick.evento) and (
-                pick_row.evento is None or not _extract_eventos([pick_row.evento])
+            evento_mejora = (
+                bool(pick.evento)
+                and _extract_eventos([pick.evento])
+                and (pick_row.evento is None or not _extract_eventos([pick_row.evento]))
             )
             rellena = (pick_row.cuota is None and pick.cuota) or (
                 pick_row.stake is None and pick.stake
