@@ -57,7 +57,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 | # | Hito | Estado | Esfuerzo |
 |---|---|---|---|
 | 1 | Combinadas como sección propia | Hecho | Alto — modelo, extractor, verificador, UI |
-| 2 | Fútbol: primera parte/descanso | Pendiente — sin datos en proveedores | Alto (proveedor nuevo) |
+| 2 | Fútbol: primera parte/descanso | Aparcado — cobertura CONFIRMADA gratis (ver nota), pero 0 picks HT en BD: se implementa cuando aparezca el primero | Medio (reusa providers) |
 | 3 | Fútbol: partidos parados (SUSP/ABD/INT) | Manual a propósito | — |
 | 4 | Cuota tipster vs cuota real de mercado | Hecho y backend probado en vivo (endpoints + snapshots reales OK) — falta solo revisar la UI en móvil (ver §5) | Alto, ya implementado con API gratuita |
 | 5 | Baloncesto | Aparcado | Medio |
@@ -608,3 +608,40 @@ importados). "Push" (líneas enteras) y aplazados/cancelados >72 h se marcan
 - **Baloncesto** sin proveedor (API-Basketball de api-sports.io sería el
   candidato).
 - Futuro: plan de pago de API-Football eliminaría la restricción de fechas.
+
+## Investigación: mercados de primera parte/descanso (hito 2)
+
+Investigado el 20-sep-2026. **Cobertura confirmada gratis**, sin APIs nuevas:
+
+- **HT score** (1X2 descanso, over/under goles 1H, HT/FT, ambos marcan 1H,
+  equipo marca 1H): `score.halfTime` en football-data.org (12 ligas del
+  tier gratis) y `score.halftime` en API-Football (todas las ligas, 100
+  req/día). API-Football `fixtures/events` da goles/tarjetas con minuto →
+  "primer equipo en marcar", "minuto del gol".
+- **Stats por mitad** (córners/tarjetas/tiros 1H): Sofascore
+  `GET /api/v1/event/{id}/statistics` devuelve `period: ALL|1ST|2ND` con
+  `cornerKicks`, `yellowCards`, `totalShotsOnGoal`, `expectedGoals`...
+  gratis y sin key. Ya integramos Sofascore para odds → el event-matching
+  está escrito. Sirve también para stats de **partido completo**
+  (tarjetas/córners actuales que se pierden por la ventana ±1 día).
+- **Histórico/auditoría**: CSVs gratis de football-data.co.uk
+  (`HTHG/HTAG/HTR` + stats + odds, 22 ligas incl. Segunda, 2 actualiz./sem).
+
+**Decisión aparcada**: hay **0 picks de primera parte** en la BD — los
+tipsters no publican ese mercado hoy. Implementar cuando aparezca el
+primero; el diseño sería `resolve_halftime()` en el verifier + mapeo de
+variantes del mercado en el extractor.
+
+## Decisiones pendientes para la próxima sesión (21-sep-2026)
+
+1. **Mercados de stats completos** (tarjetas/córners/tiros): usar Sofascore
+   `/statistics` (periodo ALL) como fuente extra del verifier — rescataría
+   los ~6 pendientes actuales y dejaría de depender de la ventana ±1 día
+   de API-Football para esos mercados.
+2. **Probar en vivo el CRUD de canales**: arrancar backend y abrir
+   `app/screens/canales.tsx` en Expo — verificar picker de `iter_dialogs`,
+   alta/baja dinámica y catch-up post-alta.
+3. **Notificaciones push (hito 9)**: pospuesto por decisión — se implementa
+   cuando la base (extracción + verificación) esté fina. Diseño apuntado:
+   notificar pick nuevo (`es_apuesta`, combinadas solo el padre) y
+   liquidación solo de picks marcados "Yo también la jugué".
