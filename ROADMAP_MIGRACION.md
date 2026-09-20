@@ -56,7 +56,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 
 | # | Hito | Estado | Esfuerzo |
 |---|---|---|---|
-| 1 | Combinadas como sección propia | Hecho | Alto — modelo, extractor, verificador, UI |
+| 1 | Combinadas como sección propia | Hecho — incluida la migración de legadas (`backfill_combinada_legs.py`: 35 combinadas partidas en padre+patas) | Alto — modelo, extractor, verificador, UI |
 | 2 | Fútbol: primera parte/descanso | Hecho — `MatchResult.ht_*` en los 3 providers de fútbol + stats 1ST en footapi7; el verifier reusa los resolutores con `_ht_view` | Medio (reusa providers) |
 | 3 | Fútbol: partidos parados (SUSP/ABD/INT) | Manual a propósito | — |
 | 4 | Cuota tipster vs cuota real de mercado | Hecho y backend probado en vivo (endpoints + snapshots reales OK) — falta solo revisar la UI en móvil (ver §5) | Alto, ya implementado con API gratuita |
@@ -65,7 +65,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 | 7 | Pantalla de análisis global | Hecho | — |
 | 8 | "Yo también la jugué" | Hecho | — |
 | 9 | Notificaciones push | Pendiente | Medio |
-| 10 | CRUD de canales desde la app | Hecho (tabla `channels`, handlers globales dinámicos, picker desde `get_dialogs`, pantalla `canales`) — falta probar en vivo | Medio |
+| 10 | CRUD de canales desde la app | Hecho — backend verificado en vivo (endpoints, toggle dinámico, catch-up por canales de BD); falta solo revisión visual de la pantalla en Expo | Medio |
 | 11 | Deploy real (servidor + PostgreSQL + HTTPS) | Pendiente | Medio-alto |
 | 12 | Backups: script `backup_db.py` | Hecho | — |
 | 13 | Backups programados diarios | Pendiente (va con el deploy) | Trivial |
@@ -322,10 +322,12 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
       - Con `/fixtures/statistics` (API-Football, solo ventana ±1 día):
         córners, tarjetas, tiros (total y a puerta), faltas, fueras de
         juego — total del partido y por equipo.
-      - Con `/fixtures/events` + `/fixtures/players` (misma ventana):
+      - Con `/fixtures/events` + `/fixtures/players` (API-Football) y
+        `/incidents` + `/lineups` de footapi7 (sin ventana temporal):
         "X marca", "X marca o asiste", "X recibe tarjeta" (propia puerta
         y penalti fallado no cuentan; no jugó → `anulada`) y props de
-        jugador con número ("X más de 1.5 tiros a puerta").
+        jugador con número ("X más de 1.5 tiros a puerta", "X - 2+
+        faltas", "X: 2+ remates a puerta" — notación bet365 cubierta).
       Pendiente a propósito: partidos parados a mitad
       (`SUSP`/`ABD` — hay mercados ya decididos que la casa paga;
       quedan manuales).
