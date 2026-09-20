@@ -19,6 +19,10 @@ Rutas (verificadas en vivo 2026-09-20 con plan BASIC):
 - `/api/team/{id}/matches/previous/{page}`  -> ~30 partidos jugados
 - `/api/match/{id}/statistics`              -> stats por periodo
                                                (ALL / 1ST / 2ND)
+- `/api/match/{id}/incidents`               -> goles/tarjetas con
+                                               jugador y minuto
+- `/api/match/{id}/lineups`                 -> alineaciones + stats
+                                               por jugador
 
 Las estadísticas vienen como `statistics[].groups[].statisticsItems[]`
 con `name`, `home`, `away` (strings; "2", "42%", "23/37 (62%)"). Se
@@ -40,6 +44,8 @@ from app.core.logging import get_logger
 from app.services.results.api_tennis import _pair_similar
 from app.services.results.base import (
     MISSED_TTL_PROVISIONAL,
+    MatchEvents,
+    MatchPlayers,
     MatchResult,
     MatchStats,
     is_missed,
@@ -85,6 +91,44 @@ def _stat_int(value) -> Optional[int]:
     return None
 
 
+# Estadística de jugador de Sofascore (`/lineups` -> statistics) ->
+# clave aplanada canónica de API-Football que espera el verificador
+# para props de jugador ("X más de 1.5 tiros a puerta").
+_PLAYER_STAT_MAP = {
+    "goals": "goals.total",
+    "goalAssist": "goals.assists",
+    "shotsOnTarget": "shots.on",
+    "fouls": "fouls.committed",
+    "keyPass": "passes.key",
+    "tackles": "tackles.total",
+}
+# Sofascore desglosa los tiros del jugador en tres contadores; el total
+# canónico ("shots.total") es la suma.
+_PLAYER_SHOT_PARTS = ("shotsOnTarget", "shotsOffTarget", "blockedScoringAttempt")
+
+
+def _player_stats_flat(stats: dict) -> dict[str, int]:
+    """Estadísticas de jugador de /lineups aplanadas a las claves
+    canónicas que consume `_resolve_player_prop` del verificador."""
+    flat: dict[str, int] = {}
+    for sofa_key, canonical in _PLAYER_STAT_MAP.items():
+        value = _stat_int(stats.get(sofa_key))
+        if value is not None:
+            flat[canonical] = value
+    shot_parts = [_stat_int(stats.get(k)) for k in _PLAYER_SHOT_PARTS]
+    if any(v is not None for v in shot_parts):
+        flat["shots.total"] = sum(v or 0 for v in shot_parts)
+    # Segunda amarilla cuenta como amarilla y como roja a la vez
+    # (misma regla que una expulsión por doble amarilla en las casas).
+    for canonical, keys in (
+        ("cards.yellow", ("yellowCards", "yellowRedCards")),
+        ("cards.red", ("redCards", "yellowRedCards")),
+    ):
+        if any(k in stats for k in keys):
+            flat[canonical] = sum(_stat_int(stats.get(k)) or 0 for k in keys)
+    return flat
+
+
 class FootApiStatsProvider:
     """Resultados y estadísticas de fútbol vía footapi7 (RapidAPI)."""
 
@@ -97,6 +141,8 @@ class FootApiStatsProvider:
         self._search_cache: dict[str, Optional[list]] = {}
         self._events_cache: dict[int, Optional[list]] = {}
         self._stats_cache: dict[int, Optional[dict]] = {}
+        self._incidents_cache: dict[int, Optional[dict]] = {}
+        self._lineups_cache: dict[int, Optional[dict]] = {}
 
     # --- HTTP ------------------------------------------------------------
 
@@ -259,14 +305,10 @@ class FootApiStatsProvider:
         `MatchStats.values` usa las claves canónicas de API-Football, así
         el verificador resuelve córners/tarjetas/tiros sin cambios.
         """
-        event = await self._find_event(date, team_hint)
+        event = await self._finished_event(date, team_hint)
         if event is None:
             return None
-        event_id = event.get("id")
-        if event_id is None:
-            return None
-        if (event.get("status") or {}).get("type") != "finished":
-            return None
+        event_id = event["id"]
 
         async with httpx.AsyncClient(timeout=15) as client:
             if event_id not in self._stats_cache:
@@ -311,3 +353,131 @@ class FootApiStatsProvider:
         """Estadísticas de la PRIMERA parte (periodo 1ST): habilita
         mercados de córners/tarjetas/tiros al descanso."""
         return await self._stats_for_period(date, team_hint, "1ST")
+
+    # --- Jugadores: incidents + lineups ------------------------------------
+
+    async def _finished_event(self, date: datetime, team_hint: str) -> Optional[dict]:
+        """El evento terminado que casa con el hint (o None)."""
+        event = await self._find_event(date, team_hint)
+        if event is None or event.get("id") is None:
+            return None
+        if (event.get("status") or {}).get("type") != "finished":
+            return None
+        return event
+
+    async def find_match_events(
+        self, date: datetime, team_hint: str
+    ) -> Optional[MatchEvents]:
+        """Goles/asistencias/tarjetas del partido vía
+        `/api/match/{id}/incidents`.
+
+        Desbloquea los mercados de jugador ("X marca", "X marca o
+        asiste", "X recibe tarjeta") fuera de la ventana ±1 día del
+        plan gratis de API-Football — el incidente queda disponible
+        semanas después.
+        """
+        event = await self._finished_event(date, team_hint)
+        if event is None:
+            return None
+        event_id = event["id"]
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            if event_id not in self._incidents_cache:
+                self._incidents_cache[event_id] = await self._get_json(
+                    client, f"/api/match/{event_id}/incidents"
+                )
+            data = self._incidents_cache[event_id]
+        if data is None:
+            return None
+
+        scorers: list[str] = []
+        assisters: list[str] = []
+        booked: list[str] = []
+        participants: list[str] = []
+
+        def add(lst: list[str], name: Optional[str]) -> None:
+            if name and name not in lst:
+                lst.append(name)
+
+        for incident in data.get("incidents") or []:
+            player = (incident.get("player") or {}).get("name")
+            assist = (incident.get("assist1") or {}).get("name")
+            sub_in = (incident.get("playerIn") or {}).get("name")
+            sub_out = (incident.get("playerOut") or {}).get("name")
+            for name in (player, assist, sub_in, sub_out):
+                add(participants, name)
+            itype = incident.get("incidentType")
+            if itype == "goal":
+                # Propia puerta no cuenta como gol del jugador (misma
+                # regla que en API-Football); el penalti marcado sí.
+                if incident.get("incidentClass") == "ownGoal":
+                    continue
+                add(scorers, player)
+                add(assisters, assist)
+            elif itype == "card":
+                add(booked, player)
+
+        if not participants:
+            return None
+        return MatchEvents(
+            home_team=(event.get("homeTeam") or {}).get("name") or "",
+            away_team=(event.get("awayTeam") or {}).get("name") or "",
+            scorers=scorers,
+            assisters=assisters,
+            booked=booked,
+            participants=participants,
+        )
+
+    async def find_match_players(
+        self, date: datetime, team_hint: str
+    ) -> Optional[MatchPlayers]:
+        """Jugadores que disputaron minutos, vía
+        `/api/match/{id}/lineups`.
+
+        Sirve para distinguir "jugó sin acertar el mercado" (fallo) de
+        "no jugó" (anulada — la casa devuelve) y para props de jugador
+        con número ("X más de 1.5 tiros a puerta"): `statistics` de la
+        alineación se aplana a las claves canónicas de API-Football.
+        """
+        event = await self._finished_event(date, team_hint)
+        if event is None:
+            return None
+        event_id = event["id"]
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            if event_id not in self._lineups_cache:
+                self._lineups_cache[event_id] = await self._get_json(
+                    client, f"/api/match/{event_id}/lineups"
+                )
+            data = self._lineups_cache[event_id]
+        if data is None:
+            return None
+
+        played: list[str] = []
+        player_stats: dict[str, dict[str, int]] = {}
+        for side in ("home", "away"):
+            for entry in (data.get(side) or {}).get("players") or []:
+                name = (entry.get("player") or {}).get("name")
+                if not name:
+                    continue
+                stats = entry.get("statistics") or {}
+                flat = _player_stats_flat(stats)
+                if flat:
+                    player_stats[name] = flat
+                minutes = _stat_int(stats.get("minutesPlayed"))
+                if minutes is None:
+                    # Sin dato de minutos: el titular consta como que
+                    # jugó; el suplente no se puede confirmar.
+                    if not entry.get("substitute") and name not in played:
+                        played.append(name)
+                elif minutes > 0 and name not in played:
+                    played.append(name)
+
+        if not played:
+            return None
+        return MatchPlayers(
+            home_team=(event.get("homeTeam") or {}).get("name") or "",
+            away_team=(event.get("awayTeam") or {}).get("name") or "",
+            played=played,
+            stats=player_stats,
+        )
