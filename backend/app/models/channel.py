@@ -10,6 +10,9 @@ añadir/quitar canales no requiere redeploy ni reinicio.
   `event.chat_id` en los handlers y `channel_id` en los raws.
 - `activo=False` deja de escuchar el canal pero conserva su historial:
   los raws y picks ya guardados nunca se borran (auditoría).
+- `eliminado=True` (borrado lógico vía DELETE) lo saca de "mis canales":
+  vuelve a la lista de disponibles de Telegram, pero la fila se conserva
+  con su historial y re-añadirlo reactiva la misma fila.
 """
 
 from datetime import datetime
@@ -33,4 +36,5 @@ class Channel(SQLModel, table=True):
     name: str | None = Field(default=None, max_length=255)
     username: str | None = Field(default=None, max_length=255)
     activo: bool = Field(default=True)
+    eliminado: bool = Field(default=False)
     created_at: datetime = Field(default_factory=utc_now)

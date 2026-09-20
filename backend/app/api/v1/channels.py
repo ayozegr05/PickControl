@@ -79,8 +79,12 @@ async def listar_canales(
     session: AsyncSession = Depends(get_session),
     _user: User = Depends(get_current_user),
 ) -> list[Channel]:
-    """Canales configurados (activos e inactivos)."""
-    result = await session.exec(select(Channel).order_by(Channel.id))
+    """Canales configurados (activos e inactivos, no eliminados)."""
+    result = await session.exec(
+        select(Channel)
+        .where(Channel.eliminado == False)  # noqa: E712
+        .order_by(Channel.id)
+    )
     return list(result.all())
 
 
@@ -96,7 +100,12 @@ async def listar_canales_disponibles(
     """
     client = _connected_client()
 
-    monitored = await session.exec(select(Channel.channel_id).where(Channel.activo))
+    monitored = await session.exec(
+        select(Channel.channel_id).where(
+            Channel.activo == True,  # noqa: E712
+            Channel.eliminado == False,  # noqa: E712
+        )
+    )
     monitored_ids = set(monitored.all())
 
     available: list[AvailableChannelRead] = []
@@ -169,6 +178,8 @@ async def crear_canal(
         channel.name = name
         channel.username = username
         channel.activo = True
+        # Re-anadir un canal borrado lo rescata del borrado logico.
+        channel.eliminado = False
     session.add(channel)
     await session.commit()
     await session.refresh(channel)
@@ -187,7 +198,7 @@ async def actualizar_canal(
 ) -> Channel:
     """Activa o desactiva la monitorización de un canal."""
     channel = await session.get(Channel, channel_pk)
-    if channel is None:
+    if channel is None or channel.eliminado:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Canal no encontrado."
         )
@@ -211,17 +222,18 @@ async def borrar_canal(
 ) -> None:
     """Quita el canal de la monitorización (borrado lógico).
 
-    La fila se conserva con `activo=False`: sigue en la lista como
-    inactivo y se puede reactivar con el toggle o re-añadiéndolo (el
-    POST reactiva la fila existente). Tampoco borra mensajes crudos ni
-    picks históricos: siguen en la BD como auditoría del canal.
+    `eliminado=True` lo saca de la lista de monitorizados y lo devuelve
+    a la lista de disponibles de Telegram. La fila se conserva (los
+    mensajes crudos y los picks también): re-añadirlo desde el picker o
+    por enlace reactiva la misma fila.
     """
     channel = await session.get(Channel, channel_pk)
-    if channel is None:
+    if channel is None or channel.eliminado:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Canal no encontrado."
         )
     channel.activo = False
+    channel.eliminado = True
     session.add(channel)
     await session.commit()
 

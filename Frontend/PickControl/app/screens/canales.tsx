@@ -86,13 +86,14 @@ const Canales = () => {
           onPress: async () => {
             try {
               await deleteCanal(canal.id);
-              // El backend conserva la fila como inactiva: el canal sigue
-              // en la lista y se puede reactivar con el toggle.
-              setCanales((prev) =>
-                prev.map((c) =>
-                  c.id === canal.id ? { ...c, activo: false } : c
-                )
-              );
+              // Borrado lógico: sale de "Monitorizados" y vuelve a la
+              // lista de disponibles de abajo (la fila se conserva).
+              setCanales((prev) => prev.filter((c) => c.id !== canal.id));
+              try {
+                setDisponibles(await listCanalesDisponibles());
+              } catch {
+                // Si el listener no responde, se refresca al re-entrar.
+              }
             } catch (err: any) {
               Alert.alert(
                 "Error",

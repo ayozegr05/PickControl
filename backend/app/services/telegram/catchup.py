@@ -290,7 +290,12 @@ async def run_catchup(client: TelegramClient) -> None:
     canal se procesa de forma aislada.
     """
     async with AsyncSessionLocal() as session:
-        result = await session.exec(select(Channel).where(Channel.activo))
+        result = await session.exec(
+            select(Channel).where(
+                Channel.activo,
+                Channel.eliminado == False,  # noqa: E712
+            )
+        )
         channels = list(result.all())
     if not channels:
         return

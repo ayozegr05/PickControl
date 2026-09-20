@@ -88,7 +88,12 @@ async def refresh_channel_cache(client: TelegramClient | None = None) -> set[int
     """
     global _active_channel_ids, _channel_names
     async with AsyncSessionLocal() as session:
-        result = await session.exec(select(Channel).where(Channel.activo))
+        result = await session.exec(
+            select(Channel).where(
+                Channel.activo,
+                Channel.eliminado == False,  # noqa: E712
+            )
+        )
         channels = list(result.all())
         ids: set[int] = set()
         names: dict[int, str] = {}
