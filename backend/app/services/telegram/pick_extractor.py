@@ -830,7 +830,7 @@ Reglas:
   Una apuesta abierta real es una recomendación de algo que AÚN no se ha jugado.
 - "seleccion" es lo recomendado (ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5"). Si es una combinada/"crear apuesta" (varias selecciones en un mismo boleto), únelas con " + " (ej. "Más de 1 gol + Más de 2 tarjetas").
 - "patas": SOLO si es una combinada/"crear apuesta"/acumulador (varias selecciones en un mismo boleto): un array con UN objeto por selección del boleto, cada uno con la misma estructura {"seleccion", "evento", "mercado", "linea", "deporte", "fecha_evento", "cuota"} y las mismas reglas de formato ("cuota" por pata solo si aparece explícita; si no, null). En una combinada cada pata puede ser de un partido distinto (rellena su "evento" propio) o del mismo partido (bet-builder: repite el mismo "evento" en todas). Si NO es combinada, "patas" = null. Si solo puedes identificar UNA selección, NO es combinada: "patas" = null y trátala como pick simple.
-- "evento" es el enfrentamiento concreto (ej. "Sevilla - Barcelona", "Zizou Bergs vs Jurij Rodionov"). Si el texto muestra "EquipoA - EquipoB" o "EquipoA vs EquipoB", usa ese formato completo con ambos — nunca solo uno. Si los dos participantes aparecen sueltos en el texto sin "vs" (p. ej. el rival solo se menciona en el análisis), forma el evento con ambos nombres ("Bergs vs Rodionov"). Si SOLO aparece la competición ("Copa Davis", "LaLiga") sin los dos participantes, usa la competición tal cual (sirve de pista al verificador en tenis).
+- "evento" es el enfrentamiento concreto (ej. "Sevilla - Barcelona", "Zizou Bergs vs Jurij Rodionov"). Si el texto muestra "EquipoA - EquipoB" o "EquipoA vs EquipoB", usa ese formato completo con ambos — nunca solo uno. Si los dos participantes aparecen sueltos en el texto sin "vs" (p. ej. el rival solo se menciona en el análisis), forma el evento con ambos nombres ("Bergs vs Rodionov"). Si SOLO aparece la competición ("Copa Davis", "LaLiga") sin los dos participantes, usa la competición tal cual (sirve de pista al verificador en tenis). OJO con el OCR de boletos EN VIVO (bet365): el cruce aparece en su propia línea como "EquipoA v EquipoB" o "EquipoA 0 0 EquipoB" (el "0 0" es el marcador en directo, no parte del nombre) — usa ese cruce como "evento", NUNCA la cabecera de liga de arriba ("Italia - Serie A" no es un partido).
 - "mercado" es el tipo de apuesta: usa siempre una de estas etiquetas si aplica: "ganador", "hándicap asiático", "over/under" (o "over/under goles", "over/under juegos" según el deporte). Si es una combinada/"crear apuesta" con varias selecciones, usa "combinada". Si no encaja en ninguna, describe brevemente el mercado.
 - "deporte" debe ser una palabra normalizada y simple: "fútbol", "tenis", "baloncesto", etc.
 - "linea" es el valor numérico de la línea cuando el mercado es hándicap asiático u over/under (ej. 1.5, -1.5, 2.5). Con signo si es hándicap (+1.5 a favor del equipo de "seleccion", -1.5 en contra). Sin signo si es over/under. Si el mercado no tiene línea (p. ej. "ganador"), déjalo null.
@@ -841,6 +841,30 @@ Reglas:
 - No inventes ni deduzcas valores (cuota, stake, casa, fecha, línea, etc.) que no estén explícitamente en el texto. Ante la duda, usa null.
 - No añadas markdown, solo el JSON.
 """
+
+
+_FIXTURE_V_LINE = re.compile(r"^(.{2,50}?)\s+v\s+(.{2,50}?)$", re.IGNORECASE)
+_FIXTURE_SCORE_LINE = re.compile(r"^(.{2,40}?)\s+\d+\s*[-–—]?\s*\d+\s+(.{2,40}?)$")
+
+
+def _fixture_from_slip_ocr(ocr_text: str | None) -> str | None:
+    """El cruce "A v B" o "A 0-0 B" que el boleto en vivo imprime en su
+    propia línea ("Como v Parma", "Sporting d'Escaldes 0 - 2 Santa
+    Coloma"). Fallback determinista para cuando el LLM devuelve la
+    cabecera de liga ("Italia - Serie A") en vez del partido."""
+    if not ocr_text:
+        return None
+    score_line = v_line = None
+    for line in ocr_text.splitlines():
+        line = line.strip()
+        m = _FIXTURE_SCORE_LINE.match(line)
+        if m and score_line is None:
+            score_line = f"{m.group(1)} - {m.group(2)}"
+            continue
+        m = _FIXTURE_V_LINE.match(line)
+        if m and v_line is None:
+            v_line = f"{m.group(1)} - {m.group(2)}"
+    return score_line or v_line
 
 
 async def _llm_extract(
@@ -888,6 +912,13 @@ async def _llm_extract(
         pick.fecha_evento = _extract_event_date(text, fecha_referencia)
     if pick.linea is None and pick.seleccion:
         pick.linea = _extract_linea(pick.seleccion)
+    if not _extract_eventos([pick.evento or ""]):
+        # El LLM a veces devuelve la cabecera de liga ("Italia - Serie
+        # A") o null aunque el OCR del boleto tenga el cruce ("Como v
+        # Parma") en una línea propia.
+        fixture = _fixture_from_slip_ocr(text)
+        if fixture:
+            pick.evento = fixture
     return pick
 
 

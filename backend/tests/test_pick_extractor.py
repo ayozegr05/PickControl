@@ -670,3 +670,35 @@ class TestLegNoiseLinks:
 
     def test_pata_normal_no_es_ruido(self):
         assert not _LEG_NOISE_PATTERN.search("Zizou Bergs gana el partido")
+
+
+class TestFixtureFromSlipOcr:
+    """Rescate del cruce "A v B" / "A 0-0 B" del OCR de boletos en vivo
+    (bet365): el LLM a veces devuelve la cabecera de liga."""
+
+    def test_linea_v_devuelve_cruce(self):
+        from app.services.telegram.pick_extractor import _fixture_from_slip_ocr
+
+        ocr = (
+            "España - La Liga\nCelta de Vigo 0 0 Racing Santander\n"
+            "Estadísticas\nMás de 7.0\nTotal - Córners\n"
+            "Celta de Vigo v Racing Santander\n1.50"
+        )
+        assert _fixture_from_slip_ocr(ocr) == "Celta de Vigo - Racing Santander"
+
+    def test_linea_marcador_con_guion(self):
+        from app.services.telegram.pick_extractor import _fixture_from_slip_ocr
+
+        ocr = (
+            "Andorra - Primera División\n"
+            "Sporting Club d'Escaldes 0 - 2 FC Santa Coloma\n"
+            "Estadísticas\nMenos de 4.5\n1.61"
+        )
+        assert _fixture_from_slip_ocr(ocr) == (
+            "Sporting Club d'Escaldes - FC Santa Coloma"
+        )
+
+    def test_sin_cruce_devuelve_none(self):
+        from app.services.telegram.pick_extractor import _fixture_from_slip_ocr
+
+        assert _fixture_from_slip_ocr("SERIE A\nMÁS DE 7.0 CÓRNERS") is None
