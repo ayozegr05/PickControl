@@ -74,8 +74,13 @@ diario pg_dump a `backend/backups/` con retención 14 días, ignorado por git).
 
 ## Canales monitorizados
 
-Configurados en `TELEGRAM_TARGET_CHANNEL` (`.env`, no commitear): Dm7 GRATUITO,
-Dm7 Allsports, AllSportsPicks, CopetePicks, Bet Fran, Lady Bets.
+Fuente de verdad: tabla `channels` (CRUD en `/api/v1/channels`, pantalla
+`app/screens/canales.tsx`). `TELEGRAM_TARGET_CHANNEL` (`.env`) solo se usa
+como bootstrap: `seed_channels_from_env` puebla la tabla si está vacía.
+Los handlers de Telethon son globales y filtran por el caché
+`active_channel_ids()` (`services/telegram/channels.py`), recargado tras
+cada cambio por API — añadir/quitar canales no requiere reiniciar.
+Borrar un canal NO borra sus raws ni picks (auditoría).
 Sesión Telethon: `TELEGRAM_SESSION_NAME=controlpick_telegram`;
 media en `backend/media/telegram/`.
 

@@ -22,24 +22,19 @@ en cada arranque.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from sqlalchemy import and_, or_
 from sqlmodel import func, select
-from telethon import TelegramClient, utils
+from telethon import TelegramClient
 from telethon.tl.types import Message
 
-from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
+from app.models.channel import Channel
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
-from app.services.telegram.handlers import (
-    fetch_message_content,
-    looks_like_id,
-    parse_target_channels,
-    to_telegram_chat_id,
-)
+from app.services.telegram.channels import resolve_channel_target
+from app.services.telegram.handlers import fetch_message_content
 from app.services.telegram.processor import process_incoming_message
 
 logger = get_logger("app.telegram")
@@ -56,29 +51,6 @@ _GAP_SCAN_LIMIT = 300
 # tope, un canal poco activo haría que el escaneo de 300 mensajes (o la
 # marca de agua) se fuera semanas atrás drenando historia irrelevante.
 _MAX_MESSAGE_AGE = timedelta(days=7)
-
-
-async def _resolve_channel(
-    client: TelegramClient, target: str
-) -> tuple[Any | None, int | None]:
-    """Resuelve el canal configurado a (entity, channel_id marcado).
-
-    `channel_id` se devuelve en el formato con marca de Telethon
-    (`-100<id>` para canales), el mismo que usa `event.chat_id` en los
-    handlers, para que la marca de agua en BD sea consistente.
-    """
-    if looks_like_id(target):
-        numeric = to_telegram_chat_id(target)
-        # Un entero sin contexto no siempre se puede resolver con
-        # get_entity; lo buscamos entre los diálogos del usuario.
-        async for dialog in client.iter_dialogs():
-            peer_id = utils.get_peer_id(dialog.entity, add_mark=True)
-            if peer_id == numeric or dialog.entity.id == abs(numeric):
-                return dialog.entity, peer_id
-        return None, None
-
-    entity = await client.get_entity(target)
-    return entity, utils.get_peer_id(entity, add_mark=True)
 
 
 async def _saved_message_ids(channel_id: int) -> set[int]:
@@ -188,7 +160,7 @@ async def _process_message(
 
 
 async def _catchup_channel(client: TelegramClient, target: str) -> None:
-    entity, channel_id = await _resolve_channel(client, target)
+    entity, channel_id = await resolve_channel_target(client, target)
     if entity is None or channel_id is None:
         logger.warning(
             "[TELEGRAM_CATCHUP] No se pudo resolver el canal %s; se omite.",
@@ -299,18 +271,32 @@ async def _catchup_channel(client: TelegramClient, target: str) -> None:
         )
 
 
-async def run_catchup(client: TelegramClient) -> None:
-    """Sincroniza los canales configurados tras un downtime del backend.
+async def run_catchup_for_target(client: TelegramClient, target: str) -> None:
+    """Catch-up de un solo canal (p. ej. al activarlo desde la app)."""
+    try:
+        await _catchup_channel(client, target)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "[TELEGRAM_CATCHUP] Error haciendo catch-up del canal %s",
+            target,
+        )
 
-    Un fallo en un canal nunca debe impedir que el listener en vivo
-    arranque, así que cada canal se procesa de forma aislada.
+
+async def run_catchup(client: TelegramClient) -> None:
+    """Sincroniza los canales activos tras un downtime del backend.
+
+    La fuente de verdad es la tabla `channels`; un fallo en un canal
+    nunca debe impedir que el listener en vivo arranque, así que cada
+    canal se procesa de forma aislada.
     """
-    settings = get_settings()
-    targets = parse_target_channels(settings.telegram_target_channel or "")
-    if not targets:
+    async with AsyncSessionLocal() as session:
+        result = await session.exec(select(Channel).where(Channel.activo))
+        channels = list(result.all())
+    if not channels:
         return
 
-    for target in targets:
+    for channel in channels:
+        target = str(channel.channel_id) if channel.channel_id else channel.target
         try:
             await _catchup_channel(client, target)
         except Exception:  # noqa: BLE001

@@ -15,9 +15,11 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from telethon.tl.types import Message, PeerChannel
 
+from app.models.channel import Channel
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.services.telegram import catchup
+from app.services.telegram import channels as channels_service
 
 CHANNEL_ID = -100100
 
@@ -89,8 +91,11 @@ def telegram_mocks(monkeypatch, session: AsyncSession):
         catchup, "fetch_message_content", AsyncMock(return_value=("t", None, None))
     )
     # utils.get_peer_id espera tipos TL reales; el fake usa `marked_id`.
+    # La resolución vive en `channels.py` (resolve_channel_target).
     monkeypatch.setattr(
-        catchup.utils, "get_peer_id", lambda e, add_mark=True: e.marked_id
+        channels_service.utils,
+        "get_peer_id",
+        lambda e, add_mark=True: e.marked_id,
     )
     return proc
 
@@ -217,20 +222,14 @@ class TestCatchup:
         telegram_mocks.assert_not_awaited()
 
     async def test_run_catchup_aisla_errores_por_canal(
-        self, telegram_mocks, monkeypatch
+        self, telegram_mocks, session, monkeypatch
     ):
         """Un canal que explota no impide procesar el siguiente."""
-        monkeypatch.setattr(
-            catchup,
-            "get_settings",
-            lambda: SimpleNamespace(telegram_target_channel="malo,bueno"),
-        )
-        monkeypatch.setattr(
-            catchup, "_resolve_channel", AsyncMock(return_value=(None, None))
-        )
-        # Canal "malo" lanza dentro de _catchup_channel? _resolve_channel
-        # devuelve None → se omite sin error. Para probar aislamiento real,
-        # hacemos que el primer canal lance en _catchup_channel.
+        session.add(Channel(target="malo", activo=True))
+        session.add(Channel(target="bueno", activo=True))
+        session.add(Channel(target="inactivo", activo=False))
+        await session.commit()
+
         calls = []
 
         async def fake_channel(client, target):
@@ -240,4 +239,5 @@ class TestCatchup:
 
         monkeypatch.setattr(catchup, "_catchup_channel", fake_channel)
         await catchup.run_catchup(SimpleNamespace())
+        # Solo los activos; "malo" lanza pero "bueno" se procesa igual.
         assert calls == ["malo", "bueno"]

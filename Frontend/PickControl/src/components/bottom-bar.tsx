@@ -51,6 +51,11 @@ const BottomBar = () => {
       <TouchableOpacity onPress={() => router.push("/screens/parsed-picks")}>
         <Ionicons name="chatbubbles" size={30} color="orange" />
       </TouchableOpacity>
+
+      {/* Botón de Canales monitorizados */}
+      <TouchableOpacity onPress={() => router.push("/screens/canales")}>
+        <Ionicons name="radio" size={28} color="orange" />
+      </TouchableOpacity>
     </View>
   );
 };

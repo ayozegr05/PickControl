@@ -65,7 +65,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 | 7 | Pantalla de análisis global | Hecho | — |
 | 8 | "Yo también la jugué" | Hecho | — |
 | 9 | Notificaciones push | Pendiente | Medio |
-| 10 | CRUD de canales desde la app | Pendiente | Medio |
+| 10 | CRUD de canales desde la app | Hecho (tabla `channels`, handlers globales dinámicos, picker desde `get_dialogs`, pantalla `canales`) — falta probar en vivo | Medio |
 | 11 | Deploy real (servidor + PostgreSQL + HTTPS) | Pendiente | Medio-alto |
 | 12 | Backups: script `backup_db.py` | Hecho | — |
 | 13 | Backups programados diarios | Pendiente (va con el deploy) | Trivial |
@@ -419,8 +419,15 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
       Idempotente: un doble tap devuelve la apuesta ya creada, no duplica.
       Si ya existe, el modal muestra "✓ Ya la tienes registrada".
 - [ ] **Notificaciones push** cuando llega un pick nuevo.
-- [ ] **CRUD de canales en BD**: añadir/quitar canales monitorizados desde la
-      app en vez de editar `TELEGRAM_TARGET_CHANNEL` y reiniciar.
+- [x] **CRUD de canales en BD** (hecho): tabla `channels` como fuente de
+      verdad; `TELEGRAM_TARGET_CHANNEL` queda como bootstrap
+      (`seed_channels_from_env` si la tabla está vacía). Handlers globales
+      de Telethon filtran por caché `active_channel_ids()` refrescado tras
+      cada cambio — sin reiniciar. Endpoints `/channels` + `/disponibles`
+      (picker con `iter_dialogs` de la cuenta Telethon) + alta por
+      enlace/@user/id con resolución `get_entity`. Pantalla
+      `app/screens/canales.tsx` (toggle activo, borrado lógico que conserva
+      historial, alta manual, picker). Pendiente: probar en vivo.
 
 ### 4. Infra / calidad
 
