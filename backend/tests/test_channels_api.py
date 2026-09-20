@@ -233,8 +233,11 @@ class TestActualizarYBorrar:
 
         resp = await client.delete(f"/api/v1/channels/{ch.id}", headers=auth_headers)
         assert resp.status_code == 204
-        assert await session.get(Channel, ch.id) is None
-        # El raw sigue en la BD: el borrado no toca la auditoría.
+        # Borrado lógico: la fila sigue en la lista como inactiva para
+        # poder reactivarla; el raw también se conserva (auditoría).
+        canal = await session.get(Channel, ch.id)
+        assert canal is not None
+        assert canal.activo is False
         assert (await session.exec(select(TelegramRawMessage))).first() is not None
 
     async def test_borrar_inexistente_404(self, client, auth_headers):
