@@ -125,7 +125,13 @@ _SLIP_MARKER = re.compile(
     r"sencillas?|\bsimple\b|\bimp(?:orte)?:|ganar[áa]\s+el\s+encuentro|"
     r"ganador\s+del\s+encuentro|crear\s+apuesta|hoja\s+de\s+apuestas|"
     r"ganancias|cerrar\s+apuesta|añadir\s+selecci[oó]n|boleto|"
-    r"m[aá]s/menos|total\s+de\s+(?:goles|juegos)",
+    r"m[aá]s/menos|total\s+de\s+(?:goles|juegos)|"
+    # Boleto EN VIVO estilo bet365 ("Como 0 0 Parma / Estadísticas de
+    # jugador / Total - Córners"): no lleva "Sencillas" ni importe,
+    # pero sí la cabecera de stats en directo o la línea de mercado
+    # "Mercado - Submercado".
+    r"estad[íi]sticas\s+de\s+jugador|l[ií]nea\s+de\s+tiempo|"
+    r"(?:total|encuentro|1[ªa°]\s*parte|ambos\s+equipos)\s*-\s*[a-záéíóúñü]",
     re.IGNORECASE,
 )
 
@@ -147,10 +153,12 @@ async def _find_pair_slip(
     when: datetime | None,
     message_id: int,
 ) -> TelegramRawMessage | None:
-    """La foto-boleto más reciente del mismo canal ANTES del texto.
+    """La foto-boleto del mismo canal más cercana al texto en el tiempo.
 
-    Empareja el caso habitual (foto → texto a los ~2-5 min): el slip
-    aporta rival y cuota que el texto no trae.
+    Cubre los dos órdenes que usan los tipsters: foto → texto (el caso
+    habitual, ~2-5 min) y texto → foto (publican el pick y luego el
+    boleto que lo respalda). En vivo el mensaje futuro aún no existe,
+    así que solo la dirección hacia atrás aplica; en backfill ambas.
     """
     if when is None:
         return None
@@ -159,15 +167,20 @@ async def _find_pair_slip(
         .where(TelegramRawMessage.channel_id == channel_id)
         .where(TelegramRawMessage.media_path.isnot(None))  # type: ignore[union-attr]
         .where(TelegramRawMessage.extracted_text.isnot(None))  # type: ignore[union-attr]
-        .where(TelegramRawMessage.message_id < message_id)
+        .where(TelegramRawMessage.message_id != message_id)
         .where(TelegramRawMessage.received_at >= when - _PAIR_WINDOW)
-        .where(TelegramRawMessage.received_at <= when)
-        .order_by(TelegramRawMessage.received_at.desc())  # type: ignore[arg-type]
+        .where(TelegramRawMessage.received_at <= when + _PAIR_WINDOW)
     )
-    for candidate in (await session.exec(query)).all():
-        if _looks_like_slip(candidate.extracted_text):
-            return candidate
-    return None
+    candidates = [
+        c
+        for c in (await session.exec(query)).all()
+        if _looks_like_slip(c.extracted_text)
+    ]
+    if not candidates:
+        return None
+    # El más cercano en el tiempo, no el más reciente: un slip de otro
+    # pick publicado después no debe ganarle al que acompaña al texto.
+    return min(candidates, key=lambda c: abs(c.received_at - when))
 
 
 async def _find_pick_of_raw(session: AsyncSession, raw_id: int) -> ParsedPick | None:
