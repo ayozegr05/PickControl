@@ -111,17 +111,21 @@ class FootballDataProvider:
             return None
 
         match, home, away = found
-        full_time = match.get("score", {}).get("fullTime", {})
+        score = match.get("score", {})
+        full_time = score.get("fullTime", {})
         home_score = full_time.get("home")
         away_score = full_time.get("away")
         if home_score is None or away_score is None:
             return None
+        half_time = score.get("halfTime", {})
 
         return MatchResult(
             home_team=home,
             away_team=away,
             home_score=home_score,
             away_score=away_score,
+            ht_home_score=half_time.get("home"),
+            ht_away_score=half_time.get("away"),
         )
 
     async def find_postponed_match(

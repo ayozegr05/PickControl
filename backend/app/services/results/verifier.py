@@ -244,6 +244,18 @@ _DRAW_NO_BET_PATTERN = re.compile(
     r"empate.{0,10}apuesta\s+no\s+v[aá]lida",
     re.IGNORECASE,
 )
+_DRAW_SEL_PATTERN = re.compile(
+    # Selección = el empate en sí ("Empate", "X", "Tablas al descanso").
+    # Excluye "Empate o/y Betis" (doble oportunidad) y "Empate no válido".
+    r"^\s*(?:empate\b(?!\s+(?:o|y|e|no|ni)\b)|x\b|tablas\b)",
+    re.IGNORECASE,
+)
+_HT_FT_PATTERN = re.compile(
+    # "Gana la 1ª parte y el partido" (HT/FT): exige el mismo ganador
+    # al descanso y al final.
+    r"(?:gana|win)\b[^.]{0,30}\bpartido\b|\bpartido\b[^.]{0,30}\b(?:gana|win)\b",
+    re.IGNORECASE,
+)
 
 
 def _similar(a: str, b: str) -> float:
@@ -437,6 +449,21 @@ def _stat_total(
     if max(home_similarity, away_similarity) < _MIN_TEAM_SIMILARITY:
         return None
     return side_total(0) if home_similarity >= away_similarity else side_total(1)
+
+
+def _ht_view(match: MatchResult) -> Optional[MatchResult]:
+    """El mismo partido visto al DESCANSO: cambia el marcador final por
+    el de la 1ª parte para reusar los resolutores de siempre
+    (over/under, ganador, doble oportunidad, btts, marcador exacto)."""
+    if match.ht_home_score is None or match.ht_away_score is None:
+        return None
+    return MatchResult(
+        home_team=match.home_team,
+        away_team=match.away_team,
+        home_score=match.ht_home_score,
+        away_score=match.ht_away_score,
+        status=match.status,
+    )
 
 
 def _resolve_stat_over_under(
@@ -1380,6 +1407,33 @@ async def _find_stats_across_providers(
     return None
 
 
+async def _find_stats_1h_across_providers(
+    date: datetime,
+    team_hint: str,
+    providers: list[ResultsProvider],
+    pick_id: Optional[int],
+) -> Optional[MatchStats]:
+    """Estadísticas de la PRIMERA parte (córners/tarjetas 1H): solo los
+    proveedores que implementan `find_match_stats_1h` (hoy footapi7 con
+    el periodo "1ST" de Sofascore)."""
+    for provider in providers:
+        finder = getattr(provider, "find_match_stats_1h", None)
+        if finder is None:
+            continue
+        try:
+            stats = await finder(date, team_hint)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[RESULTS_VERIFIER] Error consultando stats 1H para pick " "id=%s: %s",
+                pick_id,
+                exc,
+            )
+            continue
+        if stats:
+            return stats
+    return None
+
+
 async def _find_events_across_providers(
     date: datetime,
     team_hint: str,
@@ -1520,6 +1574,7 @@ async def verify_pick(
 
     # Mercados de fútbol que se resuelven solo con el marcador final.
     combined = f"{pick.mercado or ''} {pick.seleccion or ''}"
+    is_first_half = bool(_FIRST_HALF_PATTERN.search(combined))
     if sport in ("futbol", None):
         if _DOUBLE_CHANCE_PATTERN.search(combined):
             sel_clean = (pick.seleccion or "").strip().lower()
@@ -1546,6 +1601,10 @@ async def verify_pick(
             )
             if not match:
                 return None, False
+            if is_first_half:
+                match = _ht_view(match)
+                if not match:
+                    return None, False
             return _resolve_double_chance(match, pick.seleccion or "")
 
         btts_no = _BTTS_NO_PATTERN.search(combined)
@@ -1562,7 +1621,27 @@ async def verify_pick(
             )
             if not match:
                 return None, False
+            if is_first_half:
+                match = _ht_view(match)
+                if not match:
+                    return None, False
             return _resolve_btts(match, yes=bool(btts_yes) and not btts_no)
+
+        # "Empate" / "X" / "Tablas" (también "al descanso" con 1ª parte):
+        # la selección no nombra equipo — el cruce viene de `evento`.
+        if _DRAW_SEL_PATTERN.search(pick.seleccion or ""):
+            if not pick.evento:
+                return None, False
+            match = await _find_match_across_providers(
+                pick.fecha_evento, pick.evento, providers_for_sport, pick.id
+            )
+            if not match:
+                return None, False
+            if is_first_half:
+                match = _ht_view(match)
+                if not match:
+                    return None, False
+            return match.home_score == match.away_score, False
 
         # Resultado exacto ("2-1", "marcador exacto 0-0"): la selección
         # es el marcador; el evento da la orientación local/visitante.
@@ -1575,6 +1654,10 @@ async def verify_pick(
             )
             if not match:
                 return None, False
+            if is_first_half:
+                match = _ht_view(match)
+                if not match:
+                    return None, False
             pred_home, pred_away = exact
             if match_reversed(pick.evento, match.home_team, match.away_team):
                 pred_home, pred_away = pred_away, pred_home
@@ -1591,6 +1674,10 @@ async def verify_pick(
         )
         if not match:
             return None, False
+        if is_first_half:
+            match = _ht_view(match)
+            if not match:
+                return None, False
         return _resolve_asian_handicap(match, team_hint, pick.linea)
 
     if es_over_under and pick.linea is not None:
@@ -1600,10 +1687,6 @@ async def verify_pick(
         if not direction:
             return None, False
         ou_text = f"{pick.seleccion or ''} {pick.mercado or ''}"
-        if _FIRST_HALF_PATTERN.search(ou_text):
-            # "Más de 0.5 goles 1ª parte": ni el marcador ni las stats
-            # cubren el descanso — pendiente.
-            return None, False
         # Over/under es sobre el total del partido o sobre un equipo
         # concreto; en ambos casos necesitamos un nombre de equipo para
         # localizar el partido en la API.
@@ -1619,12 +1702,15 @@ async def verify_pick(
         if _OU_NON_GOALS_PATTERN.search(ou_text):
             # Córners/tarjetas/tiros...: no resoluble con el marcador,
             # pero API-Football sí tiene /fixtures/statistics (solo
-            # dentro de la ventana de fechas del plan gratis).
+            # dentro de la ventana de fechas del plan gratis). En 1ª
+            # parte se usan las stats del periodo "1ST" (footapi7).
             stat_keys = _stat_keys_for(ou_text)
             if stat_keys:
-                stats = await _find_stats_across_providers(
-                    pick.fecha_evento, team_hint, providers_for_sport, pick.id
-                )
+                stats = await (
+                    _find_stats_1h_across_providers
+                    if is_first_half
+                    else _find_stats_across_providers
+                )(pick.fecha_evento, team_hint, providers_for_sport, pick.id)
                 if stats:
                     result = _resolve_stat_over_under(
                         stats, stat_keys, team_total_team, direction, pick.linea
@@ -1656,6 +1742,10 @@ async def verify_pick(
         )
         if not match:
             return None, False
+        if is_first_half:
+            match = _ht_view(match)
+            if not match:
+                return None, False
         if team_total_team:
             return _resolve_team_over_under(
                 match, team_total_team, direction, pick.linea
@@ -1724,6 +1814,25 @@ async def verify_pick(
     if match.status in _TENNIS_VOID_STATUSES:
         # Retirada/walkover (tenis): la casa suele devolver la apuesta.
         return None, True
+
+    if is_first_half:
+        if _HT_FT_PATTERN.search(combined):
+            # "Gana la 1ª parte y el partido" (HT/FT): mismo ganador
+            # en ambos marcadores.
+            ht = _ht_view(match)
+            if not ht:
+                return None, False
+            ht_winner = _resolve_winner(ht)
+            ft_winner = _resolve_winner(match)
+            if ht_winner is None or ft_winner is None:
+                return False, False
+            return (
+                _similar(predicted_team, ht_winner) >= _MIN_TEAM_SIMILARITY
+                and _similar(ht_winner, ft_winner) >= _MIN_TEAM_SIMILARITY
+            ), False
+        match = _ht_view(match)
+        if not match:
+            return None, False
 
     winner = _resolve_winner(match)
     if winner is None:

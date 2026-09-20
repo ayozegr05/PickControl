@@ -18,7 +18,10 @@ Ver `ROADMAP_MIGRACION.md` para estado de fases y próximos hitos.
     RapidAPI, sin ventana de fechas), tenis (TheSportsDB →
     RapidAPI ATP-WTA-ITF → tennisapi1). Rescate manual de stats:
     `scripts/backfill_stats_csv.py` (CSVs football-data.co.uk, dry-run por
-    defecto).
+    defecto). Mercados de 1ª parte/descanso: `MatchResult.ht_*` +
+    `_ht_view()` en el verifier (stats 1H vía `find_match_stats_1h` de
+    footapi7); sin dato HT el pick queda pendiente, nunca se resuelve
+    con el marcador final.
   - `app/services/odds/` — snapshots de cuotas de mercado (auditoría del
     tipster): provider Sofascore (allsportsapi2 dedicado, tennisapi1
     scavenger), job periódico `snapshotter.py`, mapeo pick→mercado y

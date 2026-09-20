@@ -1532,12 +1532,15 @@ class TestOverUnderSubjectGuards:
         assert (acierto, anulada) == (None, False)
         assert provider.calls == 0
 
-    async def test_primera_parte_no_se_resuelve(self):
+    async def test_primera_parte_sin_marcador_descanso_pendiente(self):
+        # Ya se consulta al proveedor (los 1H se resuelven desde que
+        # MatchResult lleva ht_*), pero sin marcador al descanso el pick
+        # sigue pendiente — nunca se verifica con el marcador final.
         provider = _StubProvider(_match(3, 0))
         pick = _pick("Más de 0.5 goles 1ª parte", "over/under goles", linea=0.5)
         acierto, anulada = await verify_pick(pick, [provider])
         assert (acierto, anulada) == (None, False)
-        assert provider.calls == 0
+        assert provider.calls == 1
 
     async def test_goles_si_se_resuelve(self):
         provider = _StubProvider(_match(2, 1))
@@ -2256,3 +2259,181 @@ class TestTennisLookupHint:
     def test_torneo_sin_fallback_devuelve_evento(self):
         pick = self._pick("ATP Cincinnati")
         assert _tennis_lookup_hint(pick, None) == "ATP Cincinnati"
+
+
+def _match_ht(
+    home: int,
+    away: int,
+    ht_home: int | None,
+    ht_away: int | None,
+) -> MatchResult:
+    return MatchResult(
+        home_team="Levante",
+        away_team="Real Betis",
+        home_score=home,
+        away_score=away,
+        ht_home_score=ht_home,
+        ht_away_score=ht_away,
+    )
+
+
+class _StubStats1HProvider:
+    """Proveedor con estadísticas de la PRIMERA parte (periodo "1ST").
+
+    Simula `find_match_stats_1h` de footapi7: córners/tarjetas al
+    descanso, independientes de las del partido completo.
+    """
+
+    SUPPORTED_SPORTS = frozenset({"futbol"})
+
+    def __init__(self, stats: MatchStats | None):
+        self._stats = stats
+        self.calls = 0
+
+    async def find_match(self, date, team_hint):
+        return None
+
+    async def find_match_stats_1h(self, date, team_hint):
+        self.calls += 1
+        return self._stats
+
+
+class TestFirstHalf:
+    """Mercados de primera parte / descanso: se resuelven con el
+    marcador al descanso (ht_*), nunca con el final. Sin dato HT el
+    pick queda pendiente — mejor que verificarlo mal."""
+
+    async def test_gana_primera_parte_aunque_pierda_el_partido(self):
+        # FT 1-2 pero al descanso iba 1-0.
+        provider = _StubProvider(_match_ht(1, 2, 1, 0))
+        pick = _pick("Levante gana la 1ª parte", "ganador")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_gana_primera_parte_falla_aunque_gane_el_partido(self):
+        # FT 3-0 pero al descanso iba 0-1: el pick pierde.
+        provider = _StubProvider(_match_ht(3, 0, 0, 1))
+        pick = _pick("Levante gana la 1ª parte", "ganador")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_gana_visitante_primera_parte(self):
+        provider = _StubProvider(_match_ht(0, 3, 0, 1))
+        pick = _pick(
+            "Real Betis gana la 1ª parte",
+            "ganador",
+            evento="Real Betis - Levante",
+        )
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_empate_al_descanso(self):
+        provider = _StubProvider(_match_ht(1, 3, 1, 1))
+        pick = _pick("Empate al descanso", "ganador")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_empate_al_descanso_falla(self):
+        provider = _StubProvider(_match_ht(1, 3, 1, 0))
+        pick = _pick("Empate al descanso", "ganador")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_empate_a_tiempo_completo(self):
+        # Bonus: "Empate" sin marca de 1ª parte se resuelve con el
+        # marcador final (antes quedaba pendiente).
+        provider = _StubProvider(_match(1, 1))
+        pick = _pick("Empate", "ganador")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_empate_o_equipo_no_es_pick_de_empate(self):
+        # "Empate o Betis" es doble oportunidad, no apuesta al empate:
+        # el resolutor de empate no debe interceptarlo. Iba 1-0 al
+        # descanso -> ni empate ni Betis -> la doble oportunidad falla.
+        provider = _StubProvider(_match_ht(1, 0, 1, 0))
+        pick = _pick("Empate o Betis", "doble oportunidad 1ª parte")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_mas_goles_primera_parte(self):
+        provider = _StubProvider(_match_ht(4, 1, 2, 0))
+        pick = _pick("Más de 1.5 goles 1ª parte", "over/under", linea=1.5)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True  # 2 goles al descanso (no 5 del total)
+
+    async def test_mas_goles_primera_parte_falla_con_total_mayor(self):
+        provider = _StubProvider(_match_ht(4, 1, 2, 0))
+        pick = _pick("Más de 3.5 goles primera parte", "over/under", linea=3.5)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False  # 2 al descanso aunque el partido tuvo 5
+
+    async def test_push_goles_primera_parte(self):
+        provider = _StubProvider(_match_ht(2, 2, 1, 1))
+        pick = _pick("Más de 2 goles 1ª parte", "over/under", linea=2.0)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, True)  # 2 goles = push
+
+    async def test_menos_goles_primera_parte(self):
+        provider = _StubProvider(_match_ht(4, 2, 1, 0))
+        pick = _pick("Menos de 1.5 goles 1ª parte", "over/under", linea=1.5)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True  # 1 gol al descanso
+
+    async def test_sin_marcador_descanso_queda_pendiente(self):
+        # El proveedor no trajo el resultado al descanso: pendiente.
+        provider = _StubProvider(_match(2, 1))
+        pick = _pick("Levante gana la 1ª parte", "ganador")
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+
+    async def test_sin_marcador_descanso_over_under_pendiente(self):
+        provider = _StubProvider(_match(2, 1))
+        pick = _pick("Más de 1.5 goles 1ª parte", "over/under", linea=1.5)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+
+    async def test_gana_primera_parte_y_el_partido(self):
+        provider = _StubProvider(_match_ht(2, 1, 1, 0))
+        pick = _pick("Levante gana la 1ª parte y el partido", "ganador")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_gana_primera_parte_y_el_partido_falla_si_empata(self):
+        # Ganó la 1ª parte pero el partido acabó 1-1 -> falla.
+        provider = _StubProvider(_match_ht(1, 1, 1, 0))
+        pick = _pick("Levante gana la 1ª parte y el partido", "ganador")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_corners_primera_parte_usa_stats_1h(self):
+        stats = _stats({"Corner Kicks": 4}, {"Corner Kicks": 2})
+        provider = _StubStats1HProvider(stats)
+        pick = _pick("Más de 4.5 corners 1ª parte", "over/under", linea=4.5)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True  # 6 córners en la 1ª parte
+        assert provider.calls == 1
+
+    async def test_corners_primera_parte_sin_stats_1h_pendiente(self):
+        provider = _StubStats1HProvider(None)
+        pick = _pick("Más de 4.5 corners 1ª parte", "over/under", linea=4.5)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+
+    async def test_doble_oportunidad_primera_parte(self):
+        provider = _StubProvider(_match_ht(0, 2, 1, 1))
+        pick = _pick("Levante y empate", "doble oportunidad 1ª parte")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True  # 1-1 al descanso cubre "Levante y empate"
+
+    async def test_btts_primera_parte(self):
+        provider = _StubProvider(_match_ht(3, 0, 1, 1))
+        pick = _pick("Ambos equipos marcan 1ª parte", "over/under")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_marcador_exacto_al_descanso(self):
+        provider = _StubProvider(_match_ht(2, 1, 0, 0))
+        pick = _pick("0-0 al descanso", "resultado exacto")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
