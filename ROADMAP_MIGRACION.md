@@ -57,7 +57,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 | # | Hito | Estado | Esfuerzo |
 |---|---|---|---|
 | 1 | Combinadas como sección propia | Hecho | Alto — modelo, extractor, verificador, UI |
-| 2 | Fútbol: primera parte/descanso | Aparcado — cobertura CONFIRMADA gratis (ver nota), pero 0 picks HT en BD: se implementa cuando aparezca el primero | Medio (reusa providers) |
+| 2 | Fútbol: primera parte/descanso | Hecho — `MatchResult.ht_*` en los 3 providers de fútbol + stats 1ST en footapi7; el verifier reusa los resolutores con `_ht_view` | Medio (reusa providers) |
 | 3 | Fútbol: partidos parados (SUSP/ABD/INT) | Manual a propósito | — |
 | 4 | Cuota tipster vs cuota real de mercado | Hecho y backend probado en vivo (endpoints + snapshots reales OK) — falta solo revisar la UI en móvil (ver §5) | Alto, ya implementado con API gratuita |
 | 5 | Baloncesto | Aparcado | Medio |
@@ -326,8 +326,7 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
         "X marca", "X marca o asiste", "X recibe tarjeta" (propia puerta
         y penalti fallado no cuentan; no jugó → `anulada`) y props de
         jugador con número ("X más de 1.5 tiros a puerta").
-      Pendiente a propósito: **primera parte/descanso** (sin datos en
-      los proveedores actuales) y partidos parados a mitad
+      Pendiente a propósito: partidos parados a mitad
       (`SUSP`/`ABD` — hay mercados ya decididos que la casa paga;
       quedan manuales).
 - [x] **Combinadas como sección propia** (self-FK sobre `parsed_picks`;
@@ -627,10 +626,18 @@ Investigado el 20-sep-2026. **Cobertura confirmada gratis**, sin APIs nuevas:
 - **Histórico/auditoría**: CSVs gratis de football-data.co.uk
   (`HTHG/HTAG/HTR` + stats + odds, 22 ligas incl. Segunda, 2 actualiz./sem).
 
-**Decisión aparcada**: hay **0 picks de primera parte** en la BD — los
-tipsters no publican ese mercado hoy. Implementar cuando aparezca el
-primero; el diseño sería `resolve_halftime()` en el verifier + mapeo de
-variantes del mercado en el extractor.
+**Implementado (22-sep-2026)**: `MatchResult` lleva `ht_home_score`/
+`ht_away_score`; football-data (`score.halfTime`), API-Football
+(`score.halftime`) y footapi7 (`homeScore.period1`) los rellenan. El
+verifier resuelve 1ª parte con `_ht_view()` — el mismo partido visto
+al descanso — reusando los resolutores existentes: ganador 1H, empate
+al descanso, over/under goles 1H, doble oportunidad 1H, BTTS 1H,
+marcador exacto al descanso, hándicap 1H y HT/FT ("gana 1ª parte y el
+partido"). Stats 1H (córners/tarjetas 1ª parte) vía
+`find_match_stats_1h` de footapi7 (periodo `1ST`). Sin dato HT el pick
+queda pendiente — nunca se verifica con el marcador final. Bonus:
+"Empate"/"X" a tiempo completo también se resuelve ya (antes quedaba
+pendiente).
 
 ## Provider de stats footapi7 + rescate CSV (implementado 21-sep-2026)
 
@@ -646,8 +653,9 @@ El punto 1 de la lista anterior quedó implementado así:
 - Flujo: `/api/search/{equipo}` → mejor entidad `sport.slug=football` →
   `/api/team/{id}/matches/previous/{page}` (~30 eventos/página, máx 2
   páginas) → match por `match_score` + tolerancia ±1 día →
-  `/api/match/{id}/statistics` (solo periodo `ALL`; `1ST`/`2ND` quedan
-  para el hito de primera parte). Stats traducidas a las claves
+  `/api/match/{id}/statistics` (periodos `ALL` y `1ST` — este último
+  habilita mercados de córners/tarjetas de 1ª parte). Stats traducidas
+  a las claves
   canónicas de API-Football ("Corner kicks"→"Corner Kicks"...) para que
   el verifier no cambie. Cachés de búsqueda/eventos/stats por pasada;
   403/429 marcan cuota agotada hasta mañana (no cuentan como miss).

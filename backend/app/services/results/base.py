@@ -108,6 +108,11 @@ class MatchResult:
     `status` marca finales anómalos reportados por el proveedor
     ("retired", "walkover" en tenis): el partido no terminó por la vía
     normal y las casas suelen devolver la apuesta. None = final normal.
+
+    `ht_home_score`/`ht_away_score` son el marcador al DESCANSO (1ª
+    parte) cuando el proveedor lo trae: habilita mercados de primera
+    parte ("gana la 1ª parte", over/under de goles 1H, empate al
+    descanso, descanso/final). None si el proveedor no lo informa.
     """
 
     home_team: str
@@ -116,6 +121,8 @@ class MatchResult:
     away_score: int
     sets: Optional[list[tuple[int, int]]] = None
     status: Optional[str] = None
+    ht_home_score: Optional[int] = None
+    ht_away_score: Optional[int] = None
 
 
 @dataclass

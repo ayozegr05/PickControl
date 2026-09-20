@@ -247,12 +247,14 @@ class FootApiStatsProvider:
             away_team=(event.get("awayTeam") or {}).get("name") or "",
             home_score=home_score,
             away_score=away_score,
+            ht_home_score=(event.get("homeScore") or {}).get("period1"),
+            ht_away_score=(event.get("awayScore") or {}).get("period1"),
         )
 
-    async def find_match_stats(
-        self, date: datetime, team_hint: str
+    async def _stats_for_period(
+        self, date: datetime, team_hint: str, period: str
     ) -> Optional[MatchStats]:
-        """Estadísticas del partido completo (periodo ALL).
+        """Estadísticas de un periodo ("ALL", "1ST").
 
         `MatchStats.values` usa las claves canónicas de API-Football, así
         el verificador resuelve córners/tarjetas/tiros sin cambios.
@@ -277,7 +279,7 @@ class FootApiStatsProvider:
 
         values: dict[str, tuple[int, int]] = {}
         for period_stats in data.get("statistics") or []:
-            if period_stats.get("period") != "ALL":
+            if period_stats.get("period") != period:
                 continue
             for group in period_stats.get("groups") or []:
                 for item in group.get("statisticsItems") or []:
@@ -296,3 +298,16 @@ class FootApiStatsProvider:
             away_team=(event.get("awayTeam") or {}).get("name") or "",
             values=values,
         )
+
+    async def find_match_stats(
+        self, date: datetime, team_hint: str
+    ) -> Optional[MatchStats]:
+        """Estadísticas del partido completo (periodo ALL)."""
+        return await self._stats_for_period(date, team_hint, "ALL")
+
+    async def find_match_stats_1h(
+        self, date: datetime, team_hint: str
+    ) -> Optional[MatchStats]:
+        """Estadísticas de la PRIMERA parte (periodo 1ST): habilita
+        mercados de córners/tarjetas/tiros al descanso."""
+        return await self._stats_for_period(date, team_hint, "1ST")

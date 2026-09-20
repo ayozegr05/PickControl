@@ -301,12 +301,15 @@ class ApiFootballProvider:
         away_score = goals.get("away")
         if home_score is None or away_score is None:
             return None
+        halftime = fixture.get("score", {}).get("halftime", {})
 
         return MatchResult(
             home_team=fixture["teams"]["home"]["name"],
             away_team=fixture["teams"]["away"]["name"],
             home_score=home_score,
             away_score=away_score,
+            ht_home_score=halftime.get("home"),
+            ht_away_score=halftime.get("away"),
         )
 
     async def find_match_stats(
