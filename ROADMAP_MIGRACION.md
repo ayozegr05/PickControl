@@ -545,13 +545,27 @@ Pendiente:
       a su límite real de columna. PENDIENTE de calidad: el LLM sigue
       metiendo el análisis largo en `seleccion` (no revienta, pero el
       dato es feo) — revisar prompt/normalización del extractor.
-- [ ] **Backfill histórico** (opcional, decidir con datos reales):
-      OddsPapi (`bet36528` en RapidAPI) regala `/v4/historical-odds`
-      ilimitado en el free tier — serviría para auditar picks antiguos
-      vía script tipo `verify_backlog.py`. Cobertura Challenger sin
-      verificar; si no la tiene, solo rellenaría fútbol/top → valor
-      marginal. NO es necesario para producción (los snapshots ya se
-      auto-mantienen y las caídas cortas las cubre el fetch post-partido).
+- [~] **Backfill histórico** (`scripts/backfill_historical_odds.py` +
+      `services/odds/oddspapi.py`, dry-run validado 2026-09-20):
+      OddsPapi (`bet36528` en RapidAPI, BASIC $0) devuelve la CURVA
+      COMPLETA por opción (`/historical-odds?fixtureId` → cada
+      movimiento con timestamp), que se guarda como filas
+      `provider="oddspapi"` con `captured_at` real — el comparador
+      obtiene la cuota exacta al publicar el pick sin cambios.
+      Traducción OddsPapi→vocabulario Sofascore ("Full Time Result"→
+      "Full time", totales con línea en `choice_group`, spreads
+      "(hc) Equipo", DC "2X"→"X2") vía catálogo `/markets` global;
+      `map_pick_choices` se reutiliza tal cual. Resolución de fixture:
+      `externalProviders.sofascoreId` (enlaza con `odds_event_id` ya
+      guardados) o nombres+fecha ±1d contra `/fixtures` por día (la
+      respuesta está capada ~330 eventos → un día por llamada).
+      Cobertura verificada: fútbol (payloads 1-3 MB) y tenis
+      ATP/WTA/Challenger; ITF/UTR sin mercados (404 — ninguna casa los
+      cubre, resultado auditable). OJO: el free tier NO es ilimitado
+      de verdad (~150 llamadas/día) — el backfill corre incremental:
+      `--apply` por tandas diarias hasta vaciar el histórico.
+      Idempotente por evento (provider="oddspapi") y misses solo en
+      404 real (un 429 no bloquea el fixture).
 
 ## Estado actual del entorno
 
