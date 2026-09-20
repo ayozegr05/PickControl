@@ -88,6 +88,10 @@ class Settings(BaseSettings):
     # mercados de estadísticas que API-Football ya no puede consultar
     # fuera de su ventana ±1 día del plan gratis.
     rapidapi_footapi_host: str = "footapi7.p.rapidapi.com"
+    # Cuotas históricas (backfill de auditoría): "OddsPapi" (bet36528).
+    # Reutiliza RAPIDAPI_TENNIS_KEY; el histórico es ilimitado en el
+    # plan gratis — solo lo consume scripts/backfill_historical_odds.py.
+    rapidapi_oddspapi_host: str = "bet36528.p.rapidapi.com"
     # Cada cuántos minutos corre el snapshotter de odds en segundo
     # plano. Cadencia corta para capturar bien el cierre de cuotas.
     odds_snapshot_interval_minutes: float = 30.0
