@@ -14,8 +14,11 @@ Ver `ROADMAP_MIGRACION.md` para estado de fases y próximos hitos.
     `processor.py` (persistencia + dedup), `pick_extractor.py` (pre-filtro →
     reglas → LLM `gpt-4o-mini`), `ocr.py` (OpenAI vision).
   - `app/services/results/` — verificador de resultados por deporte:
-    fútbol (football-data.org → API-Football fallback), tenis (TheSportsDB →
-    RapidAPI ATP-WTA-ITF → tennisapi1).
+    fútbol (football-data.org → API-Football → footapi7/Sofascore vía
+    RapidAPI, sin ventana de fechas), tenis (TheSportsDB →
+    RapidAPI ATP-WTA-ITF → tennisapi1). Rescate manual de stats:
+    `scripts/backfill_stats_csv.py` (CSVs football-data.co.uk, dry-run por
+    defecto).
   - `app/services/odds/` — snapshots de cuotas de mercado (auditoría del
     tipster): provider Sofascore (allsportsapi2 dedicado, tennisapi1
     scavenger), job periódico `snapshotter.py`, mapeo pick→mercado y

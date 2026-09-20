@@ -52,6 +52,7 @@ from app.services.results.base import (
     ResultsProvider,
     match_reversed,
 )
+from app.services.results.footapi_stats import FootApiStatsProvider
 from app.services.results.football_data import FootballDataProvider
 from app.services.results.rapidapi_tennis import RapidApiTennisProvider
 from app.services.results.tennisapi1 import TennisApi1Provider
@@ -1298,6 +1299,16 @@ async def _get_providers() -> list[ResultsProvider]:
     if settings.api_football_key:
         providers.append(
             ApiFootballProvider(settings.api_football_key, settings.api_football_host)
+        )
+    # footapi7 (Sofascore vía RapidAPI): sin ventana de fechas ni plan que
+    # la limite. Rescata marcadores de ligas menores y stats (córners,
+    # tarjetas, tiros) que API-Football ya no puede consultar fuera de su
+    # ventana ±1 día. Cuota diaria propia, separada de la de odds.
+    if settings.rapidapi_tennis_key:
+        providers.append(
+            FootApiStatsProvider(
+                settings.rapidapi_tennis_key, settings.rapidapi_footapi_host
+            )
         )
     # Tenis va después de los de fútbol: sin `deporte` informado solo se
     # consulta si los de fútbol no encontraron el partido. Y dentro de
