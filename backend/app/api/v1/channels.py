@@ -209,17 +209,20 @@ async def borrar_canal(
     session: AsyncSession = Depends(get_session),
     _user: User = Depends(get_current_user),
 ) -> None:
-    """Quita el canal de la monitorización.
+    """Quita el canal de la monitorización (borrado lógico).
 
-    No borra mensajes crudos ni picks históricos: siguen en la BD como
-    auditoría del canal.
+    La fila se conserva con `activo=False`: sigue en la lista como
+    inactivo y se puede reactivar con el toggle o re-añadiéndolo (el
+    POST reactiva la fila existente). Tampoco borra mensajes crudos ni
+    picks históricos: siguen en la BD como auditoría del canal.
     """
     channel = await session.get(Channel, channel_pk)
     if channel is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Canal no encontrado."
         )
-    await session.delete(channel)
+    channel.activo = False
+    session.add(channel)
     await session.commit()
 
     client = get_telegram_client()
