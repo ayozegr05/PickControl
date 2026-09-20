@@ -737,4 +737,18 @@ El punto 1 de la lista anterior quedó implementado así:
 3. ~~Notificaciones push (hito 9)~~ → **hecho** (ver lista anterior);
    falta solo la prueba en dispositivo físico: las push remotas no
    funcionan en Expo Go — hace falta development build o la app
-   instalada.
+   instalada. Al abrir la app con sesión pide permiso y registra el
+   token — comprobar la fila en `device_tokens`.
+4. **Backfill histórico de cuotas (OddsPapi)**: la cuota free
+   (~150 llamadas/día) se agotó a mitad del dry-run. Cuando se renueve:
+   `scripts/backfill_historical_odds.py --apply` en tandas diarias —
+   es incremental e idempotente, lo ya escrito se salta. Revisar los
+   `sin fixture` tras la primera tanda completa.
+5. **`verify_now.py`**: footapi7 resuelve props de jugador pendientes y
+   allsportsapi2 reintenta los ~31 misses de tenis (clave propia,
+   no hereda misses viejos). Encaja con el punto 4 el mismo día.
+6. **Mini-fix pendiente si aparece**: dobles de tenis con apellido muy
+   corto — el provider ya los encuentra pero `_tennis_side` usa
+   `_pair_similar` y podría quedar el pick pendiente. Solo si se ve
+   un caso real.
+7. **Limpieza de usuarios** (test@a.com) — trivial, va con el deploy.
