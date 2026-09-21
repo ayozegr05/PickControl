@@ -75,29 +75,40 @@ export default function ParsedPicksScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [soloPendientes, setSoloPendientes] = useState(false);
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
-  const loadOverview = useCallback(async (includeDiscarded: boolean) => {
-    const [picksData, informantesData] = await Promise.all([
-      getParsedPicks({
-        perChannel: OVERVIEW_PER_CHANNEL,
-        soloApuestas: !includeDiscarded,
-      }),
-      // Los canales reales vienen de /informantes (ya filtrado a
-      // es_canal_telegram), para que un canal sin picks en el filtro
-      // actual siga apareciendo como sección vacía.
-      listInformantes(),
-    ]);
-    setOverviewPicks(picksData);
-    setChannelNames(informantesData.map((i) => i.informante));
-  }, []);
+  const loadOverview = useCallback(
+    async (includeDiscarded: boolean, pending: boolean) => {
+      const [picksData, informantesData] = await Promise.all([
+        getParsedPicks({
+          perChannel: OVERVIEW_PER_CHANNEL,
+          soloApuestas: !includeDiscarded,
+          soloPendientes: pending,
+        }),
+        // Los canales reales vienen de /informantes (ya filtrado a
+        // es_canal_telegram), para que un canal sin picks en el filtro
+        // actual siga apareciendo como sección vacía.
+        listInformantes(),
+      ]);
+      setOverviewPicks(picksData);
+      setChannelNames(informantesData.map((i) => i.informante));
+    },
+    []
+  );
 
   const loadChannel = useCallback(
-    async (informanteId: number, offset: number, includeDiscarded: boolean) => {
+    async (
+      informanteId: number,
+      offset: number,
+      includeDiscarded: boolean,
+      pending: boolean
+    ) => {
       const data = await getParsedPicks({
         informanteId,
         soloApuestas: !includeDiscarded,
+        soloPendientes: pending,
         offset,
         limit: CHANNEL_PAGE_SIZE,
       });
@@ -113,15 +124,15 @@ export default function ParsedPicksScreen() {
 
   const reload = useCallback(async () => {
     try {
-      await loadOverview(showAll);
+      await loadOverview(showAll, soloPendientes);
       if (selectedChannel) {
-        await loadChannel(selectedChannel.id, 0, showAll);
+        await loadChannel(selectedChannel.id, 0, showAll, soloPendientes);
       }
       setError(null);
     } catch (err: any) {
       setError(err.message);
     }
-  }, [loadOverview, loadChannel, selectedChannel, showAll]);
+  }, [loadOverview, loadChannel, selectedChannel, showAll, soloPendientes]);
 
   // Recarga automáticamente cada vez que entras a esta pantalla (p. ej.
   // al volver desde otra pestaña), sin tener que reabrir la app.
@@ -145,27 +156,39 @@ export default function ParsedPicksScreen() {
       setHasMore(false);
       if (channel) {
         try {
-          await loadChannel(channel.id, 0, showAll);
+          await loadChannel(channel.id, 0, showAll, soloPendientes);
           setError(null);
         } catch (err: any) {
           setError(err.message);
         }
       }
     },
-    [loadChannel, showAll]
+    [loadChannel, showAll, soloPendientes]
   );
 
   const handleLoadMore = useCallback(async () => {
     if (!selectedChannel || loadingMore) return;
     setLoadingMore(true);
     try {
-      await loadChannel(selectedChannel.id, channelPicks.length, showAll);
+      await loadChannel(
+        selectedChannel.id,
+        channelPicks.length,
+        showAll,
+        soloPendientes
+      );
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoadingMore(false);
     }
-  }, [selectedChannel, loadingMore, channelPicks.length, loadChannel, showAll]);
+  }, [
+    selectedChannel,
+    loadingMore,
+    channelPicks.length,
+    loadChannel,
+    showAll,
+    soloPendientes,
+  ]);
 
   const handleToggleShowAll = useCallback(async () => {
     const next = !showAll;
@@ -175,9 +198,9 @@ export default function ParsedPicksScreen() {
     // mensajes descartados ocupando los huecos de cada canal.
     setLoading(true);
     try {
-      await loadOverview(next);
+      await loadOverview(next, soloPendientes);
       if (selectedChannel) {
-        await loadChannel(selectedChannel.id, 0, next);
+        await loadChannel(selectedChannel.id, 0, next, soloPendientes);
       }
       setError(null);
     } catch (err: any) {
@@ -185,7 +208,25 @@ export default function ParsedPicksScreen() {
     } finally {
       setLoading(false);
     }
-  }, [showAll, loadOverview, loadChannel, selectedChannel]);
+  }, [showAll, loadOverview, loadChannel, selectedChannel, soloPendientes]);
+
+  const handleTogglePendientes = useCallback(async () => {
+    const next = !soloPendientes;
+    setSoloPendientes(next);
+    // Igual que showAll: el filtro va en el backend antes del top-N.
+    setLoading(true);
+    try {
+      await loadOverview(showAll, next);
+      if (selectedChannel) {
+        await loadChannel(selectedChannel.id, 0, showAll, next);
+      }
+      setError(null);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [soloPendientes, loadOverview, loadChannel, selectedChannel, showAll]);
 
   const applyUpdate = (list: ParsedPick[], updated: ParsedPick) =>
     list.map((p) => (p.id === updated.id ? updated : p));
@@ -437,6 +478,18 @@ export default function ParsedPicksScreen() {
           <View style={[styles.checkbox, showAll && styles.checkboxChecked]} />
           <Text style={styles.toggleLabel}>
             Ver todos (incluye mensajes descartados por el filtro)
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.toggleRow}
+          onPress={handleTogglePendientes}
+        >
+          <View
+            style={[styles.checkbox, soloPendientes && styles.checkboxChecked]}
+          />
+          <Text style={styles.toggleLabel}>
+            Solo pendientes de liquidar
           </Text>
         </TouchableOpacity>
 

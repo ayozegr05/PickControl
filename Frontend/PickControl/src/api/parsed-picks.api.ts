@@ -46,6 +46,9 @@ export type ParsedPicksQuery = {
   perChannel?: number;
   /** Si es true, el backend filtra es_apuesta antes de paginar. */
   soloApuestas?: boolean;
+  /** Vista de revisión manual: solo picks sin liquidar
+   * (acierto NULL, no anulados). Implica soloApuestas. */
+  soloPendientes?: boolean;
   offset?: number;
   limit?: number;
 };
@@ -62,6 +65,9 @@ export async function getParsedPicks(
   }
   if (query.soloApuestas !== undefined) {
     params.push(`solo_apuestas=${query.soloApuestas}`);
+  }
+  if (query.soloPendientes !== undefined) {
+    params.push(`solo_pendientes=${query.soloPendientes}`);
   }
   if (query.offset !== undefined) {
     params.push(`offset=${query.offset}`);

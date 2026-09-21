@@ -638,6 +638,65 @@ class TestApiCombinadas:
         # La apuesta del usuario enlaza con el PADRE, no con la pata.
         assert resp.json()["parsed_pick_id"] == parent.id
 
+    async def test_solo_pendientes_filtra_liquidadas_y_anuladas(
+        self, client, session, auth_headers, crear_canal
+    ):
+        canal = await crear_canal("CanalPendientes")
+        parent = await _seed_combinada(session, canal)
+        raw = await session.get(TelegramRawMessage, parent.raw_message_id)
+        # Un simple pendiente, otro resuelto y otro anulado.
+        session.add(
+            ParsedPick(
+                raw_message_id=raw.id,
+                informante_id=canal.id,
+                informante=canal.nombre,
+                es_apuesta=True,
+                seleccion="Pendiente",
+            )
+        )
+        session.add(
+            ParsedPick(
+                raw_message_id=raw.id,
+                informante_id=canal.id,
+                informante=canal.nombre,
+                es_apuesta=True,
+                seleccion="Resuelto",
+                acierto=True,
+            )
+        )
+        session.add(
+            ParsedPick(
+                raw_message_id=raw.id,
+                informante_id=canal.id,
+                informante=canal.nombre,
+                es_apuesta=True,
+                seleccion="Anulado",
+                anulada=True,
+            )
+        )
+        # Mensaje descartado (no apuesta): nunca sale en pendientes.
+        session.add(
+            ParsedPick(
+                raw_message_id=raw.id,
+                informante_id=canal.id,
+                informante=canal.nombre,
+                es_apuesta=False,
+                seleccion="Descartado",
+            )
+        )
+        await session.commit()
+
+        resp = await client.get(
+            "/api/v1/telegram/parsed-picks",
+            params={"informante_id": canal.id, "solo_pendientes": True},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        selecciones = sorted(p["seleccion"] for p in resp.json())
+        # Solo el simple pendiente y el padre combinada (con patas
+        # anidadas aunque estén sin resolver).
+        assert selecciones == ["A gana + B gana", "Pendiente"]
+
     async def test_informante_devuelve_combinadas_anidadas(
         self, client, session, auth_headers, crear_canal
     ):
