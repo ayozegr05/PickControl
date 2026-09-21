@@ -14,6 +14,12 @@ B) ANULAR — props de "Ipswich - Liverpool": combinada de props de
    jugador importada con `fecha_evento` = fecha de importación
    (sep-2026); el partido real es de ago-2025 — fuera de la ventana de
    verificación y con fecha equivocada, miss garantizado eterno.
+
+Los PADRES combinada (`es_combinada=True` con patas) se excluyen de A/B:
+su `evento` es irrelevante — su estado lo deriva `settle_combinada` de
+las patas (pata anulada = excluida a cuota 1.0, no perdida). Anular el
+padre a mano convertiría en void una combinada cuyas patas activas
+ganaron. Solo un padre SIN patas (huérfano de extracción) entra en A.
 C) RELLENAR `fecha_evento = raw.received_at`: picks reales sin fecha
    (cruce válido en `evento`, o tenis con jugador extraíble de
    `seleccion`). El tipster publica el pick el día del partido, así que
@@ -82,10 +88,26 @@ async def run(apply: bool) -> None:
             .all()
         )
 
+        # Padres combinada que tienen patas: su estado lo deriva
+        # settle_combinada, nunca se anulan directamente por A/B.
+        con_patas = set(
+            (
+                await session.execute(
+                    select(ParsedPick.combinada_id)
+                    .where(ParsedPick.combinada_id.is_not(None))  # type: ignore[union-attr]
+                    .group_by(ParsedPick.combinada_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
         anular: list[tuple[ParsedPick, str]] = []
         rellenar: list[ParsedPick] = []
         for p in pendientes:
             ev = (p.evento or "").strip()
+            if p.es_combinada and p.id in con_patas:
+                continue
             if "ipswich" in ev.lower() and "liverpool" in ev.lower():
                 anular.append((p, "B:fecha-importación"))
             elif not _has_matchup(ev) and not _tennis_salvageable(p):
