@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     # "api-football-v1.p.rapidapi.com".
     api_football_key: str | None = None
     api_football_host: str = "v3.football.api-sports.io"
+    # Baloncesto vía API-Basketball (misma familia api-sports, pero
+    # producto y cuota propios — 100 req/día en el plan free, que cubre
+    # la temporada actual: ACB, Supercopa, Euroliga, NBA...). Una llamada
+    # games?date= trae TODOS los partidos del día. Registro gratuito en
+    # dashboard.api-football.com eligiendo el producto Basketball.
+    api_basketball_key: str | None = None
+    api_basketball_host: str = "v1.basketball.api-sports.io"
     # Tenis vía TheSportsDB (gratis; la key pública "3" vale para uso
     # personal — con Patreon de $2 dan una propia). Cubre ATP/WTA Tour
     # y Grand Slams; Challengers/ITF quedan para el fallback.

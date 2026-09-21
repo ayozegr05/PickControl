@@ -44,6 +44,7 @@ from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
 from app.services.notifications.push import notify_settled_picks
 from app.services.results.allsports_tennis import AllSportsTennisProvider
+from app.services.results.api_basketball import ApiBasketballProvider
 from app.services.results.api_football import ApiFootballProvider
 from app.services.results.api_tennis import ApiTennisProvider, _pair_similar
 from app.services.results.base import (
@@ -229,6 +230,12 @@ _OU_SPLIT_PATTERN = re.compile(r"\b(?:m[aá]s|menos|over|under)\b", re.IGNORECAS
 # (líneas típicas 7.5-12.5), no goles. Sin sujeto explícito no se
 # puede saber, así que se deja pendiente en vez de arriesgar.
 _AMBIGUOUS_LINE_MIN = 5.0
+# En baloncesto los puntos SÍ son el marcador (a diferencia de tenis,
+# donde "juegos"/"puntos" no salen del resultado final). La guarda
+# `_OU_NON_GOALS_PATTERN` atrapa "punto" por tenis; para basket hay que
+# dejar pasar los over/under de puntos a la resolución por marcador,
+# mientras rebotes/asistencias/triples siguen siendo irresolubles.
+_BASKET_POINTS_WORD = re.compile(r"puntos?|points?|pts", re.IGNORECASE)
 
 _DOUBLE_CHANCE_PATTERN = re.compile(
     r"doble\s+oportunidad|double\s*chance|doble\s+resultado", re.IGNORECASE
@@ -1373,6 +1380,15 @@ async def _get_providers() -> list[ResultsProvider]:
                 settings.rapidapi_tennis_key, settings.rapidapi_allsports_host
             )
         )
+    # Baloncesto: API-Basketball (api-sports, cuota propia de 100/día —
+    # no toca footapi7). Va al final: es el único provider de basket y
+    # para picks sin deporte solo se alcanza si los demás no resolvieron.
+    if settings.api_basketball_key:
+        providers.append(
+            ApiBasketballProvider(
+                settings.api_basketball_key, settings.api_basketball_host
+            )
+        )
     return providers
 
 
@@ -1718,7 +1734,18 @@ async def verify_pick(
         )
         if not team_hint:
             return None, False
-        if _OU_NON_GOALS_PATTERN.search(ou_text):
+        if sport == "baloncesto" and not _BASKET_POINTS_WORD.search(ou_text):
+            # Rebotes, asistencias, triples... no salen del marcador y no
+            # hay endpoint de stats de basket: pendiente. Sin esta guarda
+            # se resolverían contra el total de puntos (falso resultado).
+            return None, False
+        non_goals_subjects = _OU_NON_GOALS_PATTERN.findall(ou_text)
+        if non_goals_subjects and not (
+            sport == "baloncesto"
+            and all(
+                _BASKET_POINTS_WORD.fullmatch(subject) for subject in non_goals_subjects
+            )
+        ):
             # Prop de jugador primero ("Ivan Romero - 2+ faltas"): si la
             # selección nombra un jugador hay que resolver contra sus
             # stats, no contra las del equipo — la guarda de tokens del
@@ -1753,9 +1780,14 @@ async def verify_pick(
                     if result != (None, False):
                         return result
             return None, False
-        if pick.linea >= _AMBIGUOUS_LINE_MIN and not _GOALS_PATTERN.search(ou_text):
-            # Línea alta sin la palabra "gol": en fútbol casi seguro son
-            # córners, no goles. Mejor pendiente que mal verificado.
+        if (
+            pick.linea >= _AMBIGUOUS_LINE_MIN
+            and not _GOALS_PATTERN.search(ou_text)
+            and not (sport == "baloncesto" and _BASKET_POINTS_WORD.search(ou_text))
+        ):
+            # Línea alta sin la palabra "gol" (o "puntos" en basket): en
+            # fútbol casi seguro son córners, no goles. Mejor pendiente
+            # que mal verificado.
             return None, False
         match = await _find_match_across_providers(
             pick.fecha_evento, team_hint, providers_for_sport, pick.id
