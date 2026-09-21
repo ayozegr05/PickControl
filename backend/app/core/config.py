@@ -110,6 +110,12 @@ class Settings(BaseSettings):
     odds_snapshot_interval_minutes: float = 30.0
     # Cada cuántas horas se revisan picks pendientes de verificar en segundo plano.
     results_verification_interval_hours: float = 3.0
+    # Cada cuántas horas corre el rescate (OCR pendiente + reproceso de
+    # raws `processed=False`). Consume OpenAI solo si hay pendientes.
+    rescue_interval_hours: float = 6.0
+    # Cada cuántas horas corre el backfill de cuotas históricas
+    # (OddsPapi). Early-exit sin llamadas si no hay backlog pendiente.
+    odds_backfill_interval_hours: float = 24.0
 
 
 @lru_cache

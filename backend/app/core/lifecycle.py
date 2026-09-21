@@ -12,6 +12,8 @@ from fastapi import FastAPI
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.services.maintenance.rescue import run_rescue_cycle
+from app.services.odds.historical_backfill import count_pending_backfill, run
 from app.services.odds.snapshotter import run_odds_snapshot_cycle
 from app.services.results.verifier import verify_pending_picks
 from app.services.telegram.catchup import run_catchup
@@ -74,6 +76,50 @@ async def _run_odds_snapshotter_loop() -> None:
         await asyncio.sleep(interval_seconds)
 
 
+async def _run_rescue_loop() -> None:
+    """Rescate periódico: OCR de fotos pendientes + reproceso de raws.
+
+    Solo consume OpenAI cuando hay trabajo pendiente; en reposo son
+    dos consultas a la BD y nada más.
+    """
+    settings = get_settings()
+    interval_seconds = settings.rescue_interval_hours * 3600
+
+    while True:
+        try:
+            await run_rescue_cycle()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[RESCUE] Error en el ciclo de rescate: %s", exc)
+        await asyncio.sleep(interval_seconds)
+
+
+async def _run_odds_backfill_loop() -> None:
+    """Backfill diario de cuotas históricas (OddsPapi).
+
+    Early-exit: si no hay backlog pendiente no se llama a la API — la
+    tarea es finita y se auto-apaga cuando el histórico esté completo.
+    """
+    from app.db.postgres import AsyncSessionLocal
+
+    settings = get_settings()
+    interval_seconds = settings.odds_backfill_interval_hours * 3600
+
+    while True:
+        try:
+            async with AsyncSessionLocal() as session:
+                pending = await count_pending_backfill(session)
+            if pending:
+                report = await run(apply=True, limit=None)
+                logger.info(
+                    "[ODDS_BACKFILL] Pasada diaria: %s pendientes, %s filas insertadas.",
+                    pending,
+                    report.filas,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[ODDS_BACKFILL] Error en el ciclo de backfill: %s", exc)
+        await asyncio.sleep(interval_seconds)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown de FastAPI: arranca el listener de Telegram como
@@ -114,6 +160,24 @@ async def lifespan(app: FastAPI):
             settings.odds_snapshot_interval_minutes,
         )
 
+    rescue_task: asyncio.Task | None = None
+    if settings.openai_api_key:
+        rescue_task = asyncio.create_task(_run_rescue_loop())
+        logger.info(
+            "[LIFECYCLE] Rescate OCR/reproceso iniciado en segundo plano "
+            "(cada %sh).",
+            settings.rescue_interval_hours,
+        )
+
+    backfill_task: asyncio.Task | None = None
+    if settings.rapidapi_tennis_key:
+        backfill_task = asyncio.create_task(_run_odds_backfill_loop())
+        logger.info(
+            "[LIFECYCLE] Backfill de cuotas históricas iniciado en segundo "
+            "plano (cada %sh).",
+            settings.odds_backfill_interval_hours,
+        )
+
     try:
         yield
     finally:
@@ -146,3 +210,15 @@ async def lifespan(app: FastAPI):
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
             logger.info("[LIFECYCLE] Snapshotter de odds detenido.")
+
+        for task, name in (
+            (rescue_task, "Rescate OCR/reproceso"),
+            (backfill_task, "Backfill de cuotas"),
+        ):
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
+                logger.info("[LIFECYCLE] %s detenido.", name)
