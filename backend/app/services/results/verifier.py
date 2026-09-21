@@ -58,6 +58,7 @@ from app.services.results.base import (
 from app.services.results.footapi_stats import FootApiStatsProvider
 from app.services.results.football_data import FootballDataProvider
 from app.services.results.rapidapi_tennis import RapidApiTennisProvider
+from app.services.results.sofascore_basketball import SofascoreBasketballProvider
 from app.services.results.tennisapi1 import TennisApi1Provider
 
 logger = get_logger("app.results.verifier")
@@ -1387,6 +1388,17 @@ async def _get_providers() -> list[ResultsProvider]:
         providers.append(
             ApiBasketballProvider(
                 settings.api_basketball_key, settings.api_basketball_host
+            )
+        )
+    # Fallback de baloncesto: allsportsapi2 (Sofascore). Sin ventana de
+    # fechas — rescata partidos fuera del ±1 día del plan free de
+    # API-Basketball. Comparte la cuota diaria de allsportsapi2 con
+    # tenis/odds (misma suscripción), pero los picks de basket son tan
+    # raros que el gasto real es despreciable.
+    if settings.rapidapi_tennis_key:
+        providers.append(
+            SofascoreBasketballProvider(
+                settings.rapidapi_tennis_key, settings.rapidapi_allsports_host
             )
         )
     return providers

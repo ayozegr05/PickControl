@@ -137,10 +137,22 @@ def _player_stats_flat(stats: dict) -> dict[str, int]:
 
 
 class FootApiStatsProvider:
-    """Resultados y estadísticas de fútbol vía footapi7 (RapidAPI)."""
+    """Resultados y estadísticas de fútbol vía footapi7 (RapidAPI).
+
+    Los attrs `_SPORT_*` y `_ENTITY_NS` parametrizan la búsqueda para que
+    una subclase pueda reusar toda la lógica con otro deporte/host
+    (p. ej. `SofascoreBasketballProvider` sobre allsportsapi2).
+    """
 
     NAME = "footapi7"
     SUPPORTED_SPORTS = frozenset({"futbol"})
+    _SPORT_SLUG = "football"  # filtro `entity.sport.slug` en /api/search
+    _SPORT_TAG = "futbol"  # etiqueta en las claves de miss
+    _ENTITY_NS: Optional[str] = None  # namespace de caché; None -> NAME
+
+    @property
+    def _entity_ns(self) -> str:
+        return self._ENTITY_NS or self.NAME
 
     def __init__(self, api_key: str, api_host: str) -> None:
         self._api_key = api_key
@@ -202,7 +214,7 @@ class FootApiStatsProvider:
         """
         if team_id in self._events_cache:
             return self._events_cache[team_id]
-        cache_key = f"{self.NAME}|{team_id}"
+        cache_key = f"{self._entity_ns}|{team_id}"
         cached = get_event_list(cache_key)
         if cached is not None and event_list_covers(cached, need_date):
             self._events_cache[team_id] = cached["events"]
@@ -230,7 +242,7 @@ class FootApiStatsProvider:
         best_score = 0.0
         for res in results:
             entity = res.get("entity") or {}
-            if (entity.get("sport") or {}).get("slug") != "football":
+            if (entity.get("sport") or {}).get("slug") != self._SPORT_SLUG:
                 continue
             score = _pair_similar(name, entity.get("name") or "")
             if score > best_score:
@@ -250,7 +262,9 @@ class FootApiStatsProvider:
         if not hint:
             return None
         provisional = miss_is_provisional(date)
-        miss_key = f"{self.NAME}|futbol|{date.strftime('%Y-%m-%d')}|{hint.lower()}"
+        miss_key = (
+            f"{self.NAME}|{self._SPORT_TAG}|{date.strftime('%Y-%m-%d')}|{hint.lower()}"
+        )
         if provisional:
             miss_key += "|prov"
         if is_missed(miss_key, MISSED_TTL_PROVISIONAL if provisional else None):
@@ -261,7 +275,7 @@ class FootApiStatsProvider:
         )
 
         async with httpx.AsyncClient(timeout=15) as client:
-            team_id = get_entity_id(self.NAME, name)
+            team_id = get_entity_id(self._entity_ns, name)
             if team_id is None:
                 results = await self._search(client, name)
                 if results is None:
@@ -270,7 +284,7 @@ class FootApiStatsProvider:
                 if team_id is None:
                     mark_missed(miss_key)
                     return None
-                set_entity_id(self.NAME, name, team_id)
+                set_entity_id(self._entity_ns, name, team_id)
             events = await self._previous_events(client, team_id, date)
             if events is None:
                 return None
@@ -299,6 +313,13 @@ class FootApiStatsProvider:
 
     # --- Interfaz ResultsProvider -----------------------------------------
 
+    def _ht_scores(self, event: dict) -> tuple[Optional[int], Optional[int]]:
+        """Marcador al descanso. En fútbol Sofascore lo da en `period1`."""
+        return (
+            (event.get("homeScore") or {}).get("period1"),
+            (event.get("awayScore") or {}).get("period1"),
+        )
+
     async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:
         """Marcador final del partido (cubre ligas que football-data no
         incluye gratis y fechas fuera de la ventana de API-Football)."""
@@ -311,13 +332,14 @@ class FootApiStatsProvider:
         away_score = (event.get("awayScore") or {}).get("current")
         if home_score is None or away_score is None:
             return None
+        ht_home, ht_away = self._ht_scores(event)
         return MatchResult(
             home_team=(event.get("homeTeam") or {}).get("name") or "",
             away_team=(event.get("awayTeam") or {}).get("name") or "",
             home_score=home_score,
             away_score=away_score,
-            ht_home_score=(event.get("homeScore") or {}).get("period1"),
-            ht_away_score=(event.get("awayScore") or {}).get("period1"),
+            ht_home_score=ht_home,
+            ht_away_score=ht_away,
         )
 
     async def _stats_for_period(
