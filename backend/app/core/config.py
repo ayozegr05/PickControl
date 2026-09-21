@@ -113,6 +113,9 @@ class Settings(BaseSettings):
     # Cada cuántas horas corre el rescate (OCR pendiente + reproceso de
     # raws `processed=False`). Consume OpenAI solo si hay pendientes.
     rescue_interval_hours: float = 6.0
+    # Días máximos que un raw puede estar pendiente de rescate; pasado
+    # ese plazo se da por imposible (la fila queda en BD para auditoría).
+    rescue_max_age_days: float = 30.0
     # Cada cuántas horas corre el backfill de cuotas históricas
     # (OddsPapi). Early-exit sin llamadas si no hay backlog pendiente.
     odds_backfill_interval_hours: float = 24.0

@@ -35,11 +35,13 @@ def _session_cm(session):
     return _cm
 
 
-def _settings_stub(monkeypatch):
+def _settings_stub(monkeypatch, max_age_days: float = 30.0):
     monkeypatch.setattr(
         rescue,
         "get_settings",
-        lambda: SimpleNamespace(openai_api_key="test-key"),
+        lambda: SimpleNamespace(
+            openai_api_key="test-key", rescue_max_age_days=max_age_days
+        ),
     )
 
 
@@ -75,7 +77,12 @@ class TestRetryPendingOcr:
 
         resumen = await rescue.retry_pending_ocr()
 
-        assert resumen == {"pendientes": 1, "hechos": 1, "fallos": 0}
+        assert resumen == {
+            "pendientes": 1,
+            "sin_fichero": 0,
+            "hechos": 1,
+            "fallos": 0,
+        }
         await session.refresh(raw)
         assert raw.extracted_text == "SLIP OCR"
         # Sin pick asociado -> queda para el reproceso.
@@ -109,6 +116,34 @@ class TestRetryPendingOcr:
 
         resumen = await rescue.retry_pending_ocr()
         assert resumen["fallos"] == 1
+
+    async def test_foto_antigua_queda_fuera_de_ventana(
+        self, session, monkeypatch, tmp_path
+    ):
+        media = tmp_path / "foto_vieja.jpg"
+        media.write_bytes(b"fake")
+        raw = await _raw(
+            session,
+            media_path=str(media),
+            received_at=utc_now() - timedelta(days=60),
+        )
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+        ocr = AsyncMock(return_value="X")
+        monkeypatch.setattr(rescue, "extract_text_from_image", ocr)
+
+        resumen = await rescue.retry_pending_ocr()
+
+        assert resumen["pendientes"] == 0
+        ocr.assert_not_called()
+        await session.refresh(raw)
+        assert raw.extracted_text is None
+
+        # Con la ventana desactivada (--max-age-days 0) sí se reintenta.
+        resumen = await rescue.retry_pending_ocr(max_age_days=0)
+        assert resumen["hechos"] == 1
+        await session.refresh(raw)
+        assert raw.extracted_text == "X"
 
 
 class TestReprocessPendingRaws:
@@ -165,6 +200,48 @@ class TestReprocessPendingRaws:
         extract.assert_not_called()
         await session.refresh(raw)
         assert raw.processed is False
+
+    async def test_no_es_pick_cierra_raw(self, session, monkeypatch):
+        """Si el extractor dice "no es pick" el raw se cierra — si no se
+        reenviaría al LLM en cada ciclo para siempre."""
+        raw = await _raw(session, text="mensaje de chat sin pick", processed=False)
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+        monkeypatch.setattr(rescue, "extract_pick", AsyncMock(return_value=None))
+
+        resumen = await rescue.reprocess_pending_raws()
+
+        assert resumen["sin_pick"] == 1
+        assert resumen["procesados"] == 0
+        await session.refresh(raw)
+        assert raw.processed is True
+
+    async def test_raw_antiguo_se_descarta_sin_llm(self, session, monkeypatch):
+        """Fuera de la ventana de rescate: processed=True sin llamar al
+        LLM — la fila queda en BD pero deja de acumularse en la cola."""
+        raw = await _raw(
+            session,
+            text="pick viejo",
+            processed=False,
+            received_at=utc_now() - timedelta(days=60),
+        )
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+        extract = AsyncMock()
+        monkeypatch.setattr(rescue, "extract_pick", extract)
+
+        resumen = await rescue.reprocess_pending_raws()
+
+        assert resumen["antiguos"] == 1
+        assert resumen["pendientes"] == 0
+        extract.assert_not_called()
+        await session.refresh(raw)
+        assert raw.processed is True
+
+        # El descarte es permanente: ni sin ventana vuelve a intentarse.
+        resumen = await rescue.reprocess_pending_raws(max_age_days=0)
+        assert resumen["pendientes"] == 0
+        extract.assert_not_called()
 
 
 class TestBackfillPendingCount:
