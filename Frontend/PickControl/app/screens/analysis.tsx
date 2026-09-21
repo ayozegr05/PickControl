@@ -31,6 +31,7 @@ export default function Analysis() {
   const [apuestasPorDia, setApuestasPorDia] = useState("1");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  const [pendientes, setPendientes] = useState(0);
   const loadingRef = useRef(null);
 
   const router = useRouter();
@@ -73,6 +74,9 @@ export default function Analysis() {
 
       const informantesList = Object.keys(apuestasPorInformante);
       setInformantes(informantesList);
+      setPendientes(
+        picks.filter((pick) => pick.acierto === "Pending").length
+      );
 
       // Convertir a array plano para los cálculos, excluyendo apuestas pendientes
       const allApuestas = Object.values(apuestasPorInformante).flat();
@@ -263,13 +267,28 @@ export default function Analysis() {
           </View>
         ) : informantes.length === 0 ? (
           <View style={styles.errorContainer}>
-            <Text style={styles.emptyText}>
-              Aún no has registrado apuestas
-            </Text>
-            <Text style={styles.emptyHint}>
-              Usa "Yo también la jugué" en un pick de Telegram para comparar
-              tu rentabilidad real con la del tipster.
-            </Text>
+            {pendientes > 0 ? (
+              <>
+                <Text style={styles.emptyText}>
+                  Tienes {pendientes} apuesta{pendientes !== 1 ? "s" : ""}{" "}
+                  pendiente{pendientes !== 1 ? "s" : ""} de liquidación
+                </Text>
+                <Text style={styles.emptyHint}>
+                  Cuando se resuelvan aparecerán aquí tus estadísticas y
+                  proyecciones frente a cada tipster.
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.emptyText}>
+                  Aún no has registrado apuestas
+                </Text>
+                <Text style={styles.emptyHint}>
+                  Usa "Yo también la jugué" en un pick de Telegram para
+                  comparar tu rentabilidad real con la del tipster.
+                </Text>
+              </>
+            )}
           </View>
         ) : (
           <View style={styles.informantesList}>
