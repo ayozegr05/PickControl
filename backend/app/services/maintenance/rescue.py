@@ -198,6 +198,13 @@ async def reprocess_pending_raws(
 
             source_text = (raw.extracted_text or raw.text or "").strip()
             if not source_text:
+                if not raw.media_path:
+                    # Ni texto ni media referenciada: el raw está vacío
+                    # de nacimiento y nunca producirá nada — se cierra ya
+                    # en vez de esperar a que venza la ventana.
+                    raw.processed = True
+                    session.add(raw)
+                    sin_pick += 1
                 continue
 
             try:

@@ -188,6 +188,24 @@ class TestReprocessPendingRaws:
         assert pick.fecha_evento == raw.received_at
 
     async def test_sin_texto_queda_pendiente(self, session, monkeypatch):
+        raw = await _raw(session, text="", processed=False, media_path="media/x.jpg")
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+        extract = AsyncMock()
+        monkeypatch.setattr(rescue, "extract_pick", extract)
+
+        resumen = await rescue.reprocess_pending_raws()
+
+        # Con media referenciada sigue pendiente: el fichero puede
+        # reaparecer y el OCR lo rescataría.
+        assert resumen["procesados"] == 0
+        extract.assert_not_called()
+        await session.refresh(raw)
+        assert raw.processed is False
+
+    async def test_vacio_sin_media_se_cierra_ya(self, session, monkeypatch):
+        """Sin texto y sin media referenciada no hay nada que rescatar:
+        se cierra de inmediato sin esperar a la ventana de antigüedad."""
         raw = await _raw(session, text="", processed=False)
         _settings_stub(monkeypatch)
         monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
@@ -196,10 +214,10 @@ class TestReprocessPendingRaws:
 
         resumen = await rescue.reprocess_pending_raws()
 
-        assert resumen["procesados"] == 0
+        assert resumen["sin_pick"] == 1
         extract.assert_not_called()
         await session.refresh(raw)
-        assert raw.processed is False
+        assert raw.processed is True
 
     async def test_no_es_pick_cierra_raw(self, session, monkeypatch):
         """Si el extractor dice "no es pick" el raw se cierra — si no se
