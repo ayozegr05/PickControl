@@ -18,7 +18,10 @@ from app.schemas.odds import PickOddsRead
 from app.schemas.pick import ParsedPickRead, PickRead
 from app.services.odds.compare import compare_pick
 from app.services.pick_service import calcular_ganancia, to_naive_utc
-from app.services.results.verifier import settle_combinada
+from app.services.results.verifier import (
+    cascade_user_settlements,
+    settle_combinada,
+)
 
 router = APIRouter(tags=["telegram"])
 
@@ -207,6 +210,10 @@ async def corregir_acierto_pick(
         if parent is not None:
             await settle_combinada(session, parent)
 
+    # Cascada a apuestas de usuario enlazadas ("Yo también la jugué"):
+    # si alguien jugó este pick, su apuesta hereda la corrección ahora.
+    await cascade_user_settlements(session)
+
     await session.commit()
     await session.refresh(pick)
     return pick
@@ -294,7 +301,14 @@ async def jugar_pick(
         apuesta=parsed.seleccion or parsed.apuesta or "(pick Telegram)",
         tipo_de_apuesta=(parsed.mercado or "Otro")[:50],
         casa=(payload.casa or parsed.casa or "Otra")[:100],
-        acierto=Acierto.PENDING,
+        # Si el pick del canal ya estaba liquidado al registrarse, la
+        # apuesta hereda el resultado (anulada queda Pending: el enum
+        # del usuario no tiene equivalente a void).
+        acierto=(
+            Acierto.TRUE
+            if parsed.acierto is True
+            else Acierto.FALSE if parsed.acierto is False else Acierto.PENDING
+        ),
         cantidad_apostada=payload.cantidad_apostada,
         cuota=payload.cuota if payload.cuota is not None else (parsed.cuota or 1.0),
         fecha=to_naive_utc(parsed.fecha_evento) if parsed.fecha_evento else utc_now(),
