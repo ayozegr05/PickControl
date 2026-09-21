@@ -54,6 +54,7 @@ async def listar_picks_extraidos(
     informante_id: int | None = Query(default=None),
     per_channel: int | None = Query(default=None, ge=1, le=50),
     solo_apuestas: bool = Query(default=False),
+    solo_pendientes: bool = Query(default=False),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
@@ -73,12 +74,20 @@ async def listar_picks_extraidos(
     ``solo_apuestas`` filtra ``es_apuesta=True`` ANTES de aplicar el
     top-N o la paginación, para que el resumen no lo ocupen mensajes
     descartados recientes (resultados, promociones, etc.).
+
+    ``solo_pendientes`` (implica ``solo_apuestas``) filtra además
+    ``acierto IS NULL AND anulada=False``: la vista de revisión manual
+    solo muestra lo que queda por liquidar. Una combinada padre
+    pendiente aparece aunque tenga patas ya resueltas (están anidadas).
     """
     # Las patas de combinadas nunca salen como filas sueltas: solo
     # anidadas bajo su padre (`patas`), como componentes que son.
     filters = [ParsedPick.combinada_id.is_(None)]
-    if solo_apuestas:
+    if solo_apuestas or solo_pendientes:
         filters.append(ParsedPick.es_apuesta.is_(True))
+    if solo_pendientes:
+        filters.append(ParsedPick.acierto.is_(None))
+        filters.append(ParsedPick.anulada.is_(False))
     if informante_id is not None:
         filters.append(ParsedPick.informante_id == informante_id)
 
