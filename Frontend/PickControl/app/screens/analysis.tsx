@@ -30,7 +30,7 @@ export default function Analysis() {
   const [inversionDiaria, setInversionDiaria] = useState("10");
   const [apuestasPorDia, setApuestasPorDia] = useState("1");
   const [loading, setLoading] = useState(true);
-  const [dataLoaded, setDataLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const loadingRef = useRef(null);
 
   const router = useRouter();
@@ -41,10 +41,9 @@ export default function Analysis() {
   }, []);
 
   const fetchData = async () => {
-    if (dataLoaded) return;
-
     try {
       setLoading(true);
+      setLoadError(false);
       const picks = await listPicks();
       console.log("Datos obtenidos:", picks);
 
@@ -83,8 +82,8 @@ export default function Analysis() {
       console.error("Error al obtener las apuestas:", error);
       setApuestas([]);
       setInformantes([]);
+      setLoadError(true);
     } finally {
-      setDataLoaded(true);
       setTimeout(() => setLoading(false), 500); // Pequeño delay para suavizar la transición
     }
   };
@@ -253,7 +252,7 @@ export default function Analysis() {
               loop
             />
           </View>
-        ) : informantes.length === 0 ? (
+        ) : loadError ? (
           <View style={styles.errorContainer}>
             <Text style={styles.errorText}>
               No se pudieron cargar los datos
@@ -261,6 +260,16 @@ export default function Analysis() {
             <TouchableOpacity style={styles.retryButton} onPress={fetchData}>
               <Text style={styles.retryButtonText}>Reintentar</Text>
             </TouchableOpacity>
+          </View>
+        ) : informantes.length === 0 ? (
+          <View style={styles.errorContainer}>
+            <Text style={styles.emptyText}>
+              Aún no has registrado apuestas
+            </Text>
+            <Text style={styles.emptyHint}>
+              Usa "Yo también la jugué" en un pick de Telegram para comparar
+              tu rentabilidad real con la del tipster.
+            </Text>
           </View>
         ) : (
           <View style={styles.informantesList}>
@@ -544,5 +553,17 @@ const styles = StyleSheet.create({
   retryButtonText: {
     color: "#FFFFFF",
     fontSize: 14,
+  },
+  emptyText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  emptyHint: {
+    color: "#888888",
+    fontSize: 13,
+    textAlign: "center",
+    maxWidth: 300,
   },
 });
