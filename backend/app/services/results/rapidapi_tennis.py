@@ -24,7 +24,7 @@ del mercado "ganador".
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote
 
@@ -41,6 +41,11 @@ from app.services.results.base import (
     mark_rate_limited,
     miss_is_provisional,
     rate_limit_from,
+)
+from app.services.results.response_cache import (
+    event_list_covers,
+    get_event_list,
+    set_event_list,
 )
 
 logger = get_logger("app.results.rapidapi_tennis")
@@ -123,14 +128,29 @@ class RapidApiTennisProvider:
         self._matches_cache: dict[str, list] = {}
 
     async def _fetch_matches(
-        self, client: httpx.AsyncClient, player_name: str, year: int
+        self,
+        client: httpx.AsyncClient,
+        player_name: str,
+        year: int,
+        pick_date: datetime,
     ) -> Optional[list]:
         """Historial del jugador, [] si no tiene datos y None si la
         llamada falló (error transitorio: el caller NO debe marcar
-        `missed`, porque la ausencia no es evidencia real)."""
+        `missed`, porque la ausencia no es evidencia real).
+
+        Persiste en `provider_cache.json`: un año ya cerrado es inmutable
+        (incluso si la lista salió vacía); el año en curso se reutiliza
+        solo si cubre la fecha del pick (`event_list_covers`).
+        """
         cache_key = f"{player_name.strip().lower()}:{year}"
         if cache_key in self._matches_cache:
             return self._matches_cache[cache_key]
+        persist_key = f"{_PROVIDER_NAME}|{cache_key}"
+        past_year = year < datetime.now(timezone.utc).year
+        cached = get_event_list(persist_key)
+        if cached is not None and (past_year or event_list_covers(cached, pick_date)):
+            self._matches_cache[cache_key] = cached["events"]
+            return cached["events"]
         try:
             response = await client.get(
                 f"https://{self._api_host}/tennis/v2/profile/"
@@ -162,6 +182,10 @@ class RapidApiTennisProvider:
         # interesan ambos (el matching por parejas filtra después).
         matches = (data.get("singles") or []) + (data.get("doubles") or [])
         self._matches_cache[cache_key] = matches
+        # Año cerrado -> inmutable (se guarda aunque esté vacío); año en
+        # curso -> solo se fija una lista con datos (puede crecer).
+        if past_year or matches:
+            set_event_list(persist_key, matches)
         return matches
 
     async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:
@@ -192,7 +216,7 @@ class RapidApiTennisProvider:
         )
 
         async with httpx.AsyncClient(timeout=15) as client:
-            matches = await self._fetch_matches(client, lookup_name, date.year)
+            matches = await self._fetch_matches(client, lookup_name, date.year, date)
             if matches is None:
                 return None  # error de API: no se marca missed
             for match in matches:

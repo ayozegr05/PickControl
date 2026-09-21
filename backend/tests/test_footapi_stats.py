@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import pytest
 
 import app.services.results.footapi_stats as footapi
+import app.services.results.response_cache as rc
 from app.models.parsed_pick import ParsedPick
 from app.services.results.footapi_stats import FootApiStatsProvider
 from app.services.results.verifier import verify_pick
@@ -386,3 +387,58 @@ class TestFindMatchPlayers:
         acierto, anulada = await verify_pick(pick, [provider])
         # Budimir: 2 tiros a puerta > 1.5 -> acierto.
         assert (acierto, anulada) == (True, False)
+
+
+class TestPersistentCache:
+    """La caché en disco (provider_cache.json) evita repetir llamadas
+    de navegación entre pasadas del verificador."""
+
+    async def test_tras_resolver_se_persisten_id_y_eventos(self, provider):
+        await provider.find_match(datetime(2026, 9, 15, 18, 0), "Elche - Real Madrid")
+        assert rc.get_entity_id("footapi7", "elche") == _TEAM_ID
+        entry = rc.get_event_list(f"footapi7|{_TEAM_ID}")
+        assert entry is not None
+        assert entry["events"] == _PREVIOUS["events"]
+
+    async def test_con_cache_no_hay_llamadas_http(self, monkeypatch):
+        # Pre-sembrado: id del equipo + su lista de partidos.
+        rc.set_entity_id("footapi7", "elche", _TEAM_ID)
+        rc.set_event_list(f"footapi7|{_TEAM_ID}", _PREVIOUS["events"])
+
+        prov = FootApiStatsProvider("k", "h")
+
+        async def boom(client, path):
+            raise AssertionError(f"llamada HTTP inesperada: {path}")
+
+        monkeypatch.setattr(prov, "_get_json", boom)
+        monkeypatch.setattr(footapi, "is_rate_limited", lambda name: False)
+        monkeypatch.setattr(footapi, "is_missed", lambda key, ttl=None: False)
+        monkeypatch.setattr(footapi, "mark_missed", lambda key: None)
+
+        match = await prov.find_match(
+            datetime(2026, 9, 15, 18, 0), "Elche - Real Madrid"
+        )
+        assert match is not None
+        assert match.home_score == 2
+        assert match.away_score == 3
+
+    async def test_pick_posterior_a_la_captura_refetchea(self, provider, monkeypatch):
+        # Lista cacheada con el evento del 15-sep; el pick es de hoy:
+        # pudo jugarse tras la captura -> se vuelve a llamar a la API.
+        rc.set_entity_id("footapi7", "elche", _TEAM_ID)
+        rc.set_event_list(f"footapi7|{_TEAM_ID}", _PREVIOUS["events"])
+
+        calls: list[str] = []
+
+        async def spy(client, path):
+            calls.append(path)
+            return {"events": []}
+
+        monkeypatch.setattr(provider, "_get_json", spy)
+        await provider.find_match(
+            datetime.now(timezone.utc).replace(tzinfo=None), "Elche - Real Madrid"
+        )
+        # /search no se llama (id cacheado) pero matches/previous sí.
+        assert calls
+        assert all("search" not in p for p in calls)
+        assert any("matches/previous" in p for p in calls)
