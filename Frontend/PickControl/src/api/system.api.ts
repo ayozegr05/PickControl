@@ -8,5 +8,5 @@ export interface ProvidersStatus {
 }
 
 export function getProvidersStatus(): Promise<ProvidersStatus> {
-  return apiRequest<ProvidersStatus>("/system/providers");
+  return apiRequest<ProvidersStatus>("/system/providers", { auth: true });
 }
