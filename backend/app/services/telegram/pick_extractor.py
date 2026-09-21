@@ -709,11 +709,43 @@ def _strip_trailing_competition(seleccion: Optional[str]) -> Optional[str]:
     return seleccion
 
 
+# Bordes donde cortar una `seleccion` que llegó con prosa: la etiqueta
+# del pick suele ir primero y el análisis detrás ("Isak marca. Lleva
+# 12 goles en..."). Solo finales de frase fuertes — ":" y " - " no son
+# bordes: aparecen dentro de etiquetas legítimas ("Isak: Marca gol",
+# "Madrid - Barcelona").
+_PROSE_BOUNDARY = re.compile(r"[.;!?\n\r]|—")
+
+
+def _trim_prose_seleccion(seleccion: Optional[str]) -> Optional[str]:
+    """Recorta una `seleccion` que supera la longitud de etiqueta: el
+    LLM volcó la frase del análisis en vez de solo el pick. Se corta en
+    el primer borde de frase; si no hay, en la última palabra completa
+    dentro del límite. Las combinadas ("A + B + C") son largas a
+    propósito y nunca pasan por aquí (no llegan a este punto con patas).
+    """
+    if not seleccion or len(seleccion) <= _SELECCION_MAX_LEN:
+        return seleccion
+    boundary = _PROSE_BOUNDARY.search(seleccion)
+    if boundary and boundary.start() >= 10:
+        return seleccion[: boundary.start()].strip()
+    cut = seleccion[:_SELECCION_MAX_LEN]
+    last_space = cut.rfind(" ")
+    return (cut[:last_space] if last_space > 40 else cut).strip()
+
+
 def _normalize_pick(pick: ExtractedPick, text: str) -> ExtractedPick:
     """Limpieza final común a reglas y LLM: quita markdown/emojis de los
     campos de texto e infiere `deporte` de las señales del mensaje si el
     extractor no lo rellenó (las pistas deportivas suelen estar en la
-    cabecera — "CHALL RENNES 🎾" — no en la selección)."""
+    cabecera — "CHALL RENNES 🎾" — no en la selección). Si el LLM volcó
+    prosa del análisis en `seleccion` se recorta a la etiqueta del pick
+    (los padres de combinada llevan el join de patas, largo legítimo)."""
+    # El recorte de prosa va ANTES de la limpieza: `_clean_text_field`
+    # colapsa los saltos de línea y con ellos se perderían los bordes
+    # de frase que separan la etiqueta del pick del análisis.
+    if not pick.patas:
+        pick.seleccion = _trim_prose_seleccion(pick.seleccion)
     pick.seleccion = _strip_trailing_competition(_clean_text_field(pick.seleccion))
     pick.evento = _clean_text_field(pick.evento)
     if pick.es_apuesta and not pick.deporte:
@@ -841,7 +873,7 @@ Reglas:
   * Anuncios o promociones de casas de apuestas: bonos de bienvenida, supercuotas ("Suvidón", "supercuota", "multiplica tus ganancias"), "solo nuevos usuarios", "T&C", "créditos de apuesta", "regístrate".
   * Boletos ya liquidados reposteados como prueba: sello "GANADOR"/"GANADA" o "Ganancias <importe>" SIN la palabra "potenciales" (en un slip abierto siempre pone "Ganancias potenciales").
   Una apuesta abierta real es una recomendación de algo que AÚN no se ha jugado.
-- "seleccion" es lo recomendado (ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5"). Si es una combinada/"crear apuesta" (varias selecciones en un mismo boleto), únelas con " + " (ej. "Más de 1 gol + Más de 2 tarjetas").
+- "seleccion" es SOLO la etiqueta corta del pick (máx ~10 palabras, ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5", "Menos de 3,5 goles"): nunca la frase del análisis ni la justificación — eso va en "explicacion". Si es una combinada/"crear apuesta" (varias selecciones en un mismo boleto), únelas con " + " (ej. "Más de 1 gol + Más de 2 tarjetas").
 - "patas": SOLO si es una combinada/"crear apuesta"/acumulador (varias selecciones en un mismo boleto): un array con UN objeto por selección del boleto, cada uno con la misma estructura {"seleccion", "evento", "mercado", "linea", "deporte", "fecha_evento", "cuota"} y las mismas reglas de formato ("cuota" por pata solo si aparece explícita; si no, null). En una combinada cada pata puede ser de un partido distinto (rellena su "evento" propio) o del mismo partido (bet-builder: repite el mismo "evento" en todas). Si NO es combinada, "patas" = null. Si solo puedes identificar UNA selección, NO es combinada: "patas" = null y trátala como pick simple.
 - "evento" es el enfrentamiento concreto (ej. "Sevilla - Barcelona", "Zizou Bergs vs Jurij Rodionov"). Si el texto muestra "EquipoA - EquipoB" o "EquipoA vs EquipoB", usa ese formato completo con ambos — nunca solo uno. Si los dos participantes aparecen sueltos en el texto sin "vs" (p. ej. el rival solo se menciona en el análisis), forma el evento con ambos nombres ("Bergs vs Rodionov"). Si SOLO aparece la competición ("Copa Davis", "LaLiga") sin los dos participantes, usa la competición tal cual (sirve de pista al verificador en tenis). OJO con el OCR de boletos EN VIVO (bet365): el cruce aparece en su propia línea como "EquipoA v EquipoB" o "EquipoA 0 0 EquipoB" (el "0 0" es el marcador en directo, no parte del nombre) — usa ese cruce como "evento", NUNCA la cabecera de liga de arriba ("Italia - Serie A" no es un partido).
 - "mercado" es el tipo de apuesta: usa siempre una de estas etiquetas si aplica: "ganador", "hándicap asiático", "over/under" (o "over/under goles", "over/under juegos" según el deporte). Si es una combinada/"crear apuesta" con varias selecciones, usa "combinada". Si no encaja en ninguna, describe brevemente el mercado.

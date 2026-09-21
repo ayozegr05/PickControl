@@ -60,7 +60,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 | 2 | Fútbol: primera parte/descanso | Hecho — `MatchResult.ht_*` en los 3 providers de fútbol + stats 1ST en footapi7; el verifier reusa los resolutores con `_ht_view` | Medio (reusa providers) |
 | 3 | Fútbol: partidos parados (SUSP/ABD/INT) | Manual a propósito | — |
 | 4 | Cuota tipster vs cuota real de mercado | Hecho y backend probado en vivo (endpoints + snapshots reales OK) — falta solo revisar la UI en móvil (ver §5) | Alto, ya implementado con API gratuita |
-| 5 | Baloncesto | Aparcado | Medio |
+| 5 | Baloncesto | Hecho — API-Basketball (api-sports, ±1d) + fallback allsportsapi2/Sofascore para partidos antiguos | Medio |
 | 6 | Álbumes Telegram | Implementado — falta probar con álbum real | Trivial |
 | 7 | Pantalla de análisis global | Hecho | — |
 | 8 | "Yo también la jugué" | Hecho | — |
@@ -71,9 +71,12 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 | 13 | Backups programados diarios | Pendiente (va con el deploy) | Trivial |
 | 14 | Tests del pipeline Telegram | Hecho | — |
 | 15 | Limpieza de usuarios (test@a.com) | Pendiente | Trivial |
+| 16 | Alertas de cuota a admins + panel "Sistema · providers" | Hecho — push admin-only al pasar a rate_limited (dedup 1/día) + `GET /system/providers` (403 no-admin) + panel en parsed-picks solo `isAdmin` | Bajo |
+| 17 | Automatización de rescate (OCR + reproceso + backfill) | Hecho — loops en lifecycle cada 6h/24h; caducidad `rescue_max_age_days=30` para que la cola converja a cero; scripts quedan como wrappers manuales | Medio |
 
 Aparcados fuera de la lista: verificación live/en juego, torneos sin
-cobertura de proveedor, hándicap sin sujeto en zona ambigua |línea| 2-3.
+cobertura de proveedor, hándicap sin sujeto en zona ambigua |línea| 2-3,
+dobles de tenis con apellido corto (mini-fix solo si aparece un caso real).
 
 ### Bugs detectados en pruebas reales (sept-2026)
 
@@ -557,9 +560,11 @@ Pendiente:
       `seleccion`/`apuesta` y el INSERT en `parsed_picks` reventaba por
       varchar(255/500), haciendo rollback del raw entero y reintentos
       infinitos del catch-up. `processor._fit` ahora trunca cada campo
-      a su límite real de columna. PENDIENTE de calidad: el LLM sigue
-      metiendo el análisis largo en `seleccion` (no revienta, pero el
-      dato es feo) — revisar prompt/normalización del extractor.
+      a su límite real de columna. Resuelto también el dato feo (2026-09-21):
+      el prompt pide etiqueta corta (el análisis va en `explicacion`)
+      y `_trim_prose_seleccion` en `_normalize_pick` corta la prosa en
+      el primer borde de frase — solo a picks simples (el "A + B + C"
+      de una combinada es largo legítimo).
 - [~] **Backfill histórico** (`scripts/backfill_historical_odds.py` +
       `services/odds/oddspapi.py`, dry-run validado 2026-09-20):
       OddsPapi (`bet36528` en RapidAPI, BASIC $0) devuelve la CURVA
