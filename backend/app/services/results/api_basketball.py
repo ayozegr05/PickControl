@@ -20,6 +20,7 @@ Soporta dos formas de acceso, según cómo te hayas registrado:
 
 from __future__ import annotations
 
+from datetime import date as date_type
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -57,6 +58,19 @@ _VOIDED_STATUS_NAMES = {"POST": "postponed", "CANC": "cancelled"}
 # de un día están en uno de ellos, la lista del día es inmutable y se
 # puede persistir en provider_cache.json sin riesgo de quedar vieja.
 _TERMINAL_STATUS = _FINISHED_STATUS | _VOIDED_STATUSES
+
+# El plan gratis solo sirve fechas dentro de [ayer, mañana]
+# ("Free plans do not have access to this date"), igual que
+# API-Football. Pedir fuera de esa ventana quema cuota para nada:
+# se salta sin llamar. El fallback para partidos más antiguos es
+# allsportsapi2/footapi7 (mismo backend Sofascore), que no tiene
+# ventana — pero solo si el usuario decide añadirlos para basket.
+_FREE_DATE_RADIUS = 1
+
+
+def _within_free_window(day: date_type) -> bool:
+    """El plan gratis solo sirve fechas en [ayer, mañana] respecto a hoy."""
+    return abs((day - date_type.today()).days) <= _FREE_DATE_RADIUS
 
 
 class ApiBasketballProvider:
@@ -152,7 +166,12 @@ class ApiBasketballProvider:
 
         async with httpx.AsyncClient(timeout=20) as client:
             for offset in _DATE_OFFSETS:
-                date_str = (date + timedelta(days=offset)).strftime("%Y-%m-%d")
+                day = (date + timedelta(days=offset)).date()
+                if not _within_free_window(day):
+                    # Fuera de la ventana del plan gratis: la API
+                    # devolvería errors.plan — llamada desperdiciada.
+                    continue
+                date_str = day.strftime("%Y-%m-%d")
                 games = await self._fetch_games(client, date_str)
 
                 for game in games:

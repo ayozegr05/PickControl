@@ -47,6 +47,16 @@ _SUPERCOPA_GAME = {
 }
 
 
+class _FakeDate(api_basketball.date_type):
+    """El plan free solo sirve fechas en [ayer, mañana]: fijamos "hoy"
+    en 2026-09-21 para que _GAME_DATE (20-sep) quede siempre dentro de
+    la ventana sin importar cuándo corra el test."""
+
+    @classmethod
+    def today(cls):
+        return cls(2026, 9, 21)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_state(monkeypatch, tmp_path):
     """Estado de cuota/misses y la caché de respuestas se persisten en
@@ -55,6 +65,7 @@ def _isolate_state(monkeypatch, tmp_path):
     monkeypatch.setattr(results_base, "_STATE_FILE", tmp_path / "provider_state.json")
     monkeypatch.setattr(rc, "_CACHE", None)
     monkeypatch.setattr(rc, "_CACHE_FILE", tmp_path / "provider_cache.json")
+    monkeypatch.setattr(api_basketball, "date_type", _FakeDate)
 
 
 class _FakeResponse:
