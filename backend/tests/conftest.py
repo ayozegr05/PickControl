@@ -14,6 +14,7 @@ os.environ.setdefault("JWT_SECRET", "test-secret-key-solo-para-pytest")
 # Desactiva el rate limiting durante los tests.
 os.environ.setdefault("NODE_ENV", "test")
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -21,9 +22,17 @@ from sqlalchemy.orm import sessionmaker
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+import app.services.results.response_cache as response_cache
 from app.db.postgres import get_session
 from app.main import app
 from app.models.informante import Informante
+
+
+@pytest.fixture(autouse=True)
+def _isolated_provider_cache(tmp_path, monkeypatch):
+    """Los tests nunca leen ni escriben el `provider_cache.json` real."""
+    monkeypatch.setattr(response_cache, "_CACHE", {})
+    monkeypatch.setattr(response_cache, "_CACHE_FILE", tmp_path / "provider_cache.json")
 
 
 @pytest_asyncio.fixture

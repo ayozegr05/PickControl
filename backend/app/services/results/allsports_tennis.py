@@ -52,6 +52,13 @@ from app.services.results.base import (
     miss_is_provisional,
     rate_limit_from,
 )
+from app.services.results.response_cache import (
+    event_list_covers,
+    get_entity_id,
+    get_event_list,
+    set_entity_id,
+    set_event_list,
+)
 from app.services.results.tennisapi1 import (
     _MIN_PLAYER_SIMILARITY,
     _parse_event,
@@ -196,12 +203,22 @@ class AllSportsTennisProvider:
         return results
 
     async def _previous_events(
-        self, client: httpx.AsyncClient, team_id: int
+        self, client: httpx.AsyncClient, team_id: int, need_date: datetime
     ) -> Optional[list]:
         """Historial de partidos del jugador/pareja paginado; None si
-        alguna llamada falló (error transitorio -> no se marca missed)."""
+        alguna llamada falló (error transitorio -> no se marca missed).
+
+        Reutiliza la lista persistida en `provider_cache.json` cuando
+        cubre `need_date` (ver `event_list_covers`); si el partido pudo
+        jugarse tras la captura se refetchea y se sobrescribe.
+        """
         if team_id in self._events_cache:
             return self._events_cache[team_id]
+        cache_key = f"{self.NAME}|{team_id}"
+        cached = get_event_list(cache_key)
+        if cached is not None and event_list_covers(cached, need_date):
+            self._events_cache[team_id] = cached["events"]
+            return cached["events"]
         events: list = []
         for page in range(_MAX_PAGES):
             data = await self._get_json(
@@ -215,6 +232,8 @@ class AllSportsTennisProvider:
             if len(batch) < 30:  # última página
                 break
         self._events_cache[team_id] = events
+        if events:
+            set_event_list(cache_key, events)
         return events
 
     # --- Interfaz ResultsProvider -----------------------------------------
@@ -251,15 +270,19 @@ class AllSportsTennisProvider:
                 if is_rate_limited(_PROVIDER_NAME):
                     return None
                 name = _searchable_name(side)
-                results = await self._search(client, name)
-                if results is None:
-                    saw_error = True
-                    continue
-                entity_id = _best_entity_id(side, results)
+                entity_id = get_entity_id(self.NAME, name)
+                if entity_id is None:
+                    results = await self._search(client, name)
+                    if results is None:
+                        saw_error = True
+                        continue
+                    entity_id = _best_entity_id(side, results)
+                    if entity_id is not None:
+                        set_entity_id(self.NAME, name, entity_id)
                 if entity_id is None or entity_id in seen_ids:
                     continue
                 seen_ids.add(entity_id)
-                events = await self._previous_events(client, entity_id)
+                events = await self._previous_events(client, entity_id, date)
                 if events is None:
                     saw_error = True
                     continue

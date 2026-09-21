@@ -62,6 +62,13 @@ from app.services.results.base import (
     miss_is_provisional,
     rate_limit_from,
 )
+from app.services.results.response_cache import (
+    event_list_covers,
+    get_entity_id,
+    get_event_list,
+    set_entity_id,
+    set_event_list,
+)
 
 logger = get_logger("app.results.tennisapi1")
 
@@ -203,6 +210,15 @@ class TennisApi1Provider:
         cache_key = (category_id, day.strftime("%Y-%m-%d"))
         if cache_key in self._events_cache:
             return self._events_cache[cache_key]
+        # Los eventos de un día ya terminado son inmutables: se persisten
+        # en provider_cache.json y se reutilizan entre pasadas.
+        past_day = day.date() < datetime.now(timezone.utc).date()
+        persist_key = f"{_PROVIDER_NAME}|cat|{category_id}|{day.strftime('%Y-%m-%d')}"
+        if past_day:
+            cached = get_event_list(persist_key)
+            if cached is not None:
+                self._events_cache[cache_key] = cached["events"]
+                return cached["events"]
         url = (
             f"https://{self._api_host}/api/tennis/category/{category_id}"
             f"/events/{day.day}/{day.month}/{day.year}"
@@ -227,6 +243,8 @@ class TennisApi1Provider:
         # Los errores también se cachean dentro de la instancia: un
         # fallo transitorio no debe reintentarse con cada pick del ciclo.
         self._events_cache[cache_key] = events
+        if past_day and events:
+            set_event_list(persist_key, events)
         return events
 
     async def _fetch_search(
@@ -257,11 +275,23 @@ class TennisApi1Provider:
         return results
 
     async def _fetch_near(
-        self, client: httpx.AsyncClient, player_id: int
+        self, client: httpx.AsyncClient, player_id: int, pick_date: datetime
     ) -> Optional[list]:
-        """`previousEvent` + `nextEvent` del jugador; None si falla."""
+        """`previousEvent` + `nextEvent` del jugador; None si falla.
+
+        El `previousEvent` (último jugado) se persiste en disco: si cubre
+        la fecha del pick se reutiliza sin llamar. `nextEvent` NO se
+        persiste — es un partido futuro cuyo startTimestamp volvería la
+        lista "fresca" eternamente.
+        """
         if player_id in self._near_cache:
             return self._near_cache[player_id]
+        persist_key = f"{_PROVIDER_NAME}|near|{player_id}"
+        cached = get_event_list(persist_key)
+        if cached is not None and event_list_covers(cached, pick_date):
+            self._near_cache[player_id] = cached["events"]
+            return cached["events"]
+        prev_event: Optional[dict] = None
         try:
             response = await client.get(
                 f"https://{self._api_host}/api/tennis/team/{player_id}" "/events/near",
@@ -272,8 +302,9 @@ class TennisApi1Provider:
             )
             response.raise_for_status()
             data = response.json()
+            prev_event = data.get("previousEvent")
             events: Optional[list] = [
-                ev for ev in (data.get("previousEvent"), data.get("nextEvent")) if ev
+                ev for ev in (prev_event, data.get("nextEvent")) if ev
             ]
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
@@ -285,6 +316,8 @@ class TennisApi1Provider:
                 )
             events = None
         self._near_cache[player_id] = events
+        if prev_event:
+            set_event_list(persist_key, [prev_event])
         return events
 
     async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:
@@ -315,12 +348,16 @@ class TennisApi1Provider:
             #    incluidos nombres parciales ("chidek" -> "Chidekh") — y
             #    events/near trae su partido anterior y siguiente.
             name = _searchable_name(team_hint)
-            search = await self._fetch_search(client, name)
-            if search is None:
-                return None  # error de API: no se marca missed
-            player_id = _best_player_id(name, search)
+            player_id = get_entity_id(_PROVIDER_NAME, name)
+            if player_id is None:
+                search = await self._fetch_search(client, name)
+                if search is None:
+                    return None  # error de API: no se marca missed
+                player_id = _best_player_id(name, search)
+                if player_id is not None:
+                    set_entity_id(_PROVIDER_NAME, name, player_id)
             if player_id is not None:
-                near = await self._fetch_near(client, player_id)
+                near = await self._fetch_near(client, player_id, date)
                 if near is None:
                     return None
                 for event in near:

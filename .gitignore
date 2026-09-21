@@ -43,6 +43,8 @@ venv/
 media/
 # Estado persistente de cuotas/fallos de las APIs de resultados
 provider_state.json
+# Caché persistente de respuestas (ids de entidad, listas de eventos)
+provider_cache.json
 
 # ============================
 # Backend: bases de datos locales y logs de desarrollo

@@ -56,6 +56,13 @@ from app.services.results.base import (
     miss_is_provisional,
     rate_limit_from,
 )
+from app.services.results.response_cache import (
+    event_list_covers,
+    get_entity_id,
+    get_event_list,
+    set_entity_id,
+    set_event_list,
+)
 
 logger = get_logger("app.results.footapi")
 
@@ -183,12 +190,23 @@ class FootApiStatsProvider:
         return results
 
     async def _previous_events(
-        self, client: httpx.AsyncClient, team_id: int
+        self, client: httpx.AsyncClient, team_id: int, need_date: datetime
     ) -> Optional[list]:
         """Partidos ya jugados del equipo (todas las páginas revisadas);
-        None si alguna llamada falló."""
+        None si alguna llamada falló.
+
+        La lista se persiste en `provider_cache.json`: si cubre la fecha
+        del pick (`event_list_covers`) se reutiliza sin llamar a la API;
+        si el partido pudo jugarse tras la captura se refetchea y se
+        sobrescribe (el fetch nuevo siempre incluye el historial viejo).
+        """
         if team_id in self._events_cache:
             return self._events_cache[team_id]
+        cache_key = f"{self.NAME}|{team_id}"
+        cached = get_event_list(cache_key)
+        if cached is not None and event_list_covers(cached, need_date):
+            self._events_cache[team_id] = cached["events"]
+            return cached["events"]
         events: list = []
         for page in range(_MAX_PAGES):
             data = await self._get_json(
@@ -202,6 +220,8 @@ class FootApiStatsProvider:
             if len(batch) < 30:  # última página
                 break
         self._events_cache[team_id] = events
+        if events:
+            set_event_list(cache_key, events)
         return events
 
     def _team_id(self, name: str, results: list) -> Optional[int]:
@@ -241,14 +261,17 @@ class FootApiStatsProvider:
         )
 
         async with httpx.AsyncClient(timeout=15) as client:
-            results = await self._search(client, name)
-            if results is None:
-                return None  # error de API: no se marca missed
-            team_id = self._team_id(name, results)
+            team_id = get_entity_id(self.NAME, name)
             if team_id is None:
-                mark_missed(miss_key)
-                return None
-            events = await self._previous_events(client, team_id)
+                results = await self._search(client, name)
+                if results is None:
+                    return None  # error de API: no se marca missed
+                team_id = self._team_id(name, results)
+                if team_id is None:
+                    mark_missed(miss_key)
+                    return None
+                set_entity_id(self.NAME, name, team_id)
+            events = await self._previous_events(client, team_id, date)
             if events is None:
                 return None
 
