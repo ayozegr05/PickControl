@@ -40,7 +40,8 @@
       "expo-font",
       "expo-status-bar",
       "expo-web-browser",
-      "expo-video"
+      "expo-video",
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true
