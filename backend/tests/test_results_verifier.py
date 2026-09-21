@@ -12,6 +12,9 @@ import pytest
 import app.services.results.api_football as api_football
 import app.services.results.football_data as football_data
 from app.models.parsed_pick import ParsedPick
+from app.models.pick import Acierto, Pick
+from app.models.telegram_raw_message import TelegramRawMessage
+from app.models.user import User
 from app.services.results.api_football import ApiFootballProvider
 from app.services.results.api_tennis import ApiTennisProvider
 from app.services.results.base import (
@@ -34,6 +37,7 @@ from app.services.results.verifier import (
     _resolve_winner,
     _should_attempt_verification,
     _tennis_lookup_hint,
+    cascade_user_settlements,
     verify_pick,
 )
 
@@ -2514,3 +2518,116 @@ class TestFirstHalf:
         pick = _pick("0-0 al descanso", "resultado exacto")
         acierto, _ = await verify_pick(pick, [provider])
         assert acierto is True
+
+
+class TestCascadeUserSettlements:
+    """La cascada propaga el resultado del pick del canal a las apuestas
+    de usuario enlazadas ("Yo también la jugué") que siguen pendientes."""
+
+    async def _mk_user(self, session, email: str) -> User:
+        user = User(name="u", email=email, password_hash="x")
+        session.add(user)
+        await session.flush()
+        return user
+
+    async def _mk_parsed(self, session, informante_id, acierto, raw_mid: int):
+        raw = TelegramRawMessage(
+            channel_id=1, message_id=raw_mid, channel_name="c", text="x"
+        )
+        session.add(raw)
+        await session.flush()
+        pp = ParsedPick(
+            raw_message_id=raw.id,
+            informante_id=informante_id,
+            es_apuesta=True,
+            apuesta="A gana",
+            acierto=acierto,
+        )
+        session.add(pp)
+        await session.flush()
+        return pp
+
+    def _mk_user_pick(self, user, informante_id, parsed_pick_id):
+        return Pick(
+            apuesta="A gana",
+            tipo_de_apuesta="ganador",
+            casa="Bet365",
+            usuario_id=user.id,
+            informante_id=informante_id,
+            parsed_pick_id=parsed_pick_id,
+        )
+
+    async def test_propaga_acierto_a_enlazadas_pendientes(self, session, crear_canal):
+        canal = await crear_canal("ElTipster")
+        user = await self._mk_user(session, "u1@x.com")
+        resuelto = await self._mk_parsed(session, canal.id, True, 1)
+        apuesta = self._mk_user_pick(user, canal.id, resuelto.id)
+        session.add(apuesta)
+        await session.commit()
+
+        n = await cascade_user_settlements(session)
+        await session.commit()
+
+        assert n == 1
+        await session.refresh(apuesta)
+        assert apuesta.acierto == Acierto.TRUE
+
+    async def test_propaga_fallo(self, session, crear_canal):
+        canal = await crear_canal("ElTipster")
+        user = await self._mk_user(session, "u2@x.com")
+        resuelto = await self._mk_parsed(session, canal.id, False, 2)
+        apuesta = self._mk_user_pick(user, canal.id, resuelto.id)
+        session.add(apuesta)
+        await session.commit()
+
+        n = await cascade_user_settlements(session)
+        await session.commit()
+
+        assert n == 1
+        await session.refresh(apuesta)
+        assert apuesta.acierto == Acierto.FALSE
+
+    async def test_no_toca_pendiente_de_pick_sin_resolver(self, session, crear_canal):
+        canal = await crear_canal("ElTipster")
+        user = await self._mk_user(session, "u3@x.com")
+        sin_resolver = await self._mk_parsed(session, canal.id, None, 3)
+        apuesta = self._mk_user_pick(user, canal.id, sin_resolver.id)
+        session.add(apuesta)
+        await session.commit()
+
+        n = await cascade_user_settlements(session)
+        await session.commit()
+
+        assert n == 0
+        await session.refresh(apuesta)
+        assert apuesta.acierto == Acierto.PENDING
+
+    async def test_no_pisa_correccion_manual_del_usuario(self, session, crear_canal):
+        canal = await crear_canal("ElTipster")
+        user = await self._mk_user(session, "u4@x.com")
+        resuelto = await self._mk_parsed(session, canal.id, True, 4)
+        apuesta = self._mk_user_pick(user, canal.id, resuelto.id)
+        apuesta.acierto = Acierto.FALSE  # el usuario la liquidó a mano
+        session.add(apuesta)
+        await session.commit()
+
+        n = await cascade_user_settlements(session)
+        await session.commit()
+
+        assert n == 0
+        await session.refresh(apuesta)
+        assert apuesta.acierto == Acierto.FALSE
+
+    async def test_no_toca_apuestas_sin_enlace(self, session, crear_canal):
+        canal = await crear_canal("ElTipster")
+        user = await self._mk_user(session, "u5@x.com")
+        manual = self._mk_user_pick(user, canal.id, None)
+        session.add(manual)
+        await session.commit()
+
+        n = await cascade_user_settlements(session)
+        await session.commit()
+
+        assert n == 0
+        await session.refresh(manual)
+        assert manual.acierto == Acierto.PENDING

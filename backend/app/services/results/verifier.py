@@ -42,6 +42,7 @@ from app.core.dates import utc_now
 from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
+from app.models.pick import Acierto, Pick
 from app.services.notifications.push import notify_settled_picks
 from app.services.results.allsports_tennis import AllSportsTennisProvider
 from app.services.results.api_basketball import ApiBasketballProvider
@@ -2039,6 +2040,34 @@ async def _settle_combinadas(session: AsyncSession) -> list[int]:
     return settled
 
 
+async def cascade_user_settlements(session: AsyncSession) -> int:
+    """Propaga resultados a apuestas de usuario enlazadas ("Yo también la
+    jugué"): toda `picks` pendiente cuyo `parsed_pick_id` ya esté resuelto
+    hereda acierto/fallo.
+
+    Solo toca picks en Pending — nunca pisa una corrección manual del
+    usuario. Si el pick del canal está anulado (`acierto=None`) no hay
+    equivalente en el enum del usuario: se queda pendiente.
+    """
+    pendientes = (
+        await session.exec(
+            select(Pick)
+            .where(Pick.parsed_pick_id != None)  # noqa: E711
+            .where(Pick.acierto == Acierto.PENDING)
+        )
+    ).all()
+    count = 0
+    for apuesta in pendientes:
+        resuelto = await session.get(ParsedPick, apuesta.parsed_pick_id)
+        if resuelto is None or resuelto.acierto is None:
+            continue
+        apuesta.acierto = Acierto.TRUE if resuelto.acierto else Acierto.FALSE
+        apuesta.updated_at = utc_now()
+        session.add(apuesta)
+        count += 1
+    return count
+
+
 async def verify_pending_picks() -> int:
     """Revisa todos los picks pendientes de verificar y actualiza los que pueda.
 
@@ -2117,6 +2146,14 @@ async def verify_pending_picks() -> int:
             logger.info(
                 "[RESULTS_VERIFIER] Combinadas liquidadas en esta pasada: %s",
                 len(combinadas_settled),
+            )
+
+        cascaded = await cascade_user_settlements(session)
+        if cascaded:
+            logger.info(
+                "[RESULTS_VERIFIER] Apuestas de usuario actualizadas por "
+                "cascada: %s",
+                cascaded,
             )
 
         await session.commit()

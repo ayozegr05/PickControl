@@ -144,3 +144,42 @@ class TestJugarPick:
             headers=auth_headers,
         )
         assert response.status_code == 422
+
+    async def test_hereda_resultado_si_el_pick_ya_estaba_liquidado(
+        self, client: AsyncClient, session: AsyncSession, auth_headers, crear_canal
+    ):
+        """Si el pick del canal ya está resuelto al registrarse, la apuesta
+        del usuario nace con el resultado heredado — no se queda pendiente
+        de una liquidación que ya ocurrió."""
+        canal = await crear_canal("ElTipster")
+        parsed = await _seed_parsed_pick(session, canal.id)
+        parsed.acierto = True
+        parsed.verificado_por = "auto"
+        session.add(parsed)
+        await session.commit()
+
+        response = await client.post(
+            f"/api/v1/telegram/parsed-picks/{parsed.id}/jugar",
+            json={"cantidad_apostada": 5.0},
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["acierto"] == "True"
+
+    async def test_hereda_fallo_si_el_pick_ya_estaba_liquidado(
+        self, client: AsyncClient, session: AsyncSession, auth_headers, crear_canal
+    ):
+        canal = await crear_canal("ElTipster")
+        parsed = await _seed_parsed_pick(session, canal.id)
+        parsed.acierto = False
+        parsed.verificado_por = "auto"
+        session.add(parsed)
+        await session.commit()
+
+        response = await client.post(
+            f"/api/v1/telegram/parsed-picks/{parsed.id}/jugar",
+            json={"cantidad_apostada": 5.0},
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["acierto"] == "False"
