@@ -336,6 +336,49 @@ class TestNormalizePick:
         pick = _normalize_pick(pick, "Cecchinato gana\nCuota 1.50\nStake 4")
         assert pick.deporte == "tenis"
 
+    def test_recorta_prosa_del_llm(self):
+        # El LLM volcó la frase del análisis en `seleccion`: se queda
+        # con la etiqueta del pick, cortada en el borde de frase.
+        pick = _normalize_pick(
+            ExtractedPick(
+                es_apuesta=True,
+                seleccion=(
+                    "Isak marca gol. El Liverpool llega en racha tras "
+                    "ganar sus últimos cinco partidos y el Newcastle "
+                    "encaja demasiado en casa para fiarse del rival"
+                ),
+                metodo="llm",
+            ),
+            "Isak marca gol",
+        )
+        assert pick.seleccion == "Isak marca gol"
+
+    def test_prosa_sin_borde_corta_en_palabra(self):
+        # Sin borde de frase: corta en la última palabra completa.
+        prosa = "Isak marca porque el Liverpool llega en racha " * 4
+        pick = _normalize_pick(
+            ExtractedPick(es_apuesta=True, seleccion=prosa, metodo="llm"),
+            prosa,
+        )
+        assert pick.seleccion is not None
+        assert len(pick.seleccion) <= 120
+        assert not pick.seleccion.endswith(" ")
+
+    def test_combinada_larga_no_se_recorta(self):
+        # El "A + B + C" de una combinada es largo legítimo: las patas
+        # pobladas impiden el recorte de prosa.
+        patas = [
+            ExtractedPick(es_apuesta=True, seleccion=f"Pata número {i} gana su partido")
+            for i in range(5)
+        ]
+        joined = " + ".join(p.seleccion for p in patas)
+        assert len(joined) > 120
+        pick = _normalize_pick(
+            ExtractedPick(es_apuesta=True, seleccion=joined, patas=patas, metodo="llm"),
+            joined,
+        )
+        assert pick.seleccion == joined
+
 
 class TestRuleExtractEvento:
     def test_rellena_evento_si_hay_enfrentamiento_en_el_mensaje(self):
