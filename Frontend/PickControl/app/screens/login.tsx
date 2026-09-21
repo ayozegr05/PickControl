@@ -76,7 +76,7 @@ const LoginScreen = () => {
         const data = await loginApi(savedCredentials);
         console.log("Usuario logueado: ", data.user.name);
 
-        await login(data.token, data.user.name);
+        await login(data.token, data.user.name, data.user.role);
         router.replace("/");
       }
     } catch (error) {
@@ -103,7 +103,7 @@ const LoginScreen = () => {
       );
 
       // Hacer login con token y nombre
-      await login(data.token, data.user.name);
+      await login(data.token, data.user.name, data.user.role);
       router.replace("/");
     } catch (error: any) {
       Alert.alert(

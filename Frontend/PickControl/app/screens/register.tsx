@@ -43,7 +43,7 @@ const RegisterScreen = () => {
       });
 
       // Guardar el token y el nombre recibidos
-      await login(data.token, data.user.name);
+      await login(data.token, data.user.name, data.user.role);
 
       // Mostrar mensaje de éxito
       Alert.alert(

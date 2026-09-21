@@ -8,8 +8,9 @@ import { registerForPushNotifications } from "@/src/notifications/push";
 
 type AuthContextType = {
   isAuthenticated: boolean;
+  isAdmin: boolean;
   userName: string | null;
-  login: (token: string, userName: string) => Promise<void>;
+  login: (token: string, userName: string, role?: string) => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -17,6 +18,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [userName, setUserName] = useState<string | null>(null);
 
   useEffect(() => {
@@ -28,8 +30,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     try {
       const token = await AsyncStorage.getItem("userToken");
       const storedUserName = await AsyncStorage.getItem("userName");
+      const storedRole = await AsyncStorage.getItem("userRole");
       setIsAuthenticated(!!token);
       setUserName(storedUserName);
+      setIsAdmin(storedRole === "admin");
       if (token) {
         // Registro push en segundo plano: best-effort, nunca bloquea.
         void registerForPushNotifications();
@@ -39,12 +43,14 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
   };
 
-  const login = async (token: string, name: string) => {
+  const login = async (token: string, name: string, role?: string) => {
     try {
       await AsyncStorage.setItem("userToken", token);
       await AsyncStorage.setItem("userName", name);
+      await AsyncStorage.setItem("userRole", role ?? "user");
       setIsAuthenticated(true);
       setUserName(name);
+      setIsAdmin(role === "admin");
       void registerForPushNotifications();
     } catch (error) {
       console.error("Error storing token:", error);
@@ -55,15 +61,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     try {
       await AsyncStorage.removeItem("userToken");
       await AsyncStorage.removeItem("userName");
+      await AsyncStorage.removeItem("userRole");
       setIsAuthenticated(false);
       setUserName(null);
+      setIsAdmin(false);
     } catch (error) {
       console.error("Error removing token:", error);
     }
   };
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, userName, login, logout }}>
+    <AuthContext.Provider
+      value={{ isAuthenticated, isAdmin, userName, login, logout }}
+    >
       {children}
     </AuthContext.Provider>
   );

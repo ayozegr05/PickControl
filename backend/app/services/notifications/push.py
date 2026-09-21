@@ -29,6 +29,7 @@ from app.db.postgres import AsyncSessionLocal
 from app.models.device_token import DeviceToken
 from app.models.parsed_pick import ParsedPick
 from app.models.pick import Pick
+from app.models.user import User, UserRole
 
 logger = get_logger("app.notifications.push")
 
@@ -218,3 +219,49 @@ async def notify_settled_picks(pick_ids: list[int]) -> None:
                     )
     except Exception as exc:  # noqa: BLE001
         logger.warning("[PUSH] notify_settled_picks(%s) falló: %s", pick_ids, exc)
+
+
+async def notify_provider_rate_limited(provider_name: str) -> None:
+    """Push "cuota agotada" SOLO a dispositivos de usuarios admin.
+
+    Disparada por `results.base.mark_rate_limited` la primera vez del día
+    que un provider responde 403/429 — es información de operación, no
+    para usuarios normales.
+    """
+    try:
+        if not _enabled(get_settings()):
+            return
+        async with AsyncSessionLocal() as session:
+            rows = list(
+                (
+                    await session.exec(
+                        select(DeviceToken)
+                        .join(User, User.id == DeviceToken.user_id)
+                        .where(User.role == UserRole.ADMIN)
+                        .where(DeviceToken.enabled == True)  # noqa: E712
+                    )
+                ).all()
+            )
+
+            def message(token: str) -> dict:
+                return {
+                    "to": token,
+                    "title": "Proveedor sin cuota",
+                    "body": f"{provider_name} agotó su cuota de hoy — los picks que dependan de él quedan pendientes hasta mañana.",
+                    "data": {
+                        "type": "provider_rate_limited",
+                        "provider": provider_name,
+                    },
+                }
+
+            sent = await _send(session, rows, message)
+            if sent:
+                logger.info(
+                    "[PUSH] Cuota agotada de %s notificada a %d dispositivos admin.",
+                    provider_name,
+                    sent,
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "[PUSH] notify_provider_rate_limited(%s) falló: %s", provider_name, exc
+        )
