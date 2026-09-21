@@ -9,6 +9,7 @@ from app.api.v1 import (
     devices,
     informantes,
     picks,
+    system,
     telegram,
 )
 
@@ -20,3 +21,4 @@ api_router.include_router(telegram.router)
 api_router.include_router(channels.router)
 api_router.include_router(analisis.router)
 api_router.include_router(devices.router)
+api_router.include_router(system.router)

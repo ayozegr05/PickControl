@@ -10,18 +10,20 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 from sqlmodel import select
 
 from app.core.dates import utc_now
+from app.core.security import create_access_token
 from app.models.device_token import DeviceToken
 from app.models.parsed_pick import ParsedPick
 from app.models.pick import Pick
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.services.notifications import push as push_service
+from app.services.results import base as results_base
 from app.services.results import verifier
 from app.services.telegram import processor
 from app.services.telegram.pick_extractor import ExtractedPick
@@ -332,6 +334,124 @@ class TestPushService:
 
         await push_service.notify_settled_picks([pick.id])
         send.assert_not_called()
+
+
+class TestRateLimitedPush:
+    async def test_solo_reciben_admins(self, session, monkeypatch):
+        admin = User(
+            name="Admin",
+            email="admin@x.com",
+            password_hash="x",
+            role=UserRole.ADMIN,
+        )
+        user = User(name="User", email="user@x.com", password_hash="x")
+        session.add_all([admin, user])
+        await session.commit()
+        await _token_row(session, user_id=admin.id, token=TOKEN_A)
+        await _token_row(session, user_id=user.id, token=TOKEN_B)
+
+        monkeypatch.setattr(push_service, "AsyncSessionLocal", _session_cm(session))
+        sent: list[dict] = []
+
+        async def fake_send(messages, access_token):
+            sent.extend(messages)
+            return [{"status": "ok"} for _ in messages]
+
+        monkeypatch.setattr(push_service, "_send_chunk", fake_send)
+
+        await push_service.notify_provider_rate_limited("footapi7")
+
+        assert len(sent) == 1
+        assert sent[0]["to"] == TOKEN_A
+        assert sent[0]["data"]["type"] == "provider_rate_limited"
+        assert sent[0]["data"]["provider"] == "footapi7"
+        assert "footapi7" in sent[0]["body"]
+
+    async def test_sin_admins_no_envia(self, session, monkeypatch):
+        user = User(name="User", email="user@x.com", password_hash="x")
+        session.add(user)
+        await session.commit()
+        await _token_row(session, user_id=user.id, token=TOKEN_A)
+        monkeypatch.setattr(push_service, "AsyncSessionLocal", _session_cm(session))
+        send = AsyncMock()
+        monkeypatch.setattr(push_service, "_send_chunk", send)
+
+        await push_service.notify_provider_rate_limited("footapi7")
+        send.assert_not_called()
+
+
+class TestMarkRateLimited:
+    async def test_dedup_mismo_dia_notifica_una_vez(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(results_base, "_STATE", None)
+        monkeypatch.setattr(
+            results_base, "_STATE_FILE", tmp_path / "provider_state.json"
+        )
+        notify = Mock()
+        monkeypatch.setattr(results_base, "_notify_rate_limited", notify)
+
+        results_base.mark_rate_limited("footapi7")
+        results_base.mark_rate_limited("footapi7")
+
+        notify.assert_called_once_with("footapi7")
+        assert results_base.is_rate_limited("footapi7")
+
+    async def test_otro_provider_si_notifica(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(results_base, "_STATE", None)
+        monkeypatch.setattr(
+            results_base, "_STATE_FILE", tmp_path / "provider_state.json"
+        )
+        notify = Mock()
+        monkeypatch.setattr(results_base, "_notify_rate_limited", notify)
+
+        results_base.mark_rate_limited("footapi7")
+        results_base.mark_rate_limited("tennisapi1")
+
+        assert notify.call_count == 2
+
+
+class TestSystemProvidersApi:
+    async def _admin_headers(self, session) -> dict[str, str]:
+        admin = User(
+            name="Admin",
+            email="admin@x.com",
+            password_hash="x",
+            role=UserRole.ADMIN,
+        )
+        session.add(admin)
+        await session.commit()
+        await session.refresh(admin)
+        token = create_access_token(
+            {"sub": str(admin.id), "email": admin.email, "role": admin.role}
+        )
+        return {"Authorization": f"Bearer {token}"}
+
+    async def test_admin_ve_estado_providers(self, client, session, monkeypatch):
+        monkeypatch.setattr(
+            results_base,
+            "_STATE",
+            {
+                "rate_limited": {"footapi7": "2026-09-21"},
+                "missed": {
+                    "footapi7|2026-09-20|x - y": "2026-09-21T10:00:00",
+                    "odds|allsportsapi2|tenis|2026-09-20|a vs b": "2026-09-21T10:00:00",
+                },
+            },
+        )
+        headers = await self._admin_headers(session)
+        resp = await client.get("/api/v1/system/providers", headers=headers)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["rate_limited"] == {"footapi7": "2026-09-21"}
+        assert body["missed_by_provider"] == {"footapi7": 1, "allsportsapi2": 1}
+
+    async def test_usuario_normal_403(self, client, auth_headers):
+        resp = await client.get("/api/v1/system/providers", headers=auth_headers)
+        assert resp.status_code == 403
+
+    async def test_sin_auth_rechazado(self, client):
+        resp = await client.get("/api/v1/system/providers")
+        assert resp.status_code in (401, 403)
 
 
 class TestNewPickHook:

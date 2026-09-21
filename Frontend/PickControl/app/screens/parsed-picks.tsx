@@ -18,6 +18,11 @@ import {
   ParsedPick,
 } from "@/src/api/parsed-picks.api";
 import { listInformantes } from "@/src/api/informantes.api";
+import {
+  getProvidersStatus,
+  ProvidersStatus,
+} from "@/src/api/system.api";
+import { useAuth } from "@/src/context/AuthContext";
 
 const OVERVIEW_PER_CHANNEL = 2;
 const CHANNEL_PAGE_SIZE = 20;
@@ -76,8 +81,11 @@ export default function ParsedPicksScreen() {
   const [error, setError] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [soloPendientes, setSoloPendientes] = useState(false);
+  const [providersStatus, setProvidersStatus] =
+    useState<ProvidersStatus | null>(null);
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { isAdmin } = useAuth();
 
   const loadOverview = useCallback(
     async (includeDiscarded: boolean, pending: boolean) => {
@@ -128,11 +136,24 @@ export default function ParsedPicksScreen() {
       if (selectedChannel) {
         await loadChannel(selectedChannel.id, 0, showAll, soloPendientes);
       }
+      // Panel de sistema: solo admin; un fallo aquí no rompe la lista.
+      if (isAdmin) {
+        getProvidersStatus()
+          .then(setProvidersStatus)
+          .catch(() => setProvidersStatus(null));
+      }
       setError(null);
     } catch (err: any) {
       setError(err.message);
     }
-  }, [loadOverview, loadChannel, selectedChannel, showAll, soloPendientes]);
+  }, [
+    loadOverview,
+    loadChannel,
+    selectedChannel,
+    showAll,
+    soloPendientes,
+    isAdmin,
+  ]);
 
   // Recarga automáticamente cada vez que entras a esta pantalla (p. ej.
   // al volver desde otra pestaña), sin tener que reabrir la app.
@@ -227,6 +248,26 @@ export default function ParsedPicksScreen() {
       setLoading(false);
     }
   }, [soloPendientes, loadOverview, loadChannel, selectedChannel, showAll]);
+
+  const providerRows = useMemo(() => {
+    if (!providersStatus) return [];
+    const names = new Set<string>([
+      ...Object.keys(providersStatus.rate_limited),
+      ...Object.keys(providersStatus.missed_by_provider),
+    ]);
+    return [...names]
+      .sort((a, b) => {
+        const aLimited = a in providersStatus.rate_limited;
+        const bLimited = b in providersStatus.rate_limited;
+        if (aLimited !== bLimited) return aLimited ? -1 : 1;
+        return a.localeCompare(b);
+      })
+      .map((name) => ({
+        name,
+        limitedSince: providersStatus.rate_limited[name] ?? null,
+        misses: providersStatus.missed_by_provider[name] ?? 0,
+      }));
+  }, [providersStatus]);
 
   const applyUpdate = (list: ParsedPick[], updated: ParsedPick) =>
     list.map((p) => (p.id === updated.id ? updated : p));
@@ -492,6 +533,37 @@ export default function ParsedPicksScreen() {
             Solo pendientes de liquidar
           </Text>
         </TouchableOpacity>
+
+        {isAdmin && providersStatus !== null && (
+          <View style={styles.systemCard}>
+            <Text style={styles.systemTitle}>Sistema · providers</Text>
+            {providerRows.length === 0 ? (
+              <Text style={styles.providerOk}>Todos operativos</Text>
+            ) : (
+              providerRows.map((row) => (
+                <View key={row.name} style={styles.providerRow}>
+                  <Text style={styles.providerName}>{row.name}</Text>
+                  <Text
+                    style={
+                      row.limitedSince
+                        ? styles.providerBad
+                        : styles.providerOk
+                    }
+                  >
+                    {row.limitedSince
+                      ? `sin cuota hoy (${row.limitedSince})`
+                      : "ok"}
+                  </Text>
+                  {row.misses > 0 && (
+                    <Text style={styles.providerMisses}>
+                      {row.misses} miss{row.misses !== 1 ? "es" : ""}
+                    </Text>
+                  )}
+                </View>
+              ))
+            )}
+          </View>
+        )}
 
         {loading && <ActivityIndicator size="large" color="#ff9f1c" />}
         {error && <Text style={styles.error}>Error: {error}</Text>}
@@ -808,6 +880,47 @@ const styles = StyleSheet.create({
     color: "#aaa",
     fontSize: 13,
     flexShrink: 1,
+  },
+  systemCard: {
+    backgroundColor: "#141821",
+    borderColor: "#2d3a4f",
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 14,
+  },
+  systemTitle: {
+    color: "#7ab3ff",
+    fontSize: 13,
+    fontWeight: "bold",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  providerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 3,
+    gap: 8,
+  },
+  providerName: {
+    color: "#ddd",
+    fontSize: 13,
+    flex: 1,
+  },
+  providerOk: {
+    color: "#4caf50",
+    fontSize: 12,
+    fontWeight: "bold",
+  },
+  providerBad: {
+    color: "#f44336",
+    fontSize: 12,
+    fontWeight: "bold",
+  },
+  providerMisses: {
+    color: "#888",
+    fontSize: 11,
   },
   acertoSection: {
     marginTop: 10,

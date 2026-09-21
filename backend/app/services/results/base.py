@@ -6,6 +6,7 @@ un partido concreto, sin conocer nada de `ParsedPick` ni de picks.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass
@@ -287,9 +288,55 @@ def _save_state() -> None:
 
 
 def mark_rate_limited(provider_name: str) -> None:
-    """Marca un proveedor como sin cuota por el resto del día."""
-    _load_state()["rate_limited"][provider_name] = date_type.today().isoformat()
+    """Marca un proveedor como sin cuota por el resto del día.
+
+    Solo la PRIMERA marca del día dispara el push a admins (un provider
+    caído recibe 429 en cada intento; re-notificar sería spam).
+    """
+    today = date_type.today().isoformat()
+    state = _load_state()["rate_limited"]
+    if state.get(provider_name) == today:
+        return
+    state[provider_name] = today
     _save_state()
+    _notify_rate_limited(provider_name)
+
+
+def _notify_rate_limited(provider_name: str) -> None:
+    """Programa el push "cuota agotada" si hay un loop async corriendo.
+
+    `mark_rate_limited` también se llama desde scripts síncronos y tests:
+    sin loop no hay push (el estado ya quedó persistido), y en tests
+    (`NODE_ENV=test`) se salta siempre para no tocar la BD real.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    from app.core.config import get_settings  # import perezoso: base es util base
+    from app.services.notifications.push import notify_provider_rate_limited
+
+    if get_settings().node_env == "test":
+        return
+    loop.create_task(notify_provider_rate_limited(provider_name))
+
+
+def providers_snapshot() -> dict:
+    """Estado actual de providers para la vista de sistema (solo admin).
+
+    `missed_by_provider` agrega las claves de miss (`provider|fecha|evento`,
+    o `odds|provider|...` para misses del snapshotter de cuotas).
+    """
+    state = _load_state()
+    missed_by_provider: dict[str, int] = {}
+    for key in state["missed"]:
+        prov_key = key[5:] if key.startswith("odds|") else key
+        provider = prov_key.split("|", 1)[0]
+        missed_by_provider[provider] = missed_by_provider.get(provider, 0) + 1
+    return {
+        "rate_limited": dict(state["rate_limited"]),
+        "missed_by_provider": missed_by_provider,
+    }
 
 
 def is_rate_limited(provider_name: str) -> bool:
