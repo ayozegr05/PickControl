@@ -389,7 +389,10 @@ async def _persist_patas(
             cuota=pata.cuota,
             casa=_fit(pick.casa, 100),
             informante=_fit(channel, 255),
-            fecha_evento=pata.fecha_evento,
+            # El LLM suele dejar la fecha de la pata vacía: se hereda
+            # la del padre (fecha del boleto) para que el verifier la
+            # pueda intentar — con NULL queda invisible en su query.
+            fecha_evento=pata.fecha_evento or parent.fecha_evento,
             linea=pata.linea,
             metodo=pick.metodo,
             confianza=pick.confianza,

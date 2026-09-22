@@ -4,13 +4,17 @@ No llaman a ninguna API externa: cubren la extracción del equipo
 predicho y la resolución del ganador a partir de un marcador.
 """
 
+from contextlib import asynccontextmanager
 from datetime import date as date_type
 from datetime import datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 
 import app.services.results.api_football as api_football
 import app.services.results.football_data as football_data
+import app.services.results.verifier as verifier_mod
+from app.core.dates import utc_now
 from app.models.parsed_pick import ParsedPick
 from app.models.pick import Acierto, Pick
 from app.models.telegram_raw_message import TelegramRawMessage
@@ -2631,3 +2635,78 @@ class TestCascadeUserSettlements:
         assert n == 0
         await session.refresh(manual)
         assert manual.acierto == Acierto.PENDING
+
+
+def _session_cm(session):
+    """`AsyncSessionLocal` falso que devuelve la sesión del test."""
+
+    @asynccontextmanager
+    async def _cm():
+        yield session
+
+    return _cm
+
+
+class TestPataFueraDeVentana:
+    """Las patas de combinadas pendientes se intentan aunque superen la
+    ventana de 14 días: sin ellas el padre no puede liquidar nunca."""
+
+    async def test_pata_caducada_con_padre_pendiente_se_verifica(
+        self, session, crear_canal, monkeypatch
+    ):
+        canal = await crear_canal("ElTipster")
+        vieja = utc_now() - timedelta(days=30)
+        raw = TelegramRawMessage(channel_id=1, message_id=1, channel_name="c", text="x")
+        session.add(raw)
+        await session.flush()
+        parent = ParsedPick(
+            raw_message_id=raw.id,
+            informante_id=canal.id,
+            es_apuesta=True,
+            apuesta="combo",
+            es_combinada=True,
+            fecha_evento=vieja,
+            created_at=vieja,
+        )
+        session.add(parent)
+        await session.flush()
+        leg = ParsedPick(
+            raw_message_id=raw.id,
+            informante_id=canal.id,
+            es_apuesta=True,
+            apuesta="A gana",
+            combinada_id=parent.id,
+            fecha_evento=vieja,
+            created_at=vieja,
+        )
+        simple_viejo = ParsedPick(
+            raw_message_id=raw.id,
+            informante_id=canal.id,
+            es_apuesta=True,
+            apuesta="B gana",
+            fecha_evento=vieja,
+            created_at=vieja,
+        )
+        session.add_all([leg, simple_viejo])
+        await session.commit()
+
+        monkeypatch.setattr(verifier_mod, "AsyncSessionLocal", _session_cm(session))
+        monkeypatch.setattr(
+            verifier_mod, "_get_providers", AsyncMock(return_value=[object()])
+        )
+        monkeypatch.setattr(
+            verifier_mod, "verify_pick", AsyncMock(return_value=(True, False))
+        )
+        monkeypatch.setattr(verifier_mod, "notify_settled_picks", AsyncMock())
+
+        await verifier_mod.verify_pending_picks()
+
+        await session.refresh(leg)
+        await session.refresh(simple_viejo)
+        await session.refresh(parent)
+        # la pata se intentó y resolvió pese a estar caducada…
+        assert leg.acierto is True
+        # …y el padre se liquidó en conjunto
+        assert parent.acierto is True
+        # el pick simple viejo, sin padre pendiente, ni se intentó
+        assert simple_viejo.acierto is None
