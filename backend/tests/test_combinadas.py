@@ -200,6 +200,66 @@ class TestProcessorCombinada:
         assert legs[0].es_combinada is False
         assert legs[0].es_apuesta is True
 
+    async def test_pata_sin_fecha_hereda_la_del_padre(
+        self, session, fake_settings, monkeypatch
+    ):
+        """El LLM suele dejar `fecha_evento` de la pata vacío: hereda la
+        del padre. Con NULL quedaría fuera de la query del verifier y la
+        combinada no podría liquidarse nunca."""
+        extracted = ExtractedPick(
+            es_apuesta=True,
+            mercado="combinada",
+            seleccion="Alcaraz gana + Real Madrid gana",
+            metodo="llm",
+            confianza=0.8,
+            patas=[
+                ExtractedPick(
+                    es_apuesta=True,
+                    seleccion="Alcaraz gana",
+                    mercado="ganador",
+                    deporte="tenis",
+                ),
+                ExtractedPick(
+                    es_apuesta=True,
+                    seleccion="Real Madrid gana",
+                    mercado="ganador",
+                    deporte="fútbol",
+                    fecha_evento=datetime(2026, 9, 21, 12, 0),
+                ),
+            ],
+        )
+        monkeypatch.setattr(
+            "app.services.telegram.processor.extract_pick",
+            AsyncMock(return_value=extracted),
+        )
+
+        await process_incoming_message(
+            session=session,
+            channel="Test Channel",
+            channel_id=1,
+            message_id=11,
+            text="COMBINADA",
+            message_date=datetime(2026, 9, 20, 18, 0),
+        )
+
+        parent = (
+            (await session.exec(select(ParsedPick).where(ParsedPick.es_combinada)))
+            .scalars()
+            .one()
+        )
+        legs = (
+            (
+                await session.exec(
+                    select(ParsedPick).where(ParsedPick.combinada_id == parent.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        # pata sin fecha → hereda la del padre; pata con fecha → la suya
+        assert legs[0].fecha_evento == parent.fecha_evento
+        assert legs[1].fecha_evento == datetime(2026, 9, 21, 12, 0)
+
     async def test_pick_simple_no_dedup_contra_pata(
         self, session, fake_settings, monkeypatch
     ):

@@ -2107,7 +2107,27 @@ async def verify_pending_picks() -> int:
         # 14 días hay un periodo de gracia para picks recién creados
         # (recuperados tarde por el catch-up), difícil de expresar en SQL
         # sin OR de columnas. El conjunto pendiente es pequeño.
-        pending = [p for p in result.all() if _should_attempt_verification(p, now)]
+        #
+        # Excepción: las patas de combinadas pendientes se intentan
+        # siempre, aunque hayan salido de la ventana — sin ellas el padre
+        # no puede liquidar nunca, y los providers de estadísticas no
+        # tienen límite de antigüedad.
+        pending_parent_ids = set(
+            (
+                await session.exec(
+                    select(ParsedPick.id)
+                    .where(ParsedPick.es_combinada == True)  # noqa: E712
+                    .where(ParsedPick.acierto == None)  # noqa: E711
+                    .where(ParsedPick.anulada == False)  # noqa: E712
+                )
+            ).all()
+        )
+        pending = [
+            p
+            for p in result.all()
+            if _should_attempt_verification(p, now)
+            or p.combinada_id in pending_parent_ids
+        ]
         # Recientes primero: los mercados de estadísticas (córners,
         # tarjetas...) solo se pueden consultar en la ventana ±1 día de
         # API-Football gratis — si la cuota se agota a mitad de pasada,
