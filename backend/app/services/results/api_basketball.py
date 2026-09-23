@@ -32,6 +32,7 @@ from app.services.results.base import (
     MatchResult,
     MatchState,
     is_rate_limited,
+    log_remaining_quota,
     mark_rate_limited,
     match_score,
     rate_limit_from,
@@ -134,6 +135,7 @@ class ApiBasketballProvider:
                 headers=self._headers(),
             )
             response.raise_for_status()
+            log_remaining_quota("api-basketball", response)
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
                 mark_rate_limited("api-basketball")

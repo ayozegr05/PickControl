@@ -59,6 +59,7 @@ from app.services.results.base import (
     MatchState,
     is_missed,
     is_rate_limited,
+    log_remaining_quota,
     mark_missed,
     mark_rate_limited,
     miss_is_provisional,
@@ -234,6 +235,7 @@ class TennisApi1Provider:
                 },
             )
             response.raise_for_status()
+            log_remaining_quota(_PROVIDER_NAME, response)
             events: Optional[list] = response.json().get("events") or []
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
@@ -265,6 +267,7 @@ class TennisApi1Provider:
                 },
             )
             response.raise_for_status()
+            log_remaining_quota(_PROVIDER_NAME, response)
             results: Optional[list] = response.json().get("results") or []
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
@@ -303,6 +306,7 @@ class TennisApi1Provider:
                 },
             )
             response.raise_for_status()
+            log_remaining_quota(_PROVIDER_NAME, response)
             data = response.json()
             prev_event = data.get("previousEvent")
             events: Optional[list] = [

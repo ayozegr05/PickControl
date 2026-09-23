@@ -52,6 +52,7 @@ from app.services.results.base import (
     MatchStats,
     is_missed,
     is_rate_limited,
+    log_remaining_quota,
     mark_missed,
     mark_rate_limited,
     match_score,
@@ -181,6 +182,7 @@ class FootApiStatsProvider:
                 f"https://{self._api_host}{path}", headers=self._headers()
             )
             response.raise_for_status()
+            log_remaining_quota(self.NAME, response)
             data = response.json()
             return data if isinstance(data, dict) else None
         except httpx.HTTPError as exc:

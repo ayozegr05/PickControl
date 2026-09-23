@@ -28,6 +28,7 @@ from app.services.results.base import (
     MatchState,
     MatchStats,
     is_rate_limited,
+    log_remaining_quota,
     mark_rate_limited,
     match_score,
 )
@@ -154,6 +155,7 @@ class ApiFootballProvider:
                 headers=self._headers(),
             )
             response.raise_for_status()
+            log_remaining_quota("api-football", response)
         except httpx.HTTPError as exc:
             logger.warning("[API-Football] Error de API (%s): %s", date_str, exc)
             return []
@@ -177,6 +179,7 @@ class ApiFootballProvider:
                 headers=self._headers(),
             )
             response.raise_for_status()
+            log_remaining_quota("api-football", response)
         except httpx.HTTPError as exc:
             logger.warning(
                 "[API-Football] Error de API stats (fixture %s): %s",
@@ -202,6 +205,7 @@ class ApiFootballProvider:
                 headers=self._headers(),
             )
             response.raise_for_status()
+            log_remaining_quota("api-football", response)
         except httpx.HTTPError as exc:
             logger.warning(
                 "[API-Football] Error de API events (fixture %s): %s",
@@ -227,6 +231,7 @@ class ApiFootballProvider:
                 headers=self._headers(),
             )
             response.raise_for_status()
+            log_remaining_quota("api-football", response)
         except httpx.HTTPError as exc:
             logger.warning(
                 "[API-Football] Error de API players (fixture %s): %s",
