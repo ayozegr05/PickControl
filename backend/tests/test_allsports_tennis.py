@@ -103,6 +103,50 @@ def provider(monkeypatch):
     return prov
 
 
+class TestFindPostponed:
+    async def test_aplazado_en_el_historial_es_match_state(self, provider, monkeypatch):
+        postponed = dict(_ITF_EVENT)
+        postponed["status"] = {"type": "postponed"}
+        prov = AllSportsTennisProvider("k", "allsportsapi2.p.rapidapi.com")
+
+        async def fake_get(client, path):
+            if "search" in path:
+                return _SEARCH_CARRENO
+            if "previous" in path:
+                return {"events": [postponed]}
+            return {}
+
+        monkeypatch.setattr(prov, "_get_json", fake_get)
+        state = await prov.find_postponed_match(
+            datetime(2026, 9, 15, 11, 0), "Carreno Busta"
+        )
+        assert state is not None
+        assert state.status == "postponed"
+        assert state.away_team == "Pablo Carreno Busta"
+
+    async def test_cancelado_otro_jugador_no_casa(self, provider, monkeypatch):
+        cancelled = dict(_ITF_EVENT)
+        cancelled["status"] = {"type": "canceled"}
+        prov = AllSportsTennisProvider("k", "allsportsapi2.p.rapidapi.com")
+
+        async def fake_get(client, path):
+            if "search" in path:
+                return _SEARCH_CARRENO
+            if "previous" in path:
+                return {"events": [cancelled]}
+            return {}
+
+        monkeypatch.setattr(prov, "_get_json", fake_get)
+        # El evento cancelado es de OTRO partido (Otro Rival): la pista
+        # no casa y no debe anularse nada.
+        assert (
+            await prov.find_postponed_match(
+                datetime(2026, 9, 15, 11, 0), "Jannik Sinner"
+            )
+            is None
+        )
+
+
 class TestFindMatch:
     async def test_resultado_itf_con_sets(self, provider):
         # El evento es un ITF Futures ("Montemar") — el hueco que este

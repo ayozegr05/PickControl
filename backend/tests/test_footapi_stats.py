@@ -264,6 +264,36 @@ class TestFindMatch:
         assert match is None
 
 
+class TestFindPostponed:
+    async def test_aplazado_es_match_state(self, provider, monkeypatch):
+        postponed = dict(_PREVIOUS["events"][0])
+        postponed["status"] = {"type": "postponed"}
+        prov = FootApiStatsProvider("k", "h")
+
+        async def fake_get(client, path):
+            if "previous" in path:
+                return {"events": [postponed]}
+            if "search" in path:
+                return _SEARCH
+            return {}
+
+        monkeypatch.setattr(prov, "_get_json", fake_get)
+        state = await prov.find_postponed_match(
+            datetime(2026, 9, 15, 18, 0), "Elche - Real Madrid"
+        )
+        assert state is not None
+        assert state.status == "postponed"
+        assert state.home_team == "Elche"
+
+    async def test_terminado_no_es_aplazado(self, provider):
+        assert (
+            await provider.find_postponed_match(
+                datetime(2026, 9, 15, 18, 0), "Elche - Real Madrid"
+            )
+            is None
+        )
+
+
 class TestFindMatchStats:
     async def test_stats_normalizadas_a_claves_canonicas(self, provider):
         stats = await provider.find_match_stats(

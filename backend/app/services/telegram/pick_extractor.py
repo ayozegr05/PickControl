@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -181,7 +182,7 @@ def _extract_linea(seleccion: str) -> Optional[float]:
         return number if sign == "+" else -number
 
     unsigned_match = re.search(
-        r"\b(?:over|under|más de|menos de)\s+(\d+(?:[.,]\d+)?)",
+        r"\b(?:over|under|m[aá]s(?:\s+de)?|menos(?:\s+de)?)\s+(\d+(?:[.,]\d+)?)",
         seleccion.lower(),
     )
     if unsigned_match:
@@ -734,6 +735,63 @@ def _trim_prose_seleccion(seleccion: Optional[str]) -> Optional[str]:
     return (cut[:last_space] if last_space > 40 else cut).strip()
 
 
+# Selección de ganador sin sujeto ("Ganará el encuentro", "Gana el
+# partido"): el verbo abre la etiqueta — un "Bergs gana" legítimo
+# empieza por el nombre. Cuando el sujeto falta, el pick es
+# inverificable: no se sabe qué lado del evento se apostó.
+_GENERIC_WINNER_SEL = re.compile(
+    r"^(?:gana|ganan|ganará|ganara|ganar|ganador|ganadora|vencedor)\b",
+    re.IGNORECASE,
+)
+# Lados del evento ("A - B", "A vs B", "A v B"): sirven para buscar el
+# sujeto apostado en el cuerpo del mensaje.
+_EVENTO_SIDE_SPLIT = re.compile(r"\s+vs\.?\s+|\s+-\s+|\s+v\s+", re.IGNORECASE)
+# "Crear apuesta"/"Bet Builder" como selección es la etiqueta del botón
+# del boleto, no un pick: sin patas extraídas no hay nada auditable.
+_BUILDER_SEL = re.compile(
+    r"^(?:crear?\s+(?:tu\s+)?apuesta|crea\s+tu\s+apuesta|bet\s*builder)\b",
+    re.IGNORECASE,
+)
+
+
+def _name_fold(value: str) -> str:
+    """Nombre normalizado para comparar: minúsculas, sin acentos ni
+    símbolos (markdown, emojis, banderas) y espacios colapsados."""
+    folded = unicodedata.normalize("NFD", value.lower())
+    plain = "".join(c for c in folded if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", plain)).strip()
+
+
+def _recover_winner_subject(pick: ExtractedPick, text: str) -> None:
+    """Recupera el sujeto de una selección de ganador genérica.
+
+    Los tipsters destacan al apostado en su propia línea ("➡️ Leyre
+    Romero Gormaz", "**Mérida**") aunque el LLM etiquete la selección
+    como "Ganará el encuentro". Si solo UN lado del evento aparece como
+    línea destacada del texto (el nombre solo, o nombre + "gana..."),
+    se adopta; si aparecen ambos o ninguno, es ambiguo y se deja.
+    """
+    sides = [
+        s.strip() for s in _EVENTO_SIDE_SPLIT.split(pick.evento or "") if s.strip()
+    ]
+    if len(sides) != 2 or not text:
+        return
+    folded_to_side = {_name_fold(s): s for s in sides}
+    hits: set[str] = set()
+    for line in text.splitlines():
+        norm = _name_fold(line)
+        if not norm:
+            continue
+        for folded in folded_to_side:
+            if norm == folded or (
+                norm.startswith(folded + " ")
+                and re.fullmatch(r"gan\w*(?:\s+\w+){0,3}", norm[len(folded) + 1 :])
+            ):
+                hits.add(folded)
+    if len(hits) == 1:
+        pick.seleccion = f"{folded_to_side[hits.pop()]} gana"
+
+
 def _normalize_pick(pick: ExtractedPick, text: str) -> ExtractedPick:
     """Limpieza final común a reglas y LLM: quita markdown/emojis de los
     campos de texto e infiere `deporte` de las señales del mensaje si el
@@ -753,6 +811,14 @@ def _normalize_pick(pick: ExtractedPick, text: str) -> ExtractedPick:
     if pick.es_apuesta and (pick.deporte or "").strip().lower() in _UNSUPPORTED_SPORTS:
         pick.es_apuesta = False
         pick.metodo = "rejected"
+    if pick.es_apuesta:
+        if _GENERIC_WINNER_SEL.match(pick.seleccion or ""):
+            _recover_winner_subject(pick, text)
+        if _BUILDER_SEL.match((pick.seleccion or "").strip()) and not pick.patas:
+            # Boleto "crear apuesta" sin patas extraídas: la selección es
+            # el botón de la casa, no hay nada verificable.
+            pick.es_apuesta = False
+            pick.metodo = "rejected"
     for pata in pick.patas:
         _normalize_pick(pata, text)
     return pick
@@ -873,7 +939,7 @@ Reglas:
   * Anuncios o promociones de casas de apuestas: bonos de bienvenida, supercuotas ("Suvidón", "supercuota", "multiplica tus ganancias"), "solo nuevos usuarios", "T&C", "créditos de apuesta", "regístrate".
   * Boletos ya liquidados reposteados como prueba: sello "GANADOR"/"GANADA" o "Ganancias <importe>" SIN la palabra "potenciales" (en un slip abierto siempre pone "Ganancias potenciales").
   Una apuesta abierta real es una recomendación de algo que AÚN no se ha jugado.
-- "seleccion" es SOLO la etiqueta corta del pick (máx ~10 palabras, ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5", "Menos de 3,5 goles"): nunca la frase del análisis ni la justificación — eso va en "explicacion". Si es una combinada/"crear apuesta" (varias selecciones en un mismo boleto), únelas con " + " (ej. "Más de 1 gol + Más de 2 tarjetas").
+- "seleccion" es SOLO la etiqueta corta del pick (máx ~10 palabras, ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5", "Menos de 3,5 goles"): nunca la frase del análisis ni la justificación — eso va en "explicacion". En mercados de ganador la selección DEBE nombrar al equipo/jugador apostado ("Leyre Romero gana"): nunca frases genéricas sin sujeto como "ganará el encuentro" o "gana el partido" — el nombre apostado suele estar destacado en el texto (negritas, línea propia, ➡️). Si es una combinada/"crear apuesta" (varias selecciones en un mismo boleto), únelas con " + " (ej. "Más de 1 gol + Más de 2 tarjetas").
 - "patas": SOLO si es una combinada/"crear apuesta"/acumulador (varias selecciones en un mismo boleto): un array con UN objeto por selección del boleto, cada uno con la misma estructura {"seleccion", "evento", "mercado", "linea", "deporte", "fecha_evento", "cuota"} y las mismas reglas de formato ("cuota" por pata solo si aparece explícita; si no, null). En una combinada cada pata puede ser de un partido distinto (rellena su "evento" propio) o del mismo partido (bet-builder: repite el mismo "evento" en todas). Si NO es combinada, "patas" = null. Si solo puedes identificar UNA selección, NO es combinada: "patas" = null y trátala como pick simple.
 - "evento" es el enfrentamiento concreto (ej. "Sevilla - Barcelona", "Zizou Bergs vs Jurij Rodionov"). Si el texto muestra "EquipoA - EquipoB" o "EquipoA vs EquipoB", usa ese formato completo con ambos — nunca solo uno. Si los dos participantes aparecen sueltos en el texto sin "vs" (p. ej. el rival solo se menciona en el análisis), forma el evento con ambos nombres ("Bergs vs Rodionov"). Si SOLO aparece la competición ("Copa Davis", "LaLiga") sin los dos participantes, usa la competición tal cual (sirve de pista al verificador en tenis). OJO con el OCR de boletos EN VIVO (bet365): el cruce aparece en su propia línea como "EquipoA v EquipoB" o "EquipoA 0 0 EquipoB" (el "0 0" es el marcador en directo, no parte del nombre) — usa ese cruce como "evento", NUNCA la cabecera de liga de arriba ("Italia - Serie A" no es un partido).
 - "mercado" es el tipo de apuesta: usa siempre una de estas etiquetas si aplica: "ganador", "hándicap asiático", "over/under" (o "over/under goles", "over/under juegos" según el deporte). Si es una combinada/"crear apuesta" con varias selecciones, usa "combinada". Si no encaja en ninguna, describe brevemente el mercado.

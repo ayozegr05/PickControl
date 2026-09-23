@@ -37,7 +37,7 @@ from typing import Optional
 import httpx
 
 from app.core.logging import get_logger
-from app.services.results.base import MatchResult
+from app.services.results.base import MatchResult, MatchState
 
 logger = get_logger("app.results.api_tennis")
 
@@ -87,18 +87,26 @@ def _pair_similar(hint: str, api_name: str) -> float:
     """Similitud nombre-a-nombre consciente de dobles.
 
     - Si el nombre de la API es una pareja ("Alcaraz / Munar") exige que
-      TODOS los miembros casen con el hint: un pick individual
-      "Alcaraz" no debe resolver contra un dobles del mismo jugador.
+      TODOS sus miembros casen con ALGÚN miembro del hint: un pick
+      individual "Alcaraz" no resuelve contra un dobles del mismo
+      jugador, y un "Cukierman/Shimanov" solo casa con esa pareja.
     - Si el hint trae "/" pero el nombre de la API es individual, se
       penaliza: un pick de dobles no debe casar con el individual.
     - El orden de los miembros no importa ("Munar / Alcaraz" casa igual
       que "Alcaraz / Munar").
+    - El hint también se parte por parejas: sin ello "Cukierman/Shimanov"
+      era un único token y el apellido corto nunca superaba el umbral
+      contra el miembro suelto de la API (caso real).
     """
     members = [m.strip() for m in _PAIR_SPLIT.split(api_name) if m.strip()]
+    hint_members = [m.strip() for m in _PAIR_SPLIT.split(hint) if m.strip()]
     if len(members) <= 1:
-        score = _player_similar(hint, api_name)
-        return score * 0.5 if _PAIR_SPLIT.search(hint) else score
-    return min(_player_similar(hint, m) for m in members)
+        score = max(
+            (_player_similar(h, api_name) for h in hint_members),
+            default=_player_similar(hint, api_name),
+        )
+        return score * 0.5 if len(hint_members) > 1 else score
+    return min(max(_player_similar(h, m) for h in hint_members) for m in members)
 
 
 def _parse_result(event: dict) -> Optional[MatchResult]:
@@ -227,3 +235,30 @@ class ApiTennisProvider:
         if not best_match or best_score < _MIN_PLAYER_SIMILARITY:
             return None
         return best_match
+
+    async def find_postponed_match(
+        self, date: datetime, team_hint: str
+    ) -> Optional[MatchState]:
+        """Partido aplazado/cancelado según `strStatus` de TheSportsDB
+        ("Postponed"/"Cancelled"). Reusa la caché de eventos por fecha
+        de `find_match` — no cuesta llamadas extra."""
+        async with httpx.AsyncClient(timeout=15) as client:
+            for offset in _DATE_OFFSETS:
+                date_str = (date + timedelta(days=offset)).strftime("%Y-%m-%d")
+                for event in await self._fetch_events(client, date_str):
+                    raw_status = str(event.get("strStatus") or "").lower()
+                    if "postpon" in raw_status:
+                        status = "postponed"
+                    elif "cancel" in raw_status:
+                        status = "cancelled"
+                    else:
+                        continue
+                    home = str(event.get("strHomeTeam") or "")
+                    away = str(event.get("strAwayTeam") or "")
+                    score = max(
+                        _pair_similar(team_hint, home),
+                        _pair_similar(team_hint, away),
+                    )
+                    if score >= _MIN_PLAYER_SIMILARITY:
+                        return MatchState(home_team=home, away_team=away, status=status)
+        return None

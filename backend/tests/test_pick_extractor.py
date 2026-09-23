@@ -174,6 +174,88 @@ class TestExtractEventDate:
         assert _extract_event_date(text, fecha_referencia=ref) is None
 
 
+class TestLineaNuevosPatrones:
+    def test_mas_sin_de(self):
+        # "Más 8.0 corners" (sin "de") — caso real de Dm7.
+        assert _extract_linea("Más 8.0 corners") == 8.0
+
+    def test_mas_de(self):
+        assert _extract_linea("Más de 2,5 goles") == 2.5
+
+    def test_menos_de(self):
+        assert _extract_linea("Menos de 11.0 córners") == 11.0
+
+    def test_sin_linea(self):
+        assert _extract_linea("Alcaraz gana") is None
+
+
+class TestSeleccionAmbigua:
+    """Normalizaciones de `_normalize_pick` sobre selecciones que el
+    LLM deja inverificables."""
+
+    def _pick(self, seleccion, evento=None, deporte="tenis", patas=None):
+        return ExtractedPick(
+            es_apuesta=True,
+            deporte=deporte,
+            evento=evento,
+            mercado="ganador",
+            seleccion=seleccion,
+            cuota=1.5,
+            stake=4,
+            patas=patas or [],
+        )
+
+    def test_ganador_generico_recupera_el_sujeto(self):
+        # Caso real (id=2468): "Ganará el encuentro" + el apostado
+        # destacado en su propia línea del mensaje.
+        text = (
+            "🏆 Tenis - Copa Davis 🌎\n\n"
+            "**➡️** Leyre Romero Gormaz\n\n"
+            "📈 Cuota 1.53     💰 Stake 4\n\n"
+            "Leyre Romero tiene un cruce para morder a Hercog..."
+        )
+        pick = self._pick(
+            "Ganará el encuentro",
+            evento="Leyre Romero Gormaz vs Polona Hercog",
+        )
+        out = _normalize_pick(pick, text)
+        assert out.seleccion == "Leyre Romero Gormaz gana"
+
+    def test_ganador_generico_ambiguo_no_inventa(self):
+        # Los dos lados aparecen como línea propia: no se puede saber.
+        text = "Mérida\nExtremadura\nCuota 1.80 Stake 3"
+        pick = self._pick("Ganará el encuentro", evento="Mérida - Extremadura")
+        out = _normalize_pick(pick, text)
+        assert out.seleccion == "Ganará el encuentro"
+
+    def test_ganador_con_sujeto_no_se_toca(self):
+        pick = self._pick("Alcaraz gana", evento="Alcaraz - Sinner")
+        out = _normalize_pick(pick, "Cuota 1.5")
+        assert out.seleccion == "Alcaraz gana"
+
+    def test_crear_apuesta_sin_patas_se_rechaza(self):
+        # Caso real (id=2825): la selección es el botón del boleto.
+        pick = self._pick(
+            "Crear apuesta", evento="Barcelona - Paris FC", deporte="fútbol"
+        )
+        out = _normalize_pick(pick, "CREAR APUESTA CUOTA 91")
+        assert out.es_apuesta is False
+        assert out.metodo == "rejected"
+
+    def test_crear_apuesta_con_patas_se_conserva(self):
+        pata = ExtractedPick(
+            es_apuesta=True, seleccion="Barcelona gana", mercado="ganador"
+        )
+        pick = self._pick(
+            "Crear apuesta",
+            evento="Barcelona - Paris FC",
+            deporte="fútbol",
+            patas=[pata, pata.model_copy()],
+        )
+        out = _normalize_pick(pick, "CREAR APUESTA CUOTA 91")
+        assert out.es_apuesta is True
+
+
 class TestSanitizeEventDate:
     def test_descarta_fecha_muy_antigua(self):
         # Caso real: el LLM devolvió 2023 para un mensaje de 2026.

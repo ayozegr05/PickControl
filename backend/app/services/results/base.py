@@ -161,6 +161,17 @@ class MatchStats:
     values: dict[str, tuple[int, int]]
 
 
+# `status.type` de Sofascore -> `status` de MatchState. Lo comparten los
+# tres providers del mirror Sofascore (tennisapi1, allsportsapi2,
+# footapi7). Los parados a mitad (interrupted/abandoned/suspended) NO
+# anulan: con marcador parcial la casa paga los mercados ya decididos.
+SOFASCORE_VOIDED_STATUSES = {
+    "postponed": "postponed",
+    "canceled": "cancelled",
+    "cancelled": "cancelled",
+}
+
+
 @dataclass
 class MatchState:
     """Fixture localizado que NO llegó a jugarse (aplazado/cancelado).
