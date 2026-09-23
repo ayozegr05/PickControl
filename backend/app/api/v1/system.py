@@ -21,6 +21,8 @@ class ProvidersStatus(BaseModel):
 
     rate_limited: dict[str, str]
     missed_by_provider: dict[str, int]
+    calls_today: dict[str, int]
+    calls_by_day: dict[str, dict[str, int]]
 
 
 @router.get("/providers", response_model=ProvidersStatus)

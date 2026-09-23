@@ -57,6 +57,7 @@ from app.services.results.base import (
     SOFASCORE_VOIDED_STATUSES,
     MatchResult,
     MatchState,
+    count_provider_call,
     is_missed,
     is_rate_limited,
     log_remaining_quota,
@@ -178,6 +179,9 @@ class _DirectTransport:
                 headers=self._HEADERS,
                 timeout=_TIMEOUT,
             )
+            # Cada respuesta cuenta — un 403/HTML también es un hit
+            # que Cloudflare registra en su edge.
+            count_provider_call(self.name)
         except Exception as exc:  # noqa: BLE001 — curl_cffi lanza varios
             logger.warning("[SOFASCORE-DIRECT] Error de red (%s): %s", path, exc)
             return None

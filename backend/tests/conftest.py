@@ -22,6 +22,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+import app.services.results.base as results_base
 import app.services.results.response_cache as response_cache
 from app.db.postgres import get_session
 from app.main import app
@@ -33,6 +34,10 @@ def _isolated_provider_cache(tmp_path, monkeypatch):
     """Los tests nunca leen ni escriben el `provider_cache.json` real."""
     monkeypatch.setattr(response_cache, "_CACHE", {})
     monkeypatch.setattr(response_cache, "_CACHE_FILE", tmp_path / "provider_cache.json")
+    # Tampoco el `provider_state.json` real (misses, rate-limits,
+    # contadores de llamadas).
+    monkeypatch.setattr(results_base, "_STATE", None)
+    monkeypatch.setattr(results_base, "_STATE_FILE", tmp_path / "provider_state.json")
 
 
 @pytest_asyncio.fixture
