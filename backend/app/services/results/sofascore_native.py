@@ -102,18 +102,44 @@ class _Transport(Protocol):
 
 
 class _DirectTransport:
-    """www.sofascore.com vía curl_cffi (TLS fingerprint de Chrome)."""
+    """www.sofascore.com vía curl_cffi (TLS fingerprint de Chrome).
+
+    Cuidados anti-baneo, deliberados:
+
+    - Sesión persistente: conserva las cookies `cf_clearance` que
+      Cloudflare emite tras un desafío superado — sin ellas cada
+      llamada volvería a desafiar y la ráfaga de desafíos es justo
+      lo que escala a baneo de IP.
+    - Headers de navegador (Referer/Accept): la API espera venir del
+      frontend; pedir "a pelo" destaca el fingerprint.
+    - Un 200 con HTML (página de desafío, no JSON) marca rate-limited:
+      seguir llamando a través de un challenge es la forma rápida de
+      caer en la lista negra. Se reintenta mañana.
+    """
 
     name = "sofascore_direct"
+    _session: Optional[object] = None
+
+    _HEADERS = {
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.sofascore.com/",
+    }
+
+    @classmethod
+    def _get_session(cls):
+        if cls._session is None:
+            cls._session = cffi_requests.Session(impersonate="chrome")
+        return cls._session
 
     async def get_json(self, path: str) -> Optional[dict]:
         if is_rate_limited(self.name):
             return None
         try:
+            session = self._get_session()
             response = await asyncio.to_thread(
-                cffi_requests.get,
+                session.get,
                 f"{_BASE}{path}",
-                impersonate="chrome",
+                headers=self._HEADERS,
                 timeout=_TIMEOUT,
             )
         except Exception as exc:  # noqa: BLE001 — curl_cffi lanza varios
@@ -137,6 +163,13 @@ class _DirectTransport:
         try:
             data = response.json()
         except ValueError:
+            # 200 pero HTML: página de desafío de Cloudflare. No
+            # insistir — marca sin cuota hasta mañana igual que un 403.
+            mark_rate_limited(self.name)
+            logger.warning(
+                "[SOFASCORE-DIRECT] Respuesta no-JSON (desafío "
+                "Cloudflare); se omite hasta mañana"
+            )
             return None
         return data if isinstance(data, dict) else None
 
