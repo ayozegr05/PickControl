@@ -67,6 +67,7 @@ from app.services.results.sofascore_native import (
     SofaScoreNativeResultsProvider,
     direct_transport,
     rapidapi_transport,
+    sofascore6_transport,
 )
 from app.services.results.tennisapi1 import TennisApi1Provider
 
@@ -1435,6 +1436,21 @@ async def _get_providers() -> list[ResultsProvider]:
                     rapidapi_transport(
                         "sportapi7",
                         settings.rapidapi_sportapi7_host,
+                        settings.rapidapi_tennis_key,
+                    ),
+                    sport,
+                )
+            )
+    # Espejo sofascore6 (rutas propias traducidas por el transporte) —
+    # misma posición tardía en la cascada, cuota diaria propia.
+    if getattr(settings, "rapidapi_sofascore6_enabled", False) and (
+        settings.rapidapi_tennis_key
+    ):
+        for sport in ("futbol", "tenis", "baloncesto"):
+            providers.append(
+                SofaScoreNativeResultsProvider(
+                    sofascore6_transport(
+                        settings.rapidapi_sofascore6_host,
                         settings.rapidapi_tennis_key,
                     ),
                     sport,

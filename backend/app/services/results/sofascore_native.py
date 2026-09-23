@@ -219,9 +219,135 @@ class _RapidApiTransport:
             return None
 
 
+class _SofaScore6Transport:
+    """Espejo RapidAPI `sofascore6`: mismos ids de Sofascore pero rutas
+    y formas de respuesta propias (verificado en vivo 2026-09-23).
+
+    Traduce las rutas nativas `/api/v1` que emite el provider a su
+    esquema real y reenvuelve la respuesta al formato nativo — el
+    provider no nota la diferencia:
+
+        /api/v1/search/all?q={n}              -> /api/sofascore/v1/search/all?q={n}
+            respuesta: lista -> {"results": [...]}
+        /api/v1/team/{id}/events/last/{p}     -> /api/sofascore/v1/team/matches/finished?team_id=&page=
+        /api/v1/team/{id}/events/next/{p}     -> /api/sofascore/v1/team/matches/upcoming?team_id=&page=
+            respuesta: {"matches": [...]} -> {"events": [...]} con
+            `timestamp` renombrado a `startTimestamp`
+        /api/v1/event/{id}/odds/1/all         -> /api/sofascore/v1/match/odds?match_id=
+            respuesta: lista de mercados -> {"markets": [...]} con
+            `name` -> marketName y `value.decimal` -> fractionalValue
+            (odds_to_decimal acepta el decimal directo)
+    """
+
+    def __init__(self, host: str, api_key: str, name: str = "sofascore6") -> None:
+        self.name = name
+        self._host = host
+        self._headers = {
+            "X-RapidAPI-Key": api_key,
+            "X-RapidAPI-Host": host,
+        }
+
+    @staticmethod
+    def _map_path(path: str) -> Optional[str]:
+        """Ruta nativa -> ruta sofascore6, o None si no hay equivalente."""
+        import re
+
+        m = re.match(r"^/api/v1/search/all\?q=(.+)$", path)
+        if m:
+            return f"/api/sofascore/v1/search/all?q={m.group(1)}"
+        m = re.match(r"^/api/v1/team/(\d+)/events/(last|next)/(\d+)$", path)
+        if m:
+            kind = "finished" if m.group(2) == "last" else "upcoming"
+            return (
+                f"/api/sofascore/v1/team/matches/{kind}"
+                f"?team_id={m.group(1)}&page={m.group(3)}"
+            )
+        m = re.match(r"^/api/v1/event/(\d+)/odds/1/all$", path)
+        if m:
+            return f"/api/sofascore/v1/match/odds?match_id={m.group(1)}"
+        return None
+
+    @staticmethod
+    def _normalize(path: str, data: object) -> Optional[dict]:
+        """Respuesta sofascore6 -> forma nativa que espera el provider."""
+        if "/search/all" in path:
+            return {"results": data if isinstance(data, list) else []}
+        if "/events/" in path:
+            if not isinstance(data, dict):
+                return None
+            events = []
+            for ev in data.get("matches") or []:
+                if isinstance(ev, dict) and "timestamp" in ev:
+                    ev["startTimestamp"] = ev["timestamp"]
+                events.append(ev)
+            return {"events": events}
+        if "/odds/" in path:
+            markets = []
+            for mkt in data if isinstance(data, list) else []:
+                choices = []
+                for ch in mkt.get("choices") or []:
+                    choices.append(
+                        {
+                            "name": ch.get("name"),
+                            # odds_to_decimal acepta numérico directo
+                            "fractionalValue": (ch.get("value") or {}).get("decimal"),
+                            "initialFractionalValue": (
+                                ch.get("initialValue") or {}
+                            ).get("decimal"),
+                        }
+                    )
+                markets.append(
+                    {
+                        "marketName": mkt.get("name"),
+                        "choiceGroup": mkt.get("choiceGroup"),
+                        "isLive": mkt.get("isLive"),
+                        "suspended": mkt.get("suspended"),
+                        "choices": choices,
+                    }
+                )
+            return {"markets": markets}
+        return data if isinstance(data, dict) else None
+
+    async def get_json(self, path: str) -> Optional[dict]:
+        if is_rate_limited(self.name):
+            return None
+        mapped = self._map_path(path)
+        if mapped is None:
+            logger.warning("[SOFASCORE6] Ruta nativa sin equivalente: %s", path)
+            return {}
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                response = await client.get(
+                    f"https://{self._host}{mapped}", headers=self._headers
+                )
+            if response.status_code == 404:
+                return {}
+            response.raise_for_status()
+            log_remaining_quota(self.name, response)
+            return self._normalize(path, response.json())
+        except httpx.HTTPError as exc:
+            if rate_limit_from(exc):
+                mark_rate_limited(self.name)
+                logger.warning(
+                    "[SOFASCORE:%s] Cuota agotada o sin suscripción; "
+                    "se omite hasta mañana",
+                    self.name,
+                )
+            else:
+                logger.warning(
+                    "[SOFASCORE:%s] Error de API (%s): %s", self.name, path, exc
+                )
+            return None
+
+
 def rapidapi_transport(name: str, host: str, api_key: str) -> _RapidApiTransport:
     """Factoría pública para registrar espejos desde la configuración."""
     return _RapidApiTransport(name=name, host=host, api_key=api_key)
+
+
+def sofascore6_transport(host: str, api_key: str) -> _SofaScore6Transport:
+    """Factoría para el espejo sofascore6 (rutas propias)."""
+    return _SofaScore6Transport(host=host, api_key=api_key)
 
 
 def direct_transport() -> _DirectTransport:

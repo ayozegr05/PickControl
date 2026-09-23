@@ -53,6 +53,7 @@ from app.services.results.sofascore_native import (
     SofaScoreNativeOddsProvider,
     direct_transport,
     rapidapi_transport,
+    sofascore6_transport,
 )
 from app.services.results.verifier import (
     _SPORT_ALIASES,
@@ -118,6 +119,17 @@ async def _get_odds_providers() -> list[OddsProvider]:
                     rapidapi_transport(
                         "sportapi7",
                         settings.rapidapi_sportapi7_host,
+                        settings.rapidapi_tennis_key,
+                    ),
+                    sports=frozenset({"tenis", "futbol"}),
+                )
+            )
+        # Espejo sofascore6 (rutas propias) — otro respaldo de cuota.
+        if getattr(settings, "rapidapi_sofascore6_enabled", False):
+            providers.append(
+                SofaScoreNativeOddsProvider(
+                    sofascore6_transport(
+                        settings.rapidapi_sofascore6_host,
                         settings.rapidapi_tennis_key,
                     ),
                     sports=frozenset({"tenis", "futbol"}),
