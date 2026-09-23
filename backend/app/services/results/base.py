@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import date as date_type
 from datetime import datetime, timedelta
@@ -37,12 +38,25 @@ _SCORE_SUBSET = 0.85
 _SCORE_SUPSET = 0.75
 
 
+def fold_name(text: str) -> str:
+    """Minúsculas sin acentos ni diacríticos ("Mérida"→"merida",
+    "Šeško"→"sesko", "Garín"→"garin").
+
+    Las APIs deportivas romanizan los nombres y los tipsters escriben
+    con acentos: sin plegar, `"garín" in "cristian garin"` es False y
+    el partido no casa aunque sea el correcto. Casos reales perdidos:
+    "Mérida vs Garín", "Báez", "Čilić", "Džumhur".
+    """
+    folded = unicodedata.normalize("NFD", text.lower())
+    return "".join(c for c in folded if not unicodedata.combining(c))
+
+
 def _similar(a: str, b: str) -> float:
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+    return SequenceMatcher(None, fold_name(a), fold_name(b)).ratio()
 
 
 def _tokens(text: str) -> set[str]:
-    return set(_WORD_PATTERN.findall(text.lower()))
+    return set(_WORD_PATTERN.findall(fold_name(text)))
 
 
 def _part_score(part: str, team: str) -> float:

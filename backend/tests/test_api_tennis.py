@@ -76,6 +76,28 @@ class TestPairSimilar:
         assert _pair_similar("Cukierman/Paris", "Cukierman / Shimanov") < 0.6
 
 
+class TestAccentFolding:
+    """Las APIs romanizan nombres ("Daniel Merida", "Cristian Garin")
+    y los tipsters escriben con acentos ("Mérida", "Garín"): sin
+    plegar, el apellido no aparece como substring y el match fallaba.
+    Caso real: "Mérida vs Garín" 20-sep-2026."""
+
+    def test_acentos_en_hint_casa_con_api_sin_acentos(self):
+        assert _player_similar("Garín", "Cristian Garin") >= 0.6
+
+    def test_acentos_en_api_casa_con_hint_sin_acentos(self):
+        assert _player_similar("Merida", "Daniel Mérida") >= 0.6
+
+    def test_evento_con_acentos_casa(self):
+        from app.services.results.base import match_score
+
+        assert match_score("Mérida vs Garín", "Cristian Garin", "Daniel Merida") >= 0.6
+
+    def test_acentos_no_relajan_de_mas(self):
+        # Plegar no debe hacer casar jugadores distintos.
+        assert _player_similar("Mérida", "Daniel Medvedev") < 0.6
+
+
 class TestParseResult:
     """Formato real de TheSportsDB:
     strResult="Siniakova  beat Udvardy  2-0\\r\\nSiniakova : 6 6..."."""

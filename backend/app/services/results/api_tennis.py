@@ -37,7 +37,7 @@ from typing import Optional
 import httpx
 
 from app.core.logging import get_logger
-from app.services.results.base import MatchResult, MatchState
+from app.services.results.base import MatchResult, MatchState, fold_name
 
 logger = get_logger("app.results.api_tennis")
 
@@ -72,8 +72,8 @@ def _player_similar(hint: str, api_name: str) -> float:
     nombre de la API (el apellido), elevamos la similitud por encima
     del umbral.
     """
-    hint_low = hint.lower().strip()
-    api_low = re.sub(r"[.\-'/]", " ", api_name).lower().strip()
+    hint_low = fold_name(hint).strip()
+    api_low = re.sub(r"[.\-'/]", " ", fold_name(api_name)).strip()
     direct = _similar(hint_low, api_low)
     surname_hit = any(w in api_low for w in hint_low.split() if len(w) >= 4)
     return max(direct, 0.8) if surname_hit else direct

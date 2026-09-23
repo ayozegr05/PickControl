@@ -27,6 +27,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.models.odds_snapshot import OddsEvent, OddsSnapshot
 from app.models.parsed_pick import ParsedPick
 from app.services.results.api_tennis import _pair_similar
+from app.services.results.base import fold_name
 from app.services.results.verifier import (
     _detect_over_under_direction,
     _extract_handicap_team,
@@ -60,7 +61,7 @@ _GROUP_LINE = re.compile(r"^\(([-+]?\d+(?:\.\d+)?)\)")
 
 
 def _similar(a: str, b: str) -> float:
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+    return SequenceMatcher(None, fold_name(a), fold_name(b)).ratio()
 
 
 def _side_index(team: str, event: OddsEvent) -> Optional[int]:
