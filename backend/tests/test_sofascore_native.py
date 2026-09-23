@@ -197,23 +197,38 @@ class _FakeResponse:
 
 
 class TestDirectTransport:
+    @staticmethod
+    def _mock_session(monkeypatch, response):
+        class _Session:
+            def get(self, *a, **k):
+                return response
+
+        monkeypatch.setattr(_DirectTransport, "_session", _Session())
+
     async def test_404_es_lista_vacia(self, monkeypatch):
-        monkeypatch.setattr(
-            native.cffi_requests,
-            "get",
-            lambda *a, **k: _FakeResponse(404),
-        )
+        self._mock_session(monkeypatch, _FakeResponse(404))
         transport = _DirectTransport()
         assert await transport.get_json("/api/v1/team/1/events/next/0") == {}
 
     async def test_403_marca_rate_limited(self, monkeypatch):
         marked = []
         monkeypatch.setattr(native, "mark_rate_limited", marked.append)
-        monkeypatch.setattr(
-            native.cffi_requests,
-            "get",
-            lambda *a, **k: _FakeResponse(403),
-        )
+        self._mock_session(monkeypatch, _FakeResponse(403))
+        transport = _DirectTransport()
+        assert await transport.get_json("/api/v1/search/all?q=x") is None
+        assert marked == ["sofascore_direct"]
+
+    async def test_200_html_marca_rate_limited(self, monkeypatch):
+        """Un 200 con HTML (desafío Cloudflare) se trata como bloqueo:
+        no se insiste a través del challenge."""
+        marked = []
+        monkeypatch.setattr(native, "mark_rate_limited", marked.append)
+
+        class _HtmlResponse(_FakeResponse):
+            def json(self):
+                raise ValueError("not json")
+
+        self._mock_session(monkeypatch, _HtmlResponse(200))
         transport = _DirectTransport()
         assert await transport.get_json("/api/v1/search/all?q=x") is None
         assert marked == ["sofascore_direct"]
