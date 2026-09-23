@@ -129,9 +129,9 @@ class _DirectTransport:
 
     # Segundos mínimos entre llamadas directas — anti-ráfaga.
     # Conservador a propósito: el directo solo ve desbordamiento de
-    # las cuotas, así que ir lento no cuesta nada y reduce el
-    # fingerprint de bot ante Cloudflare.
-    _MIN_INTERVAL = 1.5
+    # las cuotas y corre en segundo plano — ir lento no cuesta nada
+    # y deja un ritmo indistinguible de navegación humana.
+    _MIN_INTERVAL = 5.0
     _pace_lock = asyncio.Lock()
     _last_call = 0.0
 
