@@ -1455,8 +1455,9 @@ async def _get_providers() -> list[ResultsProvider]:
     # Cuota ilimitada pero es API interna protegida por Cloudflare —
     # cuanto menos volumen reciba, menor riesgo de baneo de IP. Si un
     # día no resuelve algo, se reintenta al día siguiente, no se insiste.
-    for sport in ("futbol", "tenis", "baloncesto"):
-        providers.append(SofaScoreNativeResultsProvider(direct_transport(), sport))
+    if getattr(settings, "sofascore_direct_enabled", True):
+        for sport in ("futbol", "tenis", "baloncesto"):
+            providers.append(SofaScoreNativeResultsProvider(direct_transport(), sport))
     return providers
 
 

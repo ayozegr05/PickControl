@@ -112,6 +112,11 @@ class Settings(BaseSettings):
     # suscribir el plan BASIC y activar el flag.
     rapidapi_sofascore6_enabled: bool = False
     rapidapi_sofascore6_host: str = "sofascore6.p.rapidapi.com"
+    # Kill-switch del acceso DIRECTO a la API nativa de Sofascore
+    # (curl_cffi, sin cuota pero tras Cloudflare). True por defecto;
+    # poner false apaga esa vía por completo sin tocar código — útil
+    # si algún día aparecen bloqueos 403 en los logs.
+    sofascore_direct_enabled: bool = True
     # Notificaciones push vía Expo Push API (gratis, sin Firebase para
     # el caso básico). `push_notifications_enabled` apaga el envío sin
     # tocar código (dev/tests); `expo_access_token` solo hace falta para

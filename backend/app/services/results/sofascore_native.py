@@ -140,6 +140,11 @@ class _DirectTransport:
         "Referer": "https://www.sofascore.com/",
     }
 
+    # Dedup de llamadas EN VUELO: si dos picks concurrentes piden la
+    # misma ruta con la caché fría, comparten UNA petición en vez de
+    # disparar dos idénticas — menos volumen ante Cloudflare.
+    _inflight: dict = {}
+
     @classmethod
     def _get_session(cls):
         if cls._session is None:
@@ -149,6 +154,17 @@ class _DirectTransport:
     async def get_json(self, path: str) -> Optional[dict]:
         if is_rate_limited(self.name):
             return None
+        task = self._inflight.get(path)
+        if task is not None:
+            return await task
+        task = asyncio.ensure_future(self._fetch_once(path))
+        self._inflight[path] = task
+        try:
+            return await task
+        finally:
+            self._inflight.pop(path, None)
+
+    async def _fetch_once(self, path: str) -> Optional[dict]:
         async with self._pace_lock:
             wait = self._MIN_INTERVAL - (time.monotonic() - self._last_call)
             if wait > 0:

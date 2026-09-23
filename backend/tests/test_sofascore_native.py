@@ -4,6 +4,7 @@ Los transportes se sustituyen por fakes — no se toca red ni los JSON
 de estado/caché reales.
 """
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -241,6 +242,30 @@ class TestDirectTransport:
         transport = _DirectTransport()
         assert await transport.get_json("/api/v1/search/all?q=x") is None
         assert marked == ["sofascore_direct"]
+
+    async def test_llamadas_concurrentes_identicas_se_deduplican(self, monkeypatch):
+        """Dos picks pidiendo la misma ruta a la vez comparten UNA
+        petición — no se duplica la llamada ante Cloudflare."""
+        calls = []
+
+        class _Session:
+            def get(self, *a, **k):
+                calls.append(a)
+
+                import time as _t
+
+                _t.sleep(0.05)  # ventana para que llegue el duplicado
+                return _FakeResponse(200, {"ok": 1})
+
+        monkeypatch.setattr(_DirectTransport, "_session", _Session())
+        monkeypatch.setattr(_DirectTransport, "_inflight", {})
+        transport = _DirectTransport()
+        a, b = await asyncio.gather(
+            transport.get_json("/api/v1/search/all?q=x"),
+            transport.get_json("/api/v1/search/all?q=x"),
+        )
+        assert a == {"ok": 1} and b == {"ok": 1}
+        assert len(calls) == 1
 
 
 class TestRapidApiTransport:

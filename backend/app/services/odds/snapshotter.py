@@ -135,11 +135,12 @@ async def _get_odds_providers() -> list[OddsProvider]:
             )
     # Último recurso: API nativa (ilimitada pero protegida por
     # Cloudflare). Solo ve el tráfico que desborda las cuotas.
-    providers.append(
-        SofaScoreNativeOddsProvider(
-            direct_transport(), sports=frozenset({"tenis", "futbol"})
+    if getattr(settings, "sofascore_direct_enabled", True):
+        providers.append(
+            SofaScoreNativeOddsProvider(
+                direct_transport(), sports=frozenset({"tenis", "futbol"})
+            )
         )
-    )
     return providers
 
 
