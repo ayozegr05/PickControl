@@ -1,0 +1,63 @@
+# Stack de producción para la VM Oracle (ARM aarch64 — todas las
+# imágenes son multi-arch: python:slim, postgres:alpine tienen ARM64).
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Convive con el stack checkcoast en la misma VM:
+#   - La TLS la termina el Caddy YA EXISTENTE (checkcoast-caddy);
+#     basta añadir el snippet de deploy/Caddyfile.snippet.
+#   - El backend queda en :8000 del host; el Security List de Oracle
+#     debe mantener 8000 CERRADO a internet (solo 80/443 abiertos).
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: controlpick-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?definir en .env del host}
+      POSTGRES_DB: controlpick
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    # Sin `ports:` — la BD NO se expone al host ni a internet; solo
+    # alcanza el backend por la red interna de compose.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d controlpick"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: controlpick-backend
+    restart: unless-stopped
+    env_file:
+      # Copia de backend/.env SIN valores multilinea (Docker no los
+      # soporta en env_file). Los secretos nunca entran al repo.
+      - ./backend/.env.docker
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${DB_PASSWORD}@db:5432/controlpick
+      NODE_ENV: production
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      # Estado que debe sobrevivir a rebuilds: sesión Telethon,
+      # media (evidencia OCR), cachés/misses de providers, dumps.
+      - ./backend/controlpick_telegram.session:/app/controlpick_telegram.session
+      - ./backend/media:/app/media
+      - ./backend/provider_state.json:/app/provider_state.json
+      - ./backend/provider_cache.json:/app/provider_cache.json
+      - ./backend/backups:/app/backups
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
+    # --workers 1: los loops (verifier/snapshotter/Telethon) viven en
+    # proceso; con más workers arrancarían duplicados.
+
+volumes:
+  db_data:
