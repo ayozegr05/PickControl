@@ -1421,12 +1421,9 @@ async def _get_providers() -> list[ResultsProvider]:
                 settings.rapidapi_tennis_key, settings.rapidapi_allsports_host
             )
         )
-    # Último recurso para los tres deportes: API nativa de Sofascore
-    # (cuota ilimitada vía curl_cffi) y el espejo sportapi7 cuando se
-    # suscriba. Van al final: es API interna — cuanto menos se use,
-    # mejor (un bloqueo Cloudflare tumbaría la vía gratis).
-    for sport in ("futbol", "tenis", "baloncesto"):
-        providers.append(SofaScoreNativeResultsProvider(direct_transport(), sport))
+    # Espejos RapidAPI de Sofascore (mismos datos, cuota diaria propia
+    # de 100/día cada uno): se gastan ANTES que el acceso directo —
+    # preferible agotar cuota renovable a exponer la IP a Cloudflare.
     if getattr(settings, "rapidapi_sportapi7_enabled", False) and (
         settings.rapidapi_tennis_key
     ):
@@ -1441,8 +1438,6 @@ async def _get_providers() -> list[ResultsProvider]:
                     sport,
                 )
             )
-    # Espejo sofascore6 (rutas propias traducidas por el transporte) —
-    # misma posición tardía en la cascada, cuota diaria propia.
     if getattr(settings, "rapidapi_sofascore6_enabled", False) and (
         settings.rapidapi_tennis_key
     ):
@@ -1456,6 +1451,12 @@ async def _get_providers() -> list[ResultsProvider]:
                     sport,
                 )
             )
+    # Último recurso absoluto: API nativa de Sofascore vía curl_cffi.
+    # Cuota ilimitada pero es API interna protegida por Cloudflare —
+    # cuanto menos volumen reciba, menor riesgo de baneo de IP. Si un
+    # día no resuelve algo, se reintenta al día siguiente, no se insiste.
+    for sport in ("futbol", "tenis", "baloncesto"):
+        providers.append(SofaScoreNativeResultsProvider(direct_transport(), sport))
     return providers
 
 

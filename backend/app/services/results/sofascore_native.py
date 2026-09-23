@@ -10,9 +10,12 @@ por Cloudflare con fingerprinting TLS: `httpx`/`curl` reciben 403,
 Dos transportes sobre las mismas rutas:
 
 - `direct`:  www.sofascore.com via curl_cffi — cuota ILIMITADA, sin
-             key. Riesgo: API interna — Cloudflare puede endurecerse;
-             va como ÚLTIMO recurso de resultados (poca exposición) y
-             como primero de odds (donde se quema la cuota de verdad).
+             key. Riesgo: API interna — Cloudflare puede endurecerse o
+             banear la IP si el volumen levanta sospechas. Por eso va
+             como ÚLTIMO recurso en resultados Y en odds: las cuotas
+             renovables de RapidAPI se gastan primero y el directo
+             solo absorbe el desbordamiento. Ante un desafío no se
+             insiste: se marca sin cuota y se reintenta mañana.
 - `rapidapi`: espejos que exponen las rutas nativas bajo RapidAPI
              (sportapi7). Misma key de cuenta; suscripción aparte de
              100/día que el usuario activa a mano. Si no está
@@ -38,6 +41,7 @@ partidos — se traduce a lista vacía, no a error.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Protocol
 from urllib.parse import quote
@@ -112,6 +116,9 @@ class _DirectTransport:
       lo que escala a baneo de IP.
     - Headers de navegador (Referer/Accept): la API espera venir del
       frontend; pedir "a pelo" destaca el fingerprint.
+    - Paso de cortesía: mínimo `_MIN_INTERVAL` segundos entre llamadas
+      — un navegador real no dispara peticiones a ráfaga; las ráfagas
+      son lo que marca el fingerprint de bot.
     - Un 200 con HTML (página de desafío, no JSON) marca rate-limited:
       seguir llamando a través de un challenge es la forma rápida de
       caer en la lista negra. Se reintenta mañana.
@@ -119,6 +126,11 @@ class _DirectTransport:
 
     name = "sofascore_direct"
     _session: Optional[object] = None
+
+    # Segundos mínimos entre llamadas directas — anti-ráfaga.
+    _MIN_INTERVAL = 0.8
+    _pace_lock = asyncio.Lock()
+    _last_call = 0.0
 
     _HEADERS = {
         "Accept": "application/json, text/plain, */*",
@@ -134,6 +146,11 @@ class _DirectTransport:
     async def get_json(self, path: str) -> Optional[dict]:
         if is_rate_limited(self.name):
             return None
+        async with self._pace_lock:
+            wait = self._MIN_INTERVAL - (time.monotonic() - self._last_call)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            type(self)._last_call = time.monotonic()
         try:
             session = self._get_session()
             response = await asyncio.to_thread(
