@@ -61,7 +61,13 @@ from app.services.results.base import (
 from app.services.results.footapi_stats import FootApiStatsProvider
 from app.services.results.football_data import FootballDataProvider
 from app.services.results.rapidapi_tennis import RapidApiTennisProvider
+from app.services.results.scores365 import Scores365Provider
 from app.services.results.sofascore_basketball import SofascoreBasketballProvider
+from app.services.results.sofascore_native import (
+    SofaScoreNativeResultsProvider,
+    direct_transport,
+    rapidapi_transport,
+)
 from app.services.results.tennisapi1 import TennisApi1Provider
 
 logger = get_logger("app.results.verifier")
@@ -1344,6 +1350,10 @@ async def _get_providers() -> list[ResultsProvider]:
         providers.append(
             ApiFootballProvider(settings.api_football_key, settings.api_football_host)
         )
+    # 365scores: webservice público sin key ni cuota documentada — una
+    # llamada trae TODOS los partidos del día del deporte. Va antes de
+    # los mirrors RapidAPI para ahorrarles la cuota diaria.
+    providers.append(Scores365Provider("futbol"))
     # footapi7 (Sofascore vía RapidAPI): sin ventana de fechas ni plan que
     # la limite. Rescata marcadores de ligas menores y stats (córners,
     # tarjetas, tiros) que API-Football ya no puede consultar fuera de su
@@ -1360,6 +1370,10 @@ async def _get_providers() -> list[ResultsProvider]:
     # último recurso para Challenger/ITF.
     if settings.api_tennis_key:
         providers.append(ApiTennisProvider(settings.api_tennis_key))
+    # 365scores para tenis: cubre ATP/WTA/Challenger/ITF/dobles en una
+    # llamada por fecha — absorbe el grueso de los misses de los
+    # mirrors RapidAPI que van después.
+    providers.append(Scores365Provider("tenis"))
     if settings.rapidapi_tennis_key:
         providers.append(
             RapidApiTennisProvider(
@@ -1398,12 +1412,34 @@ async def _get_providers() -> list[ResultsProvider]:
     # API-Basketball. Comparte la cuota diaria de allsportsapi2 con
     # tenis/odds (misma suscripción), pero los picks de basket son tan
     # raros que el gasto real es despreciable.
+    # 365scores para basket: mismo feed por fecha, sin cuota.
+    providers.append(Scores365Provider("baloncesto"))
     if settings.rapidapi_tennis_key:
         providers.append(
             SofascoreBasketballProvider(
                 settings.rapidapi_tennis_key, settings.rapidapi_allsports_host
             )
         )
+    # Último recurso para los tres deportes: API nativa de Sofascore
+    # (cuota ilimitada vía curl_cffi) y el espejo sportapi7 cuando se
+    # suscriba. Van al final: es API interna — cuanto menos se use,
+    # mejor (un bloqueo Cloudflare tumbaría la vía gratis).
+    for sport in ("futbol", "tenis", "baloncesto"):
+        providers.append(SofaScoreNativeResultsProvider(direct_transport(), sport))
+    if getattr(settings, "rapidapi_sportapi7_enabled", False) and (
+        settings.rapidapi_tennis_key
+    ):
+        for sport in ("futbol", "tenis", "baloncesto"):
+            providers.append(
+                SofaScoreNativeResultsProvider(
+                    rapidapi_transport(
+                        "sportapi7",
+                        settings.rapidapi_sportapi7_host,
+                        settings.rapidapi_tennis_key,
+                    ),
+                    sport,
+                )
+            )
     return providers
 
 

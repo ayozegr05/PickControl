@@ -14,6 +14,7 @@ import pytest
 
 import app.services.results.footapi_stats as footapi
 from app.models.parsed_pick import ParsedPick
+from app.services.results.api_basketball import ApiBasketballProvider
 from app.services.results.sofascore_basketball import SofascoreBasketballProvider
 from app.services.results.verifier import verify_pick
 
@@ -220,4 +221,15 @@ class TestRegistroEnVerifier:
             ),
         )
         providers = await verifier._get_providers()
-        assert isinstance(providers[-1], SofascoreBasketballProvider)
+        # El fallback allsportsapi2 va tras el primario API-Basketball
+        # (detrás solo pueden quedar los nativos Sofascore, último
+        # recurso por diseño).
+        api_idx = next(
+            i for i, p in enumerate(providers) if isinstance(p, ApiBasketballProvider)
+        )
+        fb_idx = next(
+            i
+            for i, p in enumerate(providers)
+            if isinstance(p, SofascoreBasketballProvider)
+        )
+        assert fb_idx > api_idx

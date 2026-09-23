@@ -99,6 +99,13 @@ class Settings(BaseSettings):
     # Reutiliza RAPIDAPI_TENNIS_KEY; el histórico es ilimitado en el
     # plan gratis — solo lo consume scripts/backfill_historical_odds.py.
     rapidapi_oddspapi_host: str = "bet36528.p.rapidapi.com"
+    # Espejo RapidAPI con rutas nativas de Sofascore (/api/v1/...):
+    # "SportAPI" (sportapi7). Reutiliza RAPIDAPI_TENNIS_KEY y aporta
+    # otra cuota diaria propia — pero hay que suscribirlo a mano en la
+    # cuenta RapidAPI. Apagado por defecto: activar con
+    # RAPIDAPI_SPORTAPI7_ENABLED=true tras suscribir el plan BASIC.
+    rapidapi_sportapi7_enabled: bool = False
+    rapidapi_sportapi7_host: str = "sportapi7.p.rapidapi.com"
     # Notificaciones push vía Expo Push API (gratis, sin Firebase para
     # el caso básico). `push_notifications_enabled` apaga el envío sin
     # tocar código (dev/tests); `expo_access_token` solo hace falta para
