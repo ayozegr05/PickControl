@@ -50,6 +50,7 @@ from app.services.results.base import (
     fold_name,
     is_missed,
     is_rate_limited,
+    log_remaining_quota,
     mark_missed,
     mark_rate_limited,
     miss_is_provisional,
@@ -183,6 +184,7 @@ class AllSportsTennisProvider:
                 f"https://{self._api_host}{path}", headers=self._headers()
             )
             response.raise_for_status()
+            log_remaining_quota(_PROVIDER_NAME, response)
             data = response.json()
             return data if isinstance(data, dict) else None
         except httpx.HTTPError as exc:

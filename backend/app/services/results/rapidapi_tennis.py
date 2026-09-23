@@ -37,6 +37,7 @@ from app.services.results.base import (
     MatchResult,
     is_missed,
     is_rate_limited,
+    log_remaining_quota,
     mark_missed,
     mark_rate_limited,
     miss_is_provisional,
@@ -162,6 +163,7 @@ class RapidApiTennisProvider:
                 },
             )
             response.raise_for_status()
+            log_remaining_quota(_PROVIDER_NAME, response)
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
                 mark_rate_limited(_PROVIDER_NAME)

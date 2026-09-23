@@ -29,6 +29,7 @@ doble oportunidad, ambos marcan, empate no válido):
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
@@ -1406,6 +1407,24 @@ async def _get_providers() -> list[ResultsProvider]:
     return providers
 
 
+# Concurrencia: hasta _PICK_CONCURRENCY picks se verifican en paralelo,
+# pero cada proveedor solo atiende _PROVIDER_CONCURRENCY llamadas
+# simultáneas — protege la cuota diaria frente a ráfagas (429) que
+# tumbarían la suscripción hasta mañana.
+_PICK_CONCURRENCY = 3
+_PROVIDER_CONCURRENCY = 2
+_provider_sems: dict[str, asyncio.Semaphore] = {}
+
+
+def _provider_sem(provider: ResultsProvider) -> asyncio.Semaphore:
+    """Semáforo por suscripción: `NAME` agrupa providers que comparten
+    cuota (allsportsapi2 sirve tenis, basket y odds — misma llave)."""
+    name = getattr(provider, "NAME", None) or type(provider).__name__
+    if name not in _provider_sems:
+        _provider_sems[name] = asyncio.Semaphore(_PROVIDER_CONCURRENCY)
+    return _provider_sems[name]
+
+
 async def _find_match_across_providers(
     date: datetime,
     team_hint: str,
@@ -1414,7 +1433,8 @@ async def _find_match_across_providers(
 ) -> Optional[MatchResult]:
     for provider in providers:
         try:
-            match = await provider.find_match(date, team_hint)
+            async with _provider_sem(provider):
+                match = await provider.find_match(date, team_hint)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "[RESULTS_VERIFIER] Error consultando proveedor para pick id=%s: %s",
@@ -1440,7 +1460,8 @@ async def _find_stats_across_providers(
         if finder is None:
             continue
         try:
-            stats = await finder(date, team_hint)
+            async with _provider_sem(provider):
+                stats = await finder(date, team_hint)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "[RESULTS_VERIFIER] Error consultando stats para pick id=%s: %s",
@@ -1467,7 +1488,8 @@ async def _find_stats_1h_across_providers(
         if finder is None:
             continue
         try:
-            stats = await finder(date, team_hint)
+            async with _provider_sem(provider):
+                stats = await finder(date, team_hint)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "[RESULTS_VERIFIER] Error consultando stats 1H para pick " "id=%s: %s",
@@ -1493,7 +1515,8 @@ async def _find_events_across_providers(
         if finder is None:
             continue
         try:
-            events = await finder(date, team_hint)
+            async with _provider_sem(provider):
+                events = await finder(date, team_hint)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "[RESULTS_VERIFIER] Error consultando events para pick id=%s: %s",
@@ -1519,7 +1542,8 @@ async def _find_players_across_providers(
         if finder is None:
             continue
         try:
-            players = await finder(date, team_hint)
+            async with _provider_sem(provider):
+                players = await finder(date, team_hint)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "[RESULTS_VERIFIER] Error consultando players para pick id=%s: %s",
@@ -1546,7 +1570,8 @@ async def _find_postponed_across_providers(
         if finder is None:
             continue
         try:
-            state = await finder(date, team_hint)
+            async with _provider_sem(provider):
+                state = await finder(date, team_hint)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "[RESULTS_VERIFIER] Error consultando aplazados para pick id=%s: %s",
@@ -2140,8 +2165,26 @@ async def verify_pending_picks() -> int:
             len(pending),
         )
 
-        for pick in pending:
-            acierto, anulada = await verify_pick(pick, providers)
+        # Verificación concurrente: hasta _PICK_CONCURRENCY picks en
+        # paralelo (cada proveedor capado por _provider_sem). Las
+        # escrituras a la sesión se aplican después, en orden — la
+        # sesión async no es segura entre tareas.
+        pick_sem = asyncio.Semaphore(_PICK_CONCURRENCY)
+
+        async def _verify_one(p: ParsedPick):
+            async with pick_sem:
+                try:
+                    return p, await verify_pick(p, providers)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "[RESULTS_VERIFIER] Error verificando pick id=%s: %s",
+                        p.id,
+                        exc,
+                    )
+                    return p, (None, False)
+
+        outcomes = await asyncio.gather(*(_verify_one(p) for p in pending))
+        for pick, (acierto, anulada) in outcomes:
             if acierto is not None or anulada:
                 pick.acierto = acierto
                 pick.anulada = anulada

@@ -55,6 +55,27 @@ def _similar(a: str, b: str) -> float:
     return SequenceMatcher(None, fold_name(a), fold_name(b)).ratio()
 
 
+def log_remaining_quota(provider_name: str, response: httpx.Response) -> None:
+    """Cuota restante según headers de RapidAPI en una llamada que ya
+    se hizo (`x-ratelimit-requests-remaining`): telemetría gratis —
+    avisa cuando quedan pocas llamadas para el día."""
+    headers = getattr(response, "headers", None) or {}
+    remaining = headers.get("x-ratelimit-requests-remaining")
+    if remaining is None:
+        return
+    try:
+        left = int(remaining)
+    except ValueError:
+        return
+    limit = headers.get("x-ratelimit-requests-limit") or "?"
+    if left <= 20:
+        logger.warning(
+            "[QUOTA] %s: quedan %s/%s llamadas hoy", provider_name, left, limit
+        )
+    else:
+        logger.debug("[QUOTA] %s: %s/%s", provider_name, left, limit)
+
+
 def _tokens(text: str) -> set[str]:
     return set(_WORD_PATTERN.findall(fold_name(text)))
 
