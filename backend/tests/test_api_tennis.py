@@ -17,6 +17,7 @@ import app.services.results.rapidapi_tennis as rapidapi_tennis
 import app.services.results.tennisapi1 as tennisapi1
 from app.services.results.api_tennis import (
     ApiTennisProvider,
+    _pair_similar,
     _parse_result,
     _player_similar,
 )
@@ -48,6 +49,31 @@ class TestPlayerSimilar:
 
     def test_apellido_distinto_aunque_comparta_inicial(self):
         assert _player_similar("Carlos Alcaraz", "C. Gomez") < 0.6
+
+
+class TestPairSimilar:
+    """Matching consciente de dobles: el pick "A/B" solo casa con la
+    pareja "A / B" completa, nunca con un individual ni con otra pareja."""
+
+    def test_pareja_casa_con_pareja(self):
+        assert _pair_similar("Alcaraz / Munar", "Alcaraz C / Munar I") >= 0.6
+
+    def test_pareja_orden_invertido_casa(self):
+        assert _pair_similar("Munar / Alcaraz", "Alcaraz C / Munar I") >= 0.6
+
+    def test_pareja_sin_espacios_en_el_hint(self):
+        # Caso real: "Cukierman/Shimanov" — el "/" unía los apellidos en
+        # un solo token y ningún miembro superaba el umbral solo.
+        assert _pair_similar("Cukierman/Shimanov", "Cukierman / Shimanov") >= 0.6
+
+    def test_individual_no_casa_con_pareja(self):
+        assert _pair_similar("Alcaraz", "Alcaraz C / Munar I") < 0.6
+
+    def test_pareja_no_casa_con_individual(self):
+        assert _pair_similar("Alcaraz / Munar", "Carlos Alcaraz") < 0.6
+
+    def test_pareja_distinta_no_casa(self):
+        assert _pair_similar("Cukierman/Paris", "Cukierman / Shimanov") < 0.6
 
 
 class TestParseResult:
@@ -141,6 +167,77 @@ class TestApiTennisProvider:
 
         await provider.find_match(datetime(2026, 9, 15), "Sinner")
         assert len(calls) == 3  # todo desde caché
+
+    async def test_partido_aplazado_es_match_state(self, monkeypatch):
+        payload = {
+            "events": [
+                {
+                    "strEvent": "Droguet vs Cassone",
+                    "strHomeTeam": "Droguet",
+                    "strAwayTeam": "Cassone",
+                    "strStatus": "Postponed",
+                }
+            ]
+        }
+        monkeypatch.setattr(
+            api_tennis.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient([], payload),
+        )
+        provider = ApiTennisProvider("3")
+        state = await provider.find_postponed_match(
+            datetime(2026, 9, 15), "Titouan Droguet"
+        )
+        assert state is not None
+        assert state.status == "postponed"
+        assert state.home_team == "Droguet"
+
+    async def test_partido_cancelado_es_match_state(self, monkeypatch):
+        payload = {
+            "events": [
+                {
+                    "strEvent": "Droguet vs Cassone",
+                    "strHomeTeam": "Droguet",
+                    "strAwayTeam": "Cassone",
+                    "strStatus": "Cancelled",
+                }
+            ]
+        }
+        monkeypatch.setattr(
+            api_tennis.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient([], payload),
+        )
+        provider = ApiTennisProvider("3")
+        state = await provider.find_postponed_match(
+            datetime(2026, 9, 15), "Titouan Droguet"
+        )
+        assert state is not None
+        assert state.status == "cancelled"
+
+    async def test_partido_jugado_no_es_aplazado(self, monkeypatch):
+        payload = {
+            "events": [
+                {
+                    "strEvent": "Droguet vs Cassone",
+                    "strHomeTeam": "Droguet",
+                    "strAwayTeam": "Cassone",
+                    "strStatus": "Match Finished",
+                }
+            ]
+        }
+        monkeypatch.setattr(
+            api_tennis.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient([], payload),
+        )
+        provider = ApiTennisProvider("3")
+        assert (
+            await provider.find_postponed_match(
+                datetime(2026, 9, 15), "Titouan Droguet"
+            )
+            is None
+        )
 
 
 class TestRapidApiTennisProvider:
@@ -343,6 +440,52 @@ class TestTennisApi1Provider:
         provider = TennisApi1Provider("k", "tennisapi1.p.rapidapi.com")
         assert await provider.find_match(datetime(2026, 9, 15), "Nadal") is None
         assert results_base.is_rate_limited("tennisapi1")
+
+    async def test_partido_aplazado_en_el_barrido_es_match_state(self, monkeypatch):
+        # Sin jugador en /search (results vacío): se llega al barrido de
+        # categorías, donde el evento aplazado casa con la pista.
+        payload = {
+            "events": [
+                {
+                    "status": {"type": "postponed"},
+                    "homeTeam": {"name": "Carlos Alcaraz"},
+                    "awayTeam": {"name": "Ben Shelton"},
+                }
+            ]
+        }
+        monkeypatch.setattr(
+            tennisapi1.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient([], payload),
+        )
+        provider = TennisApi1Provider("k", "tennisapi1.p.rapidapi.com")
+        state = await provider.find_postponed_match(datetime(2026, 9, 15), "Alcaraz")
+        assert state is not None
+        assert state.status == "postponed"
+        assert state.home_team == "Carlos Alcaraz"
+
+    async def test_partido_interrumpido_no_anula(self, monkeypatch):
+        # "interrupted"/"abandoned" llevan marcador parcial y la casa
+        # paga los mercados ya decididos: NO son anulación.
+        payload = {
+            "events": [
+                {
+                    "status": {"type": "interrupted"},
+                    "homeTeam": {"name": "Carlos Alcaraz"},
+                    "awayTeam": {"name": "Ben Shelton"},
+                }
+            ]
+        }
+        monkeypatch.setattr(
+            tennisapi1.httpx,
+            "AsyncClient",
+            lambda **kw: _CountingClient([], payload),
+        )
+        provider = TennisApi1Provider("k", "tennisapi1.p.rapidapi.com")
+        assert (
+            await provider.find_postponed_match(datetime(2026, 9, 15), "Alcaraz")
+            is None
+        )
 
 
 class _ErrorClient:

@@ -44,9 +44,11 @@ from app.core.logging import get_logger
 from app.services.results.api_tennis import _pair_similar
 from app.services.results.base import (
     MISSED_TTL_PROVISIONAL,
+    SOFASCORE_VOIDED_STATUSES,
     MatchEvents,
     MatchPlayers,
     MatchResult,
+    MatchState,
     MatchStats,
     is_missed,
     is_rate_limited,
@@ -340,6 +342,24 @@ class FootApiStatsProvider:
             away_score=away_score,
             ht_home_score=ht_home,
             ht_away_score=ht_away,
+        )
+
+    async def find_postponed_match(
+        self, date: datetime, team_hint: str
+    ) -> Optional[MatchState]:
+        """Partido aplazado/cancelado: `_find_event` devuelve el evento
+        que mejor casa aunque no haya terminado, así que basta mirar su
+        `status.type`. Reusa las cachés de resultados/stats — gratis."""
+        event = await self._find_event(date, team_hint)
+        if event is None:
+            return None
+        status = (event.get("status") or {}).get("type")
+        if status not in SOFASCORE_VOIDED_STATUSES:
+            return None
+        return MatchState(
+            home_team=(event.get("homeTeam") or {}).get("name") or "",
+            away_team=(event.get("awayTeam") or {}).get("name") or "",
+            status=SOFASCORE_VOIDED_STATUSES[status],
         )
 
     async def _stats_for_period(

@@ -54,7 +54,9 @@ from app.core.logging import get_logger
 from app.services.results.api_tennis import _pair_similar
 from app.services.results.base import (
     MISSED_TTL_PROVISIONAL,
+    SOFASCORE_VOIDED_STATUSES,
     MatchResult,
+    MatchState,
     is_missed,
     is_rate_limited,
     mark_missed,
@@ -419,3 +421,65 @@ class TennisApi1Provider:
                 mark_missed(miss_key)
             return None
         return best_match
+
+    async def find_postponed_match(
+        self, date: datetime, team_hint: str
+    ) -> Optional[MatchState]:
+        """Partido aplazado/cancelado: reusa las cachés de `find_match`
+        (search/near/categorías), así que casi nunca cuesta llamadas
+        extra. Solo corre para picks >72 h, cuando la casa ya habría
+        devuelto la apuesta de un partido no disputado."""
+        if is_rate_limited(_PROVIDER_NAME):
+            return None
+
+        def _voided(event: dict) -> Optional[MatchState]:
+            status = (event.get("status") or {}).get("type")
+            if status not in SOFASCORE_VOIDED_STATUSES:
+                return None
+            if not _event_matches_hint(event, team_hint):
+                return None
+            return MatchState(
+                home_team=(event.get("homeTeam") or {}).get("name") or "",
+                away_team=(event.get("awayTeam") or {}).get("name") or "",
+                status=SOFASCORE_VOIDED_STATUSES[status],
+            )
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            name = _searchable_name(team_hint)
+            player_id = get_entity_id(_PROVIDER_NAME, name)
+            if player_id is None:
+                search = await self._fetch_search(client, name)
+                if search is None:
+                    return None
+                player_id = _best_player_id(name, search)
+                if player_id is not None:
+                    set_entity_id(_PROVIDER_NAME, name, player_id)
+            if player_id is not None:
+                near = await self._fetch_near(client, player_id, date)
+                if near is None:
+                    return None
+                for event in near:
+                    ts = event.get("startTimestamp")
+                    if ts:
+                        played = datetime.fromtimestamp(ts, timezone.utc).replace(
+                            tzinfo=None
+                        )
+                        if abs(played - date) > _PLAYER_DATE_TOLERANCE:
+                            continue
+                    state = _voided(event)
+                    if state:
+                        return state
+
+            for offset in _DATE_OFFSETS:
+                day = date + timedelta(days=offset)
+                for category_id in _CATEGORIES:
+                    if is_rate_limited(_PROVIDER_NAME):
+                        return None
+                    events = await self._fetch_events(client, category_id, day)
+                    if events is None:
+                        continue
+                    for event in events:
+                        state = _voided(event)
+                        if state:
+                            return state
+        return None

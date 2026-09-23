@@ -44,7 +44,9 @@ from app.core.logging import get_logger
 from app.services.results.api_tennis import _player_similar
 from app.services.results.base import (
     MISSED_TTL_PROVISIONAL,
+    SOFASCORE_VOIDED_STATUSES,
     MatchResult,
+    MatchState,
     is_missed,
     is_rate_limited,
     mark_missed,
@@ -320,3 +322,55 @@ class AllSportsTennisProvider:
                 mark_missed(miss_key)
             return None
         return best_match
+
+    async def find_postponed_match(
+        self, date: datetime, team_hint: str
+    ) -> Optional[MatchState]:
+        """Partido aplazado/cancelado en el historial del jugador/pareja.
+        Reusa las cachés de `find_match` (search + previous): corre tras
+        la cadena de resultados y casi nunca cuesta llamadas extra."""
+        if is_rate_limited(_PROVIDER_NAME):
+            return None
+        hint = team_hint.strip()
+        if not hint:
+            return None
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            for side in _hint_sides(hint)[:2]:
+                if is_rate_limited(_PROVIDER_NAME):
+                    return None
+                name = _searchable_name(side)
+                entity_id = get_entity_id(self.NAME, name)
+                if entity_id is None:
+                    results = await self._search(client, name)
+                    if results is None:
+                        continue
+                    entity_id = _best_entity_id(side, results)
+                    if entity_id is not None:
+                        set_entity_id(self.NAME, name, entity_id)
+                if entity_id is None:
+                    continue
+                events = await self._previous_events(client, entity_id, date)
+                if events is None:
+                    continue
+                for event in events:
+                    ts = event.get("startTimestamp")
+                    if ts:
+                        played = datetime.fromtimestamp(ts, timezone.utc).replace(
+                            tzinfo=None
+                        )
+                        if abs(played - date) > _DATE_TOLERANCE:
+                            continue
+                    status = (event.get("status") or {}).get("type")
+                    if status not in SOFASCORE_VOIDED_STATUSES:
+                        continue
+                    home = (event.get("homeTeam") or {}).get("name") or ""
+                    away = (event.get("awayTeam") or {}).get("name") or ""
+                    if _hint_match_score(hint, home, away) < _MIN_PLAYER_SIMILARITY:
+                        continue
+                    return MatchState(
+                        home_team=home,
+                        away_team=away,
+                        status=SOFASCORE_VOIDED_STATUSES[status],
+                    )
+        return None
