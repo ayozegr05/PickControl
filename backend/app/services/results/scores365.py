@@ -42,6 +42,7 @@ from app.services.results.base import (
     MISSED_TTL_PROVISIONAL,
     MatchResult,
     MatchState,
+    count_provider_call,
     is_missed,
     is_rate_limited,
     mark_missed,
@@ -161,6 +162,7 @@ class Scores365Provider:
     async def _get_json(self, client: httpx.AsyncClient, url: str) -> Optional[dict]:
         try:
             response = await client.get(url, timeout=15)
+            count_provider_call(_PROVIDER_NAME)
             response.raise_for_status()
             data = response.json()
             return data if isinstance(data, dict) else None

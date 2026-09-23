@@ -5,6 +5,8 @@ import { apiRequest } from "./client";
 export interface ProvidersStatus {
   rate_limited: Record<string, string>;
   missed_by_provider: Record<string, number>;
+  calls_today: Record<string, number>;
+  calls_by_day: Record<string, Record<string, number>>;
 }
 
 export function getProvidersStatus(): Promise<ProvidersStatus> {

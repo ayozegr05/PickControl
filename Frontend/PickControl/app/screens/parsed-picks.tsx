@@ -254,6 +254,7 @@ export default function ParsedPicksScreen() {
     const names = new Set<string>([
       ...Object.keys(providersStatus.rate_limited),
       ...Object.keys(providersStatus.missed_by_provider),
+      ...Object.keys(providersStatus.calls_today ?? {}),
     ]);
     return [...names]
       .sort((a, b) => {
@@ -266,6 +267,7 @@ export default function ParsedPicksScreen() {
         name,
         limitedSince: providersStatus.rate_limited[name] ?? null,
         misses: providersStatus.missed_by_provider[name] ?? 0,
+        callsToday: providersStatus.calls_today?.[name] ?? 0,
       }));
   }, [providersStatus]);
 
@@ -554,6 +556,11 @@ export default function ParsedPicksScreen() {
                       ? `sin cuota hoy (${row.limitedSince})`
                       : "ok"}
                   </Text>
+                  {row.callsToday > 0 && (
+                    <Text style={styles.providerMisses}>
+                      {row.callsToday} llamada{row.callsToday !== 1 ? "s" : ""} hoy
+                    </Text>
+                  )}
                   {row.misses > 0 && (
                     <Text style={styles.providerMisses}>
                       {row.misses} miss{row.misses !== 1 ? "es" : ""}

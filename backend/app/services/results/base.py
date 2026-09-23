@@ -59,6 +59,7 @@ def log_remaining_quota(provider_name: str, response: httpx.Response) -> None:
     """Cuota restante según headers de RapidAPI en una llamada que ya
     se hizo (`x-ratelimit-requests-remaining`): telemetría gratis —
     avisa cuando quedan pocas llamadas para el día."""
+    count_provider_call(provider_name)
     headers = getattr(response, "headers", None) or {}
     remaining = headers.get("x-ratelimit-requests-remaining")
     if remaining is None:
@@ -315,6 +316,7 @@ def _load_state() -> dict[str, dict[str, str]]:
             _STATE = {}
         _STATE.setdefault("rate_limited", {})
         _STATE.setdefault("missed", {})
+        _STATE.setdefault("calls", {})
     return _STATE
 
 
@@ -327,10 +329,27 @@ def _save_state() -> None:
         k: v for k, v in state["rate_limited"].items() if v >= today
     }
     state["missed"] = {k: v for k, v in state["missed"].items() if v >= cutoff}
+    # Contadores de llamadas: retener solo la última semana.
+    calls_cutoff = (date_type.today() - timedelta(days=7)).isoformat()
+    state["calls"] = {k: v for k, v in state["calls"].items() if k >= calls_cutoff}
     try:
         _STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
     except OSError as exc:
         logger.warning("[RESULTS] No se pudo guardar provider_state.json: %s", exc)
+
+
+def count_provider_call(provider_name: str) -> None:
+    """Cuenta una llamada HTTP real al proveedor (métrica por día).
+
+    Persistido en `provider_state.json` bajo `calls` — alimenta
+    `providers_snapshot` para la vista de sistema. Sirve para
+    vigilar el volumen ante Cloudflare (sofascore_direct) y el
+    consumo real de cada suscripción.
+    """
+    today = date_type.today().isoformat()
+    calls = _load_state()["calls"].setdefault(today, {})
+    calls[provider_name] = int(calls.get(provider_name, 0)) + 1
+    _save_state()
 
 
 def mark_rate_limited(provider_name: str) -> None:
@@ -379,9 +398,13 @@ def providers_snapshot() -> dict:
         prov_key = key[5:] if key.startswith("odds|") else key
         provider = prov_key.split("|", 1)[0]
         missed_by_provider[provider] = missed_by_provider.get(provider, 0) + 1
+    today = date_type.today().isoformat()
+    calls = state.get("calls", {})
     return {
         "rate_limited": dict(state["rate_limited"]),
         "missed_by_provider": missed_by_provider,
+        "calls_today": dict(calls.get(today, {})),
+        "calls_by_day": dict(calls),
     }
 
 

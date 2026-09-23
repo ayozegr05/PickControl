@@ -267,6 +267,27 @@ class TestDirectTransport:
         assert a == {"ok": 1} and b == {"ok": 1}
         assert len(calls) == 1
 
+    async def test_cada_respuesta_cuenta_en_snapshot(self, monkeypatch):
+        """La métrica diaria cuenta TODAS las respuestas (incluidos
+        403/HTML) — lo que Cloudflare registra en su edge."""
+        from app.services.results import base as results_base
+
+        self._mock_session(monkeypatch, _FakeResponse(200, {"ok": 1}))
+        transport = _DirectTransport()
+        await transport.get_json("/api/v1/search/all?q=x")
+        snap = results_base.providers_snapshot()
+        assert snap["calls_today"]["sofascore_direct"] == 1
+
+    def test_contador_agrega_por_provider_y_dia(self):
+        from app.services.results import base as results_base
+
+        results_base.count_provider_call("sofascore_direct")
+        results_base.count_provider_call("sofascore_direct")
+        results_base.count_provider_call("sportapi7")
+        snap = results_base.providers_snapshot()
+        assert snap["calls_today"]["sofascore_direct"] == 2
+        assert snap["calls_today"]["sportapi7"] == 1
+
 
 class TestRapidApiTransport:
     async def test_404_es_lista_vacia(self, monkeypatch):
