@@ -89,11 +89,9 @@ async def _get_odds_providers() -> list[OddsProvider]:
     # Sofascore directo primero: cuota ilimitada (API nativa vía
     # curl_cffi) — absorbe el grueso de resoluciones y capturas; las
     # suscripciones RapidAPI quedan como respaldo si Cloudflare cierra.
-    providers.append(
-        SofaScoreNativeOddsProvider(
-            direct_transport(), sports=frozenset({"tenis", "futbol"})
-        )
-    )
+    # Espejos RapidAPI primero: cuota renovable antes que exponer la
+    # IP a Cloudflare. El directo queda de último recurso — absorbe el
+    # desbordamiento cuando las cuotas diarias se secan.
     if settings.rapidapi_tennis_key:
         providers.append(
             SofaScoreOddsProvider(
@@ -135,6 +133,13 @@ async def _get_odds_providers() -> list[OddsProvider]:
                     sports=frozenset({"tenis", "futbol"}),
                 )
             )
+    # Último recurso: API nativa (ilimitada pero protegida por
+    # Cloudflare). Solo ve el tráfico que desborda las cuotas.
+    providers.append(
+        SofaScoreNativeOddsProvider(
+            direct_transport(), sports=frozenset({"tenis", "futbol"})
+        )
+    )
     return providers
 
 
