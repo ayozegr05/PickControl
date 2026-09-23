@@ -13,6 +13,7 @@ from app.services.results.sofascore_native import (
     SofaScoreNativeResultsProvider,
     _DirectTransport,
     _RapidApiTransport,
+    _SofaScore6Transport,
 )
 
 _PLAYER_ID = 338890
@@ -195,6 +196,14 @@ class _FakeResponse:
     def json(self):
         return self._payload
 
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            import httpx
+
+            raise httpx.HTTPStatusError(
+                f"HTTP {self.status_code}", request=None, response=None
+            )
+
 
 class TestDirectTransport:
     @staticmethod
@@ -249,3 +258,93 @@ class TestRapidApiTransport:
         monkeypatch.setattr(native.httpx, "AsyncClient", lambda **k: _Client())
         transport = _RapidApiTransport("sportapi7", "sportapi7.p.rapidapi.com", "k")
         assert await transport.get_json("/api/v1/team/1/events/next/0") == {}
+
+
+class TestSofaScore6Transport:
+    """El transporte traduce rutas nativas /api/v1 al esquema propio
+    de sofascore6 y reenvuelve las respuestas al formato nativo."""
+
+    def test_map_path_search(self):
+        t = _SofaScore6Transport("h", "k")
+        assert t._map_path("/api/v1/search/all?q=merida") == (
+            "/api/sofascore/v1/search/all?q=merida"
+        )
+
+    def test_map_path_events(self):
+        t = _SofaScore6Transport("h", "k")
+        assert t._map_path("/api/v1/team/338890/events/last/1") == (
+            "/api/sofascore/v1/team/matches/finished?team_id=338890&page=1"
+        )
+        assert t._map_path("/api/v1/team/338890/events/next/0") == (
+            "/api/sofascore/v1/team/matches/upcoming?team_id=338890&page=0"
+        )
+
+    def test_map_path_odds(self):
+        t = _SofaScore6Transport("h", "k")
+        assert t._map_path("/api/v1/event/17124652/odds/1/all") == (
+            "/api/sofascore/v1/match/odds?match_id=17124652"
+        )
+
+    def test_map_path_desconocida(self):
+        t = _SofaScore6Transport("h", "k")
+        assert t._map_path("/api/v1/otra/cosa") is None
+
+    def test_normalize_search_lista(self):
+        data = _SofaScore6Transport._normalize(
+            "/api/v1/search/all?q=x", [{"entity": {"id": 1}}]
+        )
+        assert data == {"results": [{"entity": {"id": 1}}]}
+
+    def test_normalize_matches_renombra_timestamp(self):
+        data = _SofaScore6Transport._normalize(
+            "/api/v1/team/1/events/last/0",
+            {"matches": [{"id": 5, "timestamp": _EVENT_TS}]},
+        )
+        assert data == {
+            "events": [{"id": 5, "timestamp": _EVENT_TS, "startTimestamp": _EVENT_TS}]
+        }
+
+    def test_normalize_odds_a_markets(self):
+        data = _SofaScore6Transport._normalize(
+            "/api/v1/event/1/odds/1/all",
+            [
+                {
+                    "name": "Full time",
+                    "choiceGroup": "Home/Away",
+                    "isLive": False,
+                    "suspended": False,
+                    "choices": [
+                        {
+                            "name": "1",
+                            "value": {"decimal": 3.25},
+                            "initialValue": {"decimal": 3.10},
+                        }
+                    ],
+                }
+            ],
+        )
+        market = data["markets"][0]
+        assert market["marketName"] == "Full time"
+        assert market["choices"][0]["fractionalValue"] == 3.25
+        assert market["choices"][0]["initialFractionalValue"] == 3.10
+
+    async def test_get_json_end_to_end(self, monkeypatch):
+        """Ruta nativa -> mapped -> respuesta normalizada."""
+        captured = {}
+
+        class _Client:
+            async def get(self, url, headers=None):
+                captured["url"] = url
+                return _FakeResponse(200, [{"entity": {"id": 1}}])
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+        monkeypatch.setattr(native.httpx, "AsyncClient", lambda **k: _Client())
+        t = _SofaScore6Transport("sofascore6.p.rapidapi.com", "k")
+        data = await t.get_json("/api/v1/search/all?q=merida")
+        assert captured["url"].endswith("/api/sofascore/v1/search/all?q=merida")
+        assert data == {"results": [{"entity": {"id": 1}}]}

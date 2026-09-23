@@ -106,6 +106,12 @@ class Settings(BaseSettings):
     # RAPIDAPI_SPORTAPI7_ENABLED=true tras suscribir el plan BASIC.
     rapidapi_sportapi7_enabled: bool = False
     rapidapi_sportapi7_host: str = "sportapi7.p.rapidapi.com"
+    # Espejo "SofaScore" (sofascore6): mismos ids pero rutas propias
+    # (/api/sofascore/v1/...) — el transporte las traduce. También
+    # reutiliza RAPIDAPI_TENNIS_KEY con cuota diaria propia tras
+    # suscribir el plan BASIC y activar el flag.
+    rapidapi_sofascore6_enabled: bool = False
+    rapidapi_sofascore6_host: str = "sofascore6.p.rapidapi.com"
     # Notificaciones push vía Expo Push API (gratis, sin Firebase para
     # el caso básico). `push_notifications_enabled` apaga el envío sin
     # tocar código (dev/tests); `expo_access_token` solo hace falta para
