@@ -47,6 +47,7 @@ from app.services.results.base import (
     SOFASCORE_VOIDED_STATUSES,
     MatchResult,
     MatchState,
+    fold_name,
     is_missed,
     is_rate_limited,
     mark_missed,
@@ -109,13 +110,13 @@ def _side_score(side: str, entity_name: str) -> float:
         return 0.0
     if len(entity_members) == 1:
         return _player_similar(side, entity_name)
-    entity_tokens = set(re.findall(r"\w+", entity_name.lower()))
+    entity_tokens = set(re.findall(r"\w+", fold_name(entity_name)))
     matched = sum(
         1
         for member in side_members
         if any(
             token in entity_tokens
-            for token in member.lower().split()
+            for token in fold_name(member).split()
             if len(token) >= 3
         )
     )

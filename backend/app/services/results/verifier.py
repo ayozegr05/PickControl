@@ -54,6 +54,7 @@ from app.services.results.base import (
     MatchResult,
     MatchStats,
     ResultsProvider,
+    fold_name,
     match_reversed,
 )
 from app.services.results.footapi_stats import FootApiStatsProvider
@@ -271,7 +272,7 @@ _HT_FT_PATTERN = re.compile(
 
 
 def _similar(a: str, b: str) -> float:
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+    return SequenceMatcher(None, fold_name(a), fold_name(b)).ratio()
 
 
 def _clean_team_name(raw: str) -> str:
@@ -623,8 +624,8 @@ def _player_name_matches(hint: str, name: str) -> bool:
     """
     if _similar(hint, name) >= _MIN_TEAM_SIMILARITY:
         return True
-    hint_tokens = set(re.findall(r"\w+", hint.lower()))
-    name_tokens = set(re.findall(r"\w+", name.lower()))
+    hint_tokens = set(re.findall(r"\w+", fold_name(hint)))
+    name_tokens = set(re.findall(r"\w+", fold_name(name)))
     return bool(hint_tokens) and hint_tokens <= name_tokens
 
 
@@ -761,8 +762,8 @@ def _detect_player_prop(
     if not player:
         return None
     if evento:
-        player_tokens = set(re.findall(r"\w+", player.lower()))
-        evento_tokens = set(re.findall(r"\w+", evento.lower()))
+        player_tokens = set(re.findall(r"\w+", fold_name(player)))
+        evento_tokens = set(re.findall(r"\w+", fold_name(evento)))
         if player_tokens and player_tokens <= evento_tokens:
             return None
     return (player, stat_keys, direction, resolved_linea)
