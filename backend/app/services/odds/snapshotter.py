@@ -49,6 +49,11 @@ from app.models.parsed_pick import ParsedPick
 from app.services.odds.base import EventRef, OddsProvider
 from app.services.odds.sofascore import SofaScoreOddsProvider
 from app.services.results.base import is_missed, mark_missed
+from app.services.results.sofascore_native import (
+    SofaScoreNativeOddsProvider,
+    direct_transport,
+    rapidapi_transport,
+)
 from app.services.results.verifier import (
     _SPORT_ALIASES,
     _extract_predicted_team,
@@ -80,6 +85,14 @@ async def _get_odds_providers() -> list[OddsProvider]:
     """
     settings = get_settings()
     providers: list[OddsProvider] = []
+    # Sofascore directo primero: cuota ilimitada (API nativa vía
+    # curl_cffi) — absorbe el grueso de resoluciones y capturas; las
+    # suscripciones RapidAPI quedan como respaldo si Cloudflare cierra.
+    providers.append(
+        SofaScoreNativeOddsProvider(
+            direct_transport(), sports=frozenset({"tenis", "futbol"})
+        )
+    )
     if settings.rapidapi_tennis_key:
         providers.append(
             SofaScoreOddsProvider(
@@ -97,6 +110,19 @@ async def _get_odds_providers() -> list[OddsProvider]:
                 sports=frozenset({"tenis"}),
             )
         )
+        # Espejo sportapi7 (rutas nativas, cuota diaria propia) — solo
+        # si el usuario lo suscribió y activó el flag.
+        if getattr(settings, "rapidapi_sportapi7_enabled", False):
+            providers.append(
+                SofaScoreNativeOddsProvider(
+                    rapidapi_transport(
+                        "sportapi7",
+                        settings.rapidapi_sportapi7_host,
+                        settings.rapidapi_tennis_key,
+                    ),
+                    sports=frozenset({"tenis", "futbol"}),
+                )
+            )
     return providers
 
 

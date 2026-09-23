@@ -22,3 +22,7 @@ openai>=1.0,<2.0
 # Telegram: cliente de usuario (Telethon) para escuchar canales, sustituye
 # a `node-telegram-bot-api` del backend Node retirado.
 telethon>=1.44,<2.0
+
+# API nativa de Sofascore: atraviesa el fingerprinting TLS de Cloudflare
+# (httpx/curl reciben 403). Usado por sofascore_native — cuota ilimitada.
+curl-cffi>=0.8,<1.0
