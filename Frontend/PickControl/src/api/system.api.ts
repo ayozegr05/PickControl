@@ -12,3 +12,17 @@ export interface ProvidersStatus {
 export function getProvidersStatus(): Promise<ProvidersStatus> {
   return apiRequest<ProvidersStatus>("/system/providers", { auth: true });
 }
+
+// Cola de verificación de picks (solo admin): pendientes desglosadas
+// en simples / patas de combinada / padres, y liquidaciones de hoy.
+export interface PicksStatus {
+  pendientes_simples: number;
+  pendientes_patas: number;
+  pendientes_combinadas: number;
+  resueltas_hoy: number;
+  resueltas_total: number;
+}
+
+export function getPicksStatus(): Promise<PicksStatus> {
+  return apiRequest<PicksStatus>("/system/picks", { auth: true });
+}
