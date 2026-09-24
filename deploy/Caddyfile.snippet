@@ -1,10 +1,12 @@
 # Añadir al Caddyfile EXISTENTE de checkcoast (mismo contenedor caddy,
 # un site más). Sustituir el dominio por el que uses en DuckDNS.
 #
-# Requisito: el contenedor caddy debe resolver el host —
-#   extra_hosts: ["host.docker.internal:host-gateway"]
-# en su docker-compose (si ya lo tiene, nada que tocar).
+# Requisito: controlpick-backend debe estar en la red checkcoast_default
+# (ya lo hace docker-compose.prod.yml) — caddy lo resuelve por nombre.
+#
+# Tras editar el Caddyfile:
+#   docker exec checkcoast-caddy caddy reload --config /etc/caddy/Caddyfile
 
 controlpick.duckdns.org {
-	reverse_proxy host.docker.internal:8000
+	reverse_proxy controlpick-backend:8000
 }
