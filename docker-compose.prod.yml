@@ -66,6 +66,7 @@ services:
       # Estado que debe sobrevivir a rebuilds: sesión Telethon,
       # media (evidencia OCR), cachés/misses de providers, dumps.
       - ./backend/controlpick_telegram.session:/app/controlpick_telegram.session
+      - ./backend/controlpick_telegram_new.session:/app/controlpick_telegram_new.session
       - ./backend/media:/app/media
       - ./backend/provider_state.json:/app/provider_state.json
       - ./backend/provider_cache.json:/app/provider_cache.json
