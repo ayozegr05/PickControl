@@ -47,16 +47,23 @@ class PicksStatus(BaseModel):
 
     "Pendiente" = es_apuesta, sin acierto y no anulada. Se desglosa en
     simples (ni padre ni pata), patas (combinada_id != NULL) y padres
-    combinada (es_combinada). `resueltas_hoy` usa `verificado_at`, que
+    combinada (es_combinada). `resueltas_hoy*` usa `verificado_at`, que
     solo existe desde la migración e1f2a3b4c5d6 — los liquidados
-    históricos cuentan en `resueltas_total` pero no en "hoy".
+    históricos cuentan en `resueltas_total` pero no en los "hoy".
     """
 
     pendientes_simples: int
     pendientes_patas: int
     pendientes_combinadas: int
     resueltas_hoy: int
+    # De las resueltas hoy: cuántas eran de eventos de hoy y cuántas
+    # eran backlog (evento de un día anterior — incluye fecha_evento
+    # NULL, que no se puede fechar y se asume antigua).
+    resueltas_hoy_evento_hoy: int
+    resueltas_hoy_evento_previo: int
     resueltas_total: int
+    # Liquidaciones por día ("YYYY-MM-DD" -> n), últimos 14 días.
+    resueltas_por_dia: dict[str, int]
 
 
 @router.get("/picks", response_model=PicksStatus)
@@ -94,8 +101,32 @@ async def picks_status(
             pendiente, ParsedPick.es_combinada == True  # noqa: E712
         ),
         resueltas_hoy=await _count(ParsedPick.verificado_at >= hoy),
+        resueltas_hoy_evento_hoy=await _count(
+            ParsedPick.verificado_at >= hoy,
+            ParsedPick.fecha_evento >= hoy,
+        ),
+        resueltas_hoy_evento_previo=await _count(
+            ParsedPick.verificado_at >= hoy,
+            (ParsedPick.fecha_evento == None)  # noqa: E711
+            | (ParsedPick.fecha_evento < hoy),
+        ),
         resueltas_total=await _count(
             (ParsedPick.acierto != None)  # noqa: E711
             | (ParsedPick.anulada == True)  # noqa: E712
         ),
+        resueltas_por_dia={
+            str(dia): n
+            for dia, n in (
+                await session.exec(
+                    select(
+                        func.date(ParsedPick.verificado_at),
+                        func.count(),
+                    )
+                    .where(ParsedPick.verificado_at != None)  # noqa: E711
+                    .group_by(func.date(ParsedPick.verificado_at))
+                    .order_by(func.date(ParsedPick.verificado_at).desc())
+                    .limit(14)
+                )
+            ).all()
+        },
     )
