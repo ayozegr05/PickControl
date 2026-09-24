@@ -13,6 +13,11 @@ services:
     image: postgres:16-alpine
     container_name: controlpick-db
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${DB_PASSWORD:?definir en .env del host}
@@ -33,15 +38,27 @@ services:
       dockerfile: Dockerfile
     container_name: controlpick-backend
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       # Copia de backend/.env SIN valores multilinea (Docker no los
       # soporta en env_file). Los secretos nunca entran al repo.
       - ./backend/.env.docker
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:${DB_PASSWORD}@db:5432/controlpick
+      # `controlpick-db` (nombre completo) — no `db`: en la red compartida
+      # checkcoast_default el alias `db` resuelve al Postgres de checkcoast.
+      DATABASE_URL: postgresql+asyncpg://postgres:${DB_PASSWORD}@controlpick-db:5432/controlpick
       NODE_ENV: production
     ports:
       - "8000:8000"
+    networks:
+      - default
+      # Red compartida con el stack checkcoast: checkcoast-caddy
+      # resuelve este contenedor como `controlpick-backend:8000`.
+      - checkcoast_default
     depends_on:
       db:
         condition: service_healthy
@@ -61,3 +78,7 @@ services:
 
 volumes:
   db_data:
+
+networks:
+  checkcoast_default:
+    external: true
