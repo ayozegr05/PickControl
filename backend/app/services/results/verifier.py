@@ -2082,6 +2082,7 @@ async def settle_combinada(session: AsyncSession, parent: ParsedPick) -> bool:
     parent.anulada = anulada
     parent.cuota_efectiva = cuota_efectiva
     parent.verificado_por = "auto" if resolved else None
+    parent.verificado_at = utc_now() if resolved else None
     session.add(parent)
     logger.info(
         "[RESULTS_VERIFIER] Combinada id=%s: acierto=%s anulada=%s "
@@ -2243,6 +2244,7 @@ async def verify_pending_picks() -> int:
                 pick.acierto = acierto
                 pick.anulada = anulada
                 pick.verificado_por = "auto"
+                pick.verificado_at = utc_now()
                 session.add(pick)
                 verified_count += 1
                 settled_ids.append(pick.id)

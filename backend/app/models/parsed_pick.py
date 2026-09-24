@@ -73,6 +73,9 @@ class ParsedPickBase(SQLModel):
     anulada: bool = Field(default=False)
     # Quién verificó el resultado: "auto" (API de resultados) o "manual".
     verificado_por: Optional[str] = Field(default=None, max_length=20)
+    # Cuándo se liquidó (auto o manual). NULL mientras siga pendiente;
+    # si una corrección reabre el pick, vuelve a NULL.
+    verificado_at: Optional[datetime] = None
 
 
 class ParsedPick(ParsedPickBase, table=True):

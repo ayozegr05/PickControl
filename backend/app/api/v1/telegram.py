@@ -192,11 +192,11 @@ async def corregir_acierto_pick(
             status_code=status.HTTP_404_NOT_FOUND, detail="Pick no encontrado"
         )
 
+    resolved = payload.anulada or payload.acierto is not None
     pick.acierto = None if payload.anulada else payload.acierto
     pick.anulada = payload.anulada
-    pick.verificado_por = (
-        "manual" if (payload.anulada or payload.acierto is not None) else None
-    )
+    pick.verificado_por = "manual" if resolved else None
+    pick.verificado_at = utc_now() if resolved else None
 
     session.add(pick)
     await session.flush()

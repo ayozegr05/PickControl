@@ -20,7 +20,9 @@ import {
 import { listInformantes } from "@/src/api/informantes.api";
 import {
   getProvidersStatus,
+  getPicksStatus,
   ProvidersStatus,
+  PicksStatus,
 } from "@/src/api/system.api";
 import { useAuth } from "@/src/context/AuthContext";
 
@@ -83,6 +85,7 @@ export default function ParsedPicksScreen() {
   const [soloPendientes, setSoloPendientes] = useState(false);
   const [providersStatus, setProvidersStatus] =
     useState<ProvidersStatus | null>(null);
+  const [picksStatus, setPicksStatus] = useState<PicksStatus | null>(null);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { isAdmin } = useAuth();
@@ -141,6 +144,9 @@ export default function ParsedPicksScreen() {
         getProvidersStatus()
           .then(setProvidersStatus)
           .catch(() => setProvidersStatus(null));
+        getPicksStatus()
+          .then(setPicksStatus)
+          .catch(() => setPicksStatus(null));
       }
       setError(null);
     } catch (err: any) {
@@ -569,6 +575,42 @@ export default function ParsedPicksScreen() {
                 </View>
               ))
             )}
+          </View>
+        )}
+
+        {isAdmin && picksStatus !== null && (
+          <View style={styles.systemCard}>
+            <Text style={styles.systemTitle}>Sistema · verificación</Text>
+            <View style={styles.providerRow}>
+              <Text style={styles.providerName}>Resueltas hoy</Text>
+              <Text style={styles.providerOk}>
+                {picksStatus.resueltas_hoy}
+              </Text>
+            </View>
+            <View style={styles.providerRow}>
+              <Text style={styles.providerName}>Pendientes simples</Text>
+              <Text style={styles.providerMisses}>
+                {picksStatus.pendientes_simples}
+              </Text>
+            </View>
+            <View style={styles.providerRow}>
+              <Text style={styles.providerName}>Patas de combinada</Text>
+              <Text style={styles.providerMisses}>
+                {picksStatus.pendientes_patas}
+              </Text>
+            </View>
+            <View style={styles.providerRow}>
+              <Text style={styles.providerName}>Combinadas (padre)</Text>
+              <Text style={styles.providerMisses}>
+                {picksStatus.pendientes_combinadas}
+              </Text>
+            </View>
+            <View style={styles.providerRow}>
+              <Text style={styles.providerName}>Resueltas total</Text>
+              <Text style={styles.providerOk}>
+                {picksStatus.resueltas_total}
+              </Text>
+            </View>
           </View>
         )}
 
