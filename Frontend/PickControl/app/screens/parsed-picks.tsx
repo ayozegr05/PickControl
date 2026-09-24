@@ -585,22 +585,32 @@ export default function ParsedPicksScreen() {
               <Text style={styles.providerName}>Resueltas hoy</Text>
               <Text style={styles.providerOk}>
                 {picksStatus.resueltas_hoy}
+                {"  "}({picksStatus.resueltas_hoy_evento_hoy} de hoy ·{" "}
+                {picksStatus.resueltas_hoy_evento_previo} backlog)
               </Text>
             </View>
             <View style={styles.providerRow}>
-              <Text style={styles.providerName}>Pendientes simples</Text>
+              <Text style={styles.providerName}>Pendientes total</Text>
+              <Text style={styles.providerBad}>
+                {picksStatus.pendientes_simples +
+                  picksStatus.pendientes_patas +
+                  picksStatus.pendientes_combinadas}
+              </Text>
+            </View>
+            <View style={styles.providerRow}>
+              <Text style={styles.providerName}>· simples</Text>
               <Text style={styles.providerMisses}>
                 {picksStatus.pendientes_simples}
               </Text>
             </View>
             <View style={styles.providerRow}>
-              <Text style={styles.providerName}>Patas de combinada</Text>
+              <Text style={styles.providerName}>· patas combinada</Text>
               <Text style={styles.providerMisses}>
                 {picksStatus.pendientes_patas}
               </Text>
             </View>
             <View style={styles.providerRow}>
-              <Text style={styles.providerName}>Combinadas (padre)</Text>
+              <Text style={styles.providerName}>· combinadas (padre)</Text>
               <Text style={styles.providerMisses}>
                 {picksStatus.pendientes_combinadas}
               </Text>
@@ -611,6 +621,14 @@ export default function ParsedPicksScreen() {
                 {picksStatus.resueltas_total}
               </Text>
             </View>
+            {Object.entries(picksStatus.resueltas_por_dia).map(
+              ([dia, n]) => (
+                <View key={dia} style={styles.providerRow}>
+                  <Text style={styles.providerMisses}>{dia}</Text>
+                  <Text style={styles.providerName}>{n} liquidadas</Text>
+                </View>
+              )
+            )}
           </View>
         )}
 

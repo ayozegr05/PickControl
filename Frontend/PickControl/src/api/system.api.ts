@@ -20,7 +20,10 @@ export interface PicksStatus {
   pendientes_patas: number;
   pendientes_combinadas: number;
   resueltas_hoy: number;
+  resueltas_hoy_evento_hoy: number;
+  resueltas_hoy_evento_previo: number;
   resueltas_total: number;
+  resueltas_por_dia: Record<string, number>;
 }
 
 export function getPicksStatus(): Promise<PicksStatus> {
