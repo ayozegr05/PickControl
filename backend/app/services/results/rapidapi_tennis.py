@@ -162,8 +162,10 @@ class RapidApiTennisProvider:
                     "X-RapidAPI-Host": self._api_host,
                 },
             )
-            response.raise_for_status()
+            # Leer los headers de cuota ANTES de raise_for_status: en un
+            # 429 es justo esa respuesta la que trae el límite.
             log_remaining_quota(_PROVIDER_NAME, response)
+            response.raise_for_status()
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
                 mark_rate_limited(_PROVIDER_NAME, exc.response)

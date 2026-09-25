@@ -42,6 +42,7 @@ import httpx
 from app.core.logging import get_logger
 from app.services.results.base import (
     is_rate_limited,
+    log_remaining_quota,
     mark_rate_limited,
     match_score,
 )
@@ -328,6 +329,10 @@ class OddsPapiClient:
         except httpx.HTTPError as exc:
             logger.warning("[ODDS:%s] Error de red en %s: %s", self.NAME, path, exc)
             return 0, None
+        # Cuenta la llamada y captura el límite diario observado (si
+        # RapidAPI lo reporta) antes de decidir qué hacer con el status
+        # — en un 429 es justo esa respuesta la que trae el header.
+        log_remaining_quota(self.NAME, response)
         if response.status_code in (403, 429):
             mark_rate_limited(self.NAME, response)
             logger.warning("[ODDS:%s] Cuota agotada; se omite hasta mañana", self.NAME)
