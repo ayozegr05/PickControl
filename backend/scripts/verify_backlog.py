@@ -30,6 +30,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from sqlalchemy import select
 
+from app.core.dates import utc_now
 from app.db.postgres import AsyncSessionLocal
 from app.models.informante import Informante  # noqa: F401
 from app.models.parsed_pick import ParsedPick
@@ -82,6 +83,7 @@ async def main(apply: bool, delay: float) -> None:
                 pick.acierto = acierto
                 pick.anulada = anulada
                 pick.verificado_por = "auto"
+                pick.verificado_at = utc_now()
                 session.add(pick)
 
         if apply:

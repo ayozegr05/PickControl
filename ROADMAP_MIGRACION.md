@@ -5,6 +5,66 @@ frontend a Expo/React Native **completada en lo esencial**. El sistema ya
 ingiere picks de Telegram (texto + foto + OCR + LLM), los deduplica, verifica
 resultados de fútbol contra APIs de mercado y permite corrección manual.
 
+## Pendientes — lista consolidada (25-sep-2026)
+
+> Lista única de deuda pendiente. El detalle e historial siguen en las
+> secciones originales del documento (columna "Ver"); lo de abajo es
+> historial. Al cerrar un pendiente, actualizar aquí y marcar el [x]
+> correspondiente en su sección.
+
+### A. Operativa en prod (ejecuciones puntuales, sin código nuevo)
+
+| # | Pendiente | Qué falta | Esfuerzo | Ver |
+|---|---|---|---|---|
+| A1 | Barrido de backlog | Automatizado vía cron VM a las 00:30 UTC (`deploy/verify_backlog_cron.sh`, log en `verify_backlog.log`). Primera manual 2026-09-25: 126 intentados, 1 resuelto (providers RapidAPI sin cuota). Vigilar hasta que «backlog >14d» del panel converja | Hecho — queda vigilar | Bugs·ACCIÓN + P.4 |
+
+> **A2 (`verify_now.py`) descartado**: el script solo llama a
+> `verify_pending_picks()` — la misma función que el verificador corre
+> solo cada 3 h. Los retries de footapi7/allsportsapi2 ya ocurren en
+> cada pasada.
+>
+> **A3 (backfill OddsPapi) automatizado** (hito 17): `_run_odds_backfill_loop`
+> corre `historical_backfill.run(apply=True)` cada 24 h con early-exit;
+> en prod vacía el backlog a ritmo de cuota (~150 req/día). Solo queda
+> revisar los `sin fixture` cuando la cola llegue a cero.
+
+### B. Hecho en código — falta probar en vivo/móvil
+
+| # | Pendiente | Qué falta | Esfuerzo | Ver |
+|---|---|---|---|---|
+| B1 | Álbumes Telegram | Probar con un álbum real (handler `events.Album` implementado) | Trivial | §2 + hito 6 |
+| B2 | Push en dispositivo físico | Expo Go no soporta push remotas: requiere dev build o APK (ver C2); comprobar fila en `device_tokens` | Bajo | §3 + hito 9 |
+
+### C. Infra / seguridad / limpieza
+
+| # | Pendiente | Qué falta | Esfuerzo | Ver |
+|---|---|---|---|---|
+| C1 | Credenciales → `expo-secure-store` | Login biométrico guarda credenciales en texto plano en AsyncStorage (`login.tsx`) | Bajo | §4 |
+| C2 | Build APK producción | `eas.json` ya apunta a prod — falta `eas build` + instalar. Desbloquea B4 | Bajo | §4 |
+| C3 | Borrar sesión vieja de la VM | `controlpick_telegram.session` (cuenta personal) montada sin uso + su línea en `volumes:` del compose. Tras unos días de estabilidad | Trivial | §4 |
+| C4 | Retención de media | `media/telegram` crece ~ilimitado (~39 GB libres hoy): decidir purga/compresión/volumen Oracle extra | Decisión + bajo | §4 |
+| C5 | `Frontend/PickControl/git.ignore` | Decidir si es `.gitignore` mal nombrado o artefacto a borrar (untracked) | Trivial | §4 |
+| C6 | Limpieza de usuarios | Decidir si `test@a.com` se mantiene; la contraseña `123456` es estrictamente temporal | Trivial | §4 + hito 15 |
+
+### D. Vigilancia pasiva / decidido a propósito (no es trabajo)
+
+| # | Pendiente | Estado | Ver |
+|---|---|---|---|
+| D1 | Residuos de cabecera en `seleccion` | Vigilar nuevas extracciones en formatos no vistos | P.6 |
+| D2 | Partidos parados a mitad (SUSP/ABD/INT) | Manual a propósito: hay mercados ya decididos que la casa paga | §1 + hito 3 |
+| D3 | Mini-fix dobles tenis, apellido corto | Solo si aparece un caso real (`_pair_similar` en `_tennis_side`) | Decisiones #6 |
+| D4 | Verificación live/en juego, torneos sin cobertura, hándicap zona ambigua |línea| 2-3 | Aparcados fuera de la lista | Vista completa |
+
+### E. Optimizaciones de coste (ideas, sin plan)
+
+| # | Idea | Nota |
+|---|---|---|
+| E1 | Filtrar media: OCR solo a fotos | No gastar OpenAI en GIFs/vídeos/docs |
+| E2 | OCR local (`pytesseract`/`easyocr`) | OpenAI solo si el local falla |
+| E3 | LLM local (`ollama`) | Cuando el volumen justifique infra |
+| E4 | Batching LLM | Varios mensajes por llamada |
+| E5 | Caché por canal | No reprocesar plantillas/promos repetidas |
+
 ## Fases completadas
 
 - **Fase 0: Sanitización de historial Git y entorno.** (COMPLETADA)
@@ -54,6 +114,10 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 
 ## Próximos hitos
 
+> La lista viva de pendientes está consolidada en
+> «Pendientes — lista consolidada» (arriba). Esta sección conserva el
+> detalle e historial de cada hito.
+
 ### Vista completa (resumen)
 
 | # | Hito | Estado | Esfuerzo |
@@ -61,13 +125,13 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 | 1 | Combinadas como sección propia | Hecho — incluida la migración de legadas (`backfill_combinada_legs.py`: 35 combinadas partidas en padre+patas) | Alto — modelo, extractor, verificador, UI |
 | 2 | Fútbol: primera parte/descanso | Hecho — `MatchResult.ht_*` en los 3 providers de fútbol + stats 1ST en footapi7; el verifier reusa los resolutores con `_ht_view` | Medio (reusa providers) |
 | 3 | Fútbol: partidos parados (SUSP/ABD/INT) | Manual a propósito | — |
-| 4 | Cuota tipster vs cuota real de mercado | Hecho y backend probado en vivo (endpoints + snapshots reales OK) — falta solo revisar la UI en móvil (ver §5) | Alto, ya implementado con API gratuita |
+| 4 | Cuota tipster vs cuota real de mercado | Hecho — backend y UI verificados en vivo (2026-09-25) | Alto, ya implementado con API gratuita |
 | 5 | Baloncesto | Hecho — API-Basketball (api-sports, ±1d) + fallback allsportsapi2/Sofascore para partidos antiguos | Medio |
 | 6 | Álbumes Telegram | Implementado — falta probar con álbum real | Trivial |
 | 7 | Pantalla de análisis global | Hecho | — |
 | 8 | "Yo también la jugué" | Hecho | — |
 | 9 | Notificaciones push | Hecho — backend (DeviceToken + Expo Push + hooks) y registro en la app; falta probar en dispositivo físico | Medio |
-| 10 | CRUD de canales desde la app | Hecho — backend verificado en vivo (endpoints, toggle dinámico, catch-up por canales de BD); falta solo revisión visual de la pantalla en Expo | Medio |
+| 10 | CRUD de canales desde la app | Hecho — backend y pantalla verificados en vivo (2026-09-25) | Medio |
 | 11 | Deploy real (servidor + PostgreSQL + HTTPS) | Hecho (2026-09-24): Oracle VM ARM, compose prod, Caddy `controlpick.duckdns.org`, convive con checkcoast — ver `deploy/OPERACIONES.md` | Medio-alto |
 | 12 | Backups: script `backup_db.py` | Hecho | — |
 | 13 | Backups programados diarios | Hecho — cron 04:00 en la VM (`deploy/backup_cron.sh`, 14 días de retención) | Trivial |
@@ -264,8 +328,8 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
       "pendientes por cuota" en vez de abortar. Sellos de boleto
       cobrado en inglés (`WON`/`Returned`) añadidos a
       `_SETTLED_TICKET_PATTERN`.
-- [ ] **P.8. UI móvil sin revisar**: la sección "Cuota de mercado" del
-      hito 4 aún no se ha visto en Expo.
+- [x] **P.8. UI móvil sin revisar**: la sección "Cuota de mercado" del
+      hito 4 revisada en Expo (2026-09-25).
 
 ### 1. Core: verificación de resultados
 
@@ -459,7 +523,7 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
       (permiso → `getExpoPushTokenAsync` con el projectId de EAS →
       registro autenticado) enganchado a `AuthContext` tras login y al
       arrancar con sesión. Pendiente: probar en dispositivo físico
-      (Expo Go no soporta push remotas).
+      (Expo Go no soporta push remotas — necesita dev build/APK).
 - [x] **CRUD de canales en BD** (hecho): tabla `channels` como fuente de
       verdad; `TELEGRAM_TARGET_CHANNEL` queda como bootstrap
       (`seed_channels_from_env` si la tabla está vacía). Handlers globales
@@ -468,7 +532,7 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
       (picker con `iter_dialogs` de la cuenta Telethon) + alta por
       enlace/@user/id con resolución `get_entity`. Pantalla
       `app/screens/canales.tsx` (toggle activo, borrado lógico que conserva
-      historial, alta manual, picker). Pendiente: probar en vivo.
+      historial, alta manual, picker). Probado en vivo (2026-09-25).
 
 ### 4. Infra / calidad
 
@@ -573,13 +637,13 @@ toca: resultados siempre tienen prioridad.
 
 Pendiente:
 
-- [~] **Probar en vivo**: backend verificado en vivo (2026-09-19):
+- [x] **Probar en vivo**: backend verificado en vivo (2026-09-19):
       snapshotter capturando (6 eventos / 96 snapshots / 8 picks
       enlazados), `GET /parsed-picks/{id}/odds` y
       `/informante/{nombre}/odds-stats` responden con datos reales
       (CLV y detección de cuotas infladas funcionando — ej. pick 753
       cuota tipster 1.53 vs mercado 2.1 → inflada detectada).
-      **Falta solo revisar la UI en el móvil.**
+      UI revisada en Expo (2026-09-25).
       Nota: al arrancar se detectó y corrigió un bug de truncamiento
       — el extractor a veces vuelca el análisis completo en
       `seleccion`/`apuesta` y el INSERT en `parsed_picks` reventaba por
@@ -760,10 +824,12 @@ El punto 1 de la lista anterior quedó implementado así:
 
 ## Decisiones pendientes para la próxima sesión
 
+> Consolidado en «Pendientes — lista consolidada» (arriba); se mantiene
+> esta lista porque otras secciones referencian sus números.
+
 1. ~~Mercados de stats completos~~ → **hecho** (sección anterior).
-2. **Probar en vivo el CRUD de canales**: arrancar backend y abrir
-   `app/screens/canales.tsx` en Expo — verificar picker de `iter_dialogs`,
-   alta/baja dinámica y catch-up post-alta.
+2. ~~**Probar en vivo el CRUD de canales**~~ → **hecho** (2026-09-25):
+   `canales.tsx` revisada en Expo.
 3. ~~Notificaciones push (hito 9)~~ → **hecho** (ver lista anterior);
    falta solo la prueba en dispositivo físico: las push remotas no
    funcionan en Expo Go — hace falta development build o la app

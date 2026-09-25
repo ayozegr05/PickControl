@@ -317,6 +317,7 @@ def _load_state() -> dict[str, dict[str, str]]:
         _STATE.setdefault("rate_limited", {})
         _STATE.setdefault("missed", {})
         _STATE.setdefault("calls", {})
+        _STATE.setdefault("loops", {})
     return _STATE
 
 
@@ -423,6 +424,35 @@ def mark_missed(key: str) -> None:
     sub-diarios (`_MISSED_TTL_PROVISIONAL`) tengan granularidad real.
     """
     _load_state()["missed"][key] = utc_now().isoformat()
+    _save_state()
+
+
+def loop_due(loop_name: str, interval_seconds: float) -> bool:
+    """True si el loop de mantenimiento debe correr ya.
+
+    Los loops de `lifecycle.py` persisten su última pasada aquí para
+    que un restart/redeploy no dispare ciclos extra: antes, cada
+    rebuild relanzaba verifier+snapshotter+rescate+backfill al boot y
+    quemaba cuota de providers (y OpenAI) sin necesidad. Sin marca
+    previa devuelve True — el primer arranque real corre igual.
+    """
+    raw = _load_state()["loops"].get(loop_name)
+    if not raw:
+        return True
+    try:
+        last = datetime.fromisoformat(raw)
+    except ValueError:
+        return True
+    return (utc_now() - last).total_seconds() >= interval_seconds
+
+
+def mark_loop_ran(loop_name: str) -> None:
+    """Registra la pasada completada de un loop (ver `loop_due`).
+
+    Solo se marca tras un ciclo sin excepción: un ciclo fallido no
+    cuenta y se reintenta en el siguiente intervalo como antes.
+    """
+    _load_state()["loops"][loop_name] = utc_now().isoformat()
     _save_state()
 
 
