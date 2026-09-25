@@ -41,10 +41,10 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 |---|---|---|---|---|
 | C1 | Credenciales → `expo-secure-store` | Login biométrico guarda credenciales en texto plano en AsyncStorage (`login.tsx`) | Bajo | §4 |
 | C2 | Build APK producción | `eas.json` ya apunta a prod — falta `eas build` + instalar. Desbloquea B4 | Bajo | §4 |
-| C3 | Borrar sesión vieja de la VM | `controlpick_telegram.session` (cuenta personal) montada sin uso + su línea en `volumes:` del compose. Tras unos días de estabilidad | Trivial | §4 |
-| C4 | Retención de media | `media/telegram` crece ~ilimitado (~39 GB libres hoy): decidir purga/compresión/volumen Oracle extra | Decisión + bajo | §4 |
-| C5 | `Frontend/PickControl/git.ignore` | Decidir si es `.gitignore` mal nombrado o artefacto a borrar (untracked) | Trivial | §4 |
-| C6 | Limpieza de usuarios | Decidir si `test@a.com` se mantiene; la contraseña `123456` es estrictamente temporal | Trivial | §4 + hito 15 |
+| C3 | ~~Borrar sesión vieja de la VM~~ | **Hecho 2026-09-25**: archivo eliminado + mount quitado del compose (local y VM); contenedor recreado sin él | — | §4 |
+| C4 | Retención de media | **Decidido — sin acción**: `media/telegram` ocupa 160 MB tras ~1.5 meses en prod (1720 archivos, ~100 MB/mes); con 34 GB libres hay años de margen. Revisar solo si supera ~2 GB (purga de >30 días bastaría: la evidencia solo sirve para depurar OCR reciente) | — | §4 |
+| C5 | ~~`Frontend/PickControl/git.ignore`~~ | **Hecho 2026-09-25**: era un artefacto de mar-2025 (`.gitignore` real intacto); borrado | — | §4 |
+| C6 | Limpieza de usuarios | **Decidido — se mantiene** `test@a.com`. Recordatorio: la contraseña `123456` sigue siendo temporal; cambiarla si algún día la app se expone a más gente | — | §4 + hito 15 |
 
 ### D. Vigilancia pasiva / decidido a propósito (no es trabajo)
 
@@ -137,7 +137,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 | 13 | Backups programados diarios | Hecho — cron 04:00 en la VM (`deploy/backup_cron.sh`, 14 días de retención) | Trivial |
 | 18 | Cuenta Telegram dedicada | Hecho (2026-09-24): cuenta "Ramón" con eSIM propia + 2FA, sesión QR `controlpick_telegram_new`, 6/6 canales (invite links guardados como `target`), swap en prod hecho | Alto |
 | 14 | Tests del pipeline Telegram | Hecho | — |
-| 15 | Limpieza de usuarios (test@a.com) | Pendiente | Trivial |
+| 15 | Limpieza de usuarios (test@a.com) | Decidido 2026-09-25 — se mantiene el usuario | Trivial |
 | 16 | Alertas de cuota a admins + panel "Sistema · providers" | Hecho — push admin-only al pasar a rate_limited (dedup 1/día) + `GET /system/providers` (403 no-admin) + panel en parsed-picks solo `isAdmin` | Bajo |
 | 17 | Automatización de rescate (OCR + reproceso + backfill) | Hecho — loops en lifecycle cada 6h/24h; caducidad `rescue_max_age_days=30` para que la cola converja a cero; scripts quedan como wrappers manuales | Medio |
 
