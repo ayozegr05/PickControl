@@ -35,7 +35,6 @@ Contenedores (en la VM, `docker ps`):
 ├── .env                      # solo DB_PASSWORD (env var de compose)
 ├── backend/
 │   ├── .env.docker           # config completa (env_file del servicio)
-│   ├── controlpick_telegram.session      # sesión VIEJA (sin uso; borrar)
 │   ├── controlpick_telegram_new.session  # sesión ACTIVA (cuenta Ramón)
 │   ├── media/telegram/       # evidencia OCR (montada a /app/media)
 │   ├── provider_state.json   # cuotas/misses diarios (montado)
@@ -55,11 +54,10 @@ Contenedores (en la VM, `docker ps`):
 - Telethon usa `TELEGRAM_SESSION_NAME=controlpick_telegram_new`
   (en `backend/.env.docker`). El archivo `.session` = credencial viva:
   tratar como contraseña, nunca commitear.
-- La sesión VIEJA (cuenta personal) sigue como archivo en la VM pero
-  no la usa nadie. Borrarla cuando se confirme estabilidad:
-  `rm /home/ubuntu/controlpick/backend/controlpick_telegram.session`
-  (y quitar su línea de `volumes:` en el compose). Recuperarla
-  requeriría re-login con código al móvil personal.
+- La sesión VIEJA (`controlpick_telegram.session`, cuenta personal) se
+  eliminó 2026-09-25: archivo borrado y línea de `volumes:` quitada
+  del compose. Si algún día hiciera falta esa cuenta, requeriría
+  re-login con código al móvil personal.
 - La app de Telegram del usuario NO se ve afectada por borrar
   `.session` — esos archivos solo sirven para la API de Telethon.
 
