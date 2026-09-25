@@ -31,6 +31,9 @@ class ProvidersStatus(BaseModel):
     missed_by_provider: dict[str, int]
     calls_today: dict[str, int]
     calls_by_day: dict[str, dict[str, int]]
+    # Límite diario observado vía headers x-ratelimit (solo providers
+    # que lo reportan; los gratuitos/ilimitados no aparecen).
+    daily_limits: dict[str, int]
 
 
 @router.get("/providers", response_model=ProvidersStatus)

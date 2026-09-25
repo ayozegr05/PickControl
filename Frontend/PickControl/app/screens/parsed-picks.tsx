@@ -274,6 +274,7 @@ export default function ParsedPicksScreen() {
         limitedSince: providersStatus.rate_limited[name] ?? null,
         misses: providersStatus.missed_by_provider[name] ?? 0,
         callsToday: providersStatus.calls_today?.[name] ?? 0,
+        dailyLimit: providersStatus.daily_limits?.[name] ?? null,
       }));
   }, [providersStatus]);
 
@@ -549,27 +550,43 @@ export default function ParsedPicksScreen() {
               <Text style={styles.providerOk}>Todos operativos</Text>
             ) : (
               providerRows.map((row) => (
-                <View key={row.name} style={styles.providerRow}>
-                  <Text style={styles.providerName}>{row.name}</Text>
-                  <Text
-                    style={
-                      row.limitedSince
-                        ? styles.providerBad
-                        : styles.providerOk
-                    }
-                  >
-                    {row.limitedSince
-                      ? `sin cuota hoy (${row.limitedSince})`
-                      : "ok"}
-                  </Text>
-                  {row.callsToday > 0 && (
-                    <Text style={styles.providerMisses}>
-                      {row.callsToday} llamada{row.callsToday !== 1 ? "s" : ""} hoy
+                <View key={row.name} style={styles.providerItem}>
+                  <View style={styles.providerRow}>
+                    <Text style={styles.providerName} numberOfLines={1}>
+                      {row.name}
                     </Text>
-                  )}
-                  {row.misses > 0 && (
-                    <Text style={styles.providerMisses}>
-                      {row.misses} miss{row.misses !== 1 ? "es" : ""}
+                    <View
+                      style={[
+                        styles.providerBadge,
+                        row.limitedSince
+                          ? styles.providerBadgeBad
+                          : styles.providerBadgeOk,
+                      ]}
+                    >
+                      <Text
+                        style={
+                          row.limitedSince
+                            ? styles.providerBad
+                            : styles.providerOk
+                        }
+                      >
+                        {row.limitedSince ? "SIN CUOTA" : "OK"}
+                      </Text>
+                    </View>
+                  </View>
+                  {(row.callsToday > 0 || row.misses > 0) && (
+                    <Text style={styles.providerMeta}>
+                      {row.callsToday > 0
+                        ? `${row.callsToday}${
+                            row.dailyLimit ? `/${row.dailyLimit}` : ""
+                          } llamada${row.callsToday !== 1 ? "s" : ""} hoy`
+                        : ""}
+                      {row.callsToday > 0 && row.misses > 0 ? " · " : ""}
+                      {row.misses > 0
+                        ? `${row.misses} búsqueda${
+                            row.misses !== 1 ? "s" : ""
+                          } sin resultado en caché`
+                        : ""}
                     </Text>
                   )}
                 </View>
@@ -582,102 +599,86 @@ export default function ParsedPicksScreen() {
           <View style={styles.systemCard}>
             <Text style={styles.systemTitle}>Sistema · verificación</Text>
             <View style={styles.providerRow}>
-              <Text style={styles.providerName}>Resueltas hoy</Text>
+              <Text style={styles.statLabel}>Resueltas hoy</Text>
               <Text style={styles.providerOk}>
                 {picksStatus.resueltas_hoy}
-                {"  "}({picksStatus.resueltas_hoy_evento_hoy} de hoy ·{" "}
-                {picksStatus.resueltas_hoy_evento_previo} backlog)
               </Text>
             </View>
+            <Text style={styles.statSub}>
+              {picksStatus.resueltas_hoy_evento_hoy} de eventos de hoy ·{" "}
+              {picksStatus.resueltas_hoy_evento_previo} backlog
+            </Text>
             <View style={styles.providerRow}>
-              <Text style={styles.providerName}>Pendientes total</Text>
+              <Text style={styles.statLabel}>Pendientes</Text>
               <Text style={styles.providerBad}>
                 {picksStatus.pendientes_simples +
                   picksStatus.pendientes_patas +
                   picksStatus.pendientes_combinadas}
               </Text>
             </View>
+            <Text style={styles.statSub}>
+              {picksStatus.pendientes_simples} simples ·{" "}
+              {picksStatus.pendientes_patas} patas ·{" "}
+              {picksStatus.pendientes_combinadas} combinadas
+            </Text>
+            <Text style={styles.statSub}>
+              {picksStatus.pendientes_jugados_ventana ?? 0} jugadas &lt;14d
+              {" · "}
+              {picksStatus.pendientes_futuros ?? 0} futuras / en juego
+              {(picksStatus.pendientes_sin_fecha ?? 0) > 0
+                ? ` · ${picksStatus.pendientes_sin_fecha} sin fecha`
+                : ""}
+            </Text>
             <View style={styles.providerRow}>
-              <Text style={styles.providerName}>· simples</Text>
-              <Text style={styles.providerMisses}>
-                {picksStatus.pendientes_simples}
-              </Text>
-            </View>
-            <View style={styles.providerRow}>
-              <Text style={styles.providerName}>· patas combinada</Text>
-              <Text style={styles.providerMisses}>
-                {picksStatus.pendientes_patas}
-              </Text>
-            </View>
-            <View style={styles.providerRow}>
-              <Text style={styles.providerName}>· combinadas (padre)</Text>
-              <Text style={styles.providerMisses}>
-                {picksStatus.pendientes_combinadas}
-              </Text>
-            </View>
-            <View style={styles.providerRow}>
-              <Text style={styles.providerName}>· jugadas &lt;14d</Text>
-              <Text style={styles.providerMisses}>
-                {picksStatus.pendientes_jugados_ventana ?? 0}
-              </Text>
-            </View>
-            <View style={styles.providerRow}>
-              <Text style={styles.providerName}>· futuras / en juego</Text>
-              <Text style={styles.providerMisses}>
-                {picksStatus.pendientes_futuros ?? 0}
-              </Text>
-            </View>
-            <View style={styles.providerRow}>
-              <Text style={styles.providerName}>· backlog &gt;14d</Text>
-              <Text style={styles.providerBad}>
+              <Text style={styles.statLabel}>· backlog &gt;14d</Text>
+              <Text
+                style={
+                  (picksStatus.pendientes_backlog ?? 0) > 0
+                    ? styles.providerBad
+                    : styles.statValue
+                }
+              >
                 {picksStatus.pendientes_backlog ?? 0}
               </Text>
             </View>
-            {(picksStatus.pendientes_sin_fecha ?? 0) > 0 && (
-              <View style={styles.providerRow}>
-                <Text style={styles.providerName}>· sin fecha</Text>
-                <Text style={styles.providerBad}>
-                  {picksStatus.pendientes_sin_fecha}
-                </Text>
-              </View>
-            )}
-            {Object.entries(picksStatus.pendientes_por_deporte ?? {}).map(
-              ([dep, n]) => (
-                <View key={dep} style={styles.providerRow}>
-                  <Text style={styles.providerName}>· {dep}</Text>
-                  <Text style={styles.providerMisses}>{n}</Text>
-                </View>
-              )
+            {Object.keys(picksStatus.pendientes_por_deporte ?? {}).length >
+              0 && (
+              <Text style={styles.statSub}>
+                {Object.entries(picksStatus.pendientes_por_deporte ?? {})
+                  .map(([dep, n]) => `${n} ${dep}`)
+                  .join(" · ")}
+              </Text>
             )}
             <View style={styles.providerRow}>
-              <Text style={styles.providerName}>Resueltas total</Text>
+              <Text style={styles.statLabel}>Resueltas total</Text>
               <Text style={styles.providerOk}>
                 {picksStatus.resueltas_total}
               </Text>
             </View>
+            <Text style={styles.systemSubtitle}>Por día</Text>
             {Object.entries(picksStatus.resueltas_por_dia).map(
               ([dia, n]) => (
                 <View key={dia} style={styles.providerRow}>
-                  <Text style={styles.providerMisses}>{dia}</Text>
-                  <Text style={styles.providerName}>{n} liquidadas</Text>
+                  <Text style={styles.statSubFlex}>{dia}</Text>
+                  <Text style={styles.statValue}>{n}</Text>
                 </View>
               )
             )}
             {Object.keys(picksStatus.resueltas_por_pasada ?? {}).length >
               0 && (
-              <View style={styles.providerRow}>
-                <Text style={styles.providerName}>Por pasada (UTC)</Text>
-              </View>
-            )}
-            {Object.entries(picksStatus.resueltas_por_pasada ?? {}).map(
-              ([pasada, n]) => (
-                <View key={pasada} style={styles.providerRow}>
-                  <Text style={styles.providerMisses}>
-                    {pasada.slice(5)}
-                  </Text>
-                  <Text style={styles.providerName}>{n} liquidadas</Text>
-                </View>
-              )
+              <>
+                <Text style={styles.systemSubtitle}>Por pasada (UTC)</Text>
+                {Object.entries(picksStatus.resueltas_por_pasada ?? {}).map(
+                  ([pasada, n]) => (
+                    <View key={pasada} style={styles.providerRow}>
+                      <Text style={styles.statSubFlex}>
+                        {pasada.slice(5)}
+                      </Text>
+                      <Text style={styles.statValue}>{n}</Text>
+                    </View>
+                  )
+                )}
+              </>
             )}
           </View>
         )}
@@ -1038,6 +1039,55 @@ const styles = StyleSheet.create({
   providerMisses: {
     color: "#888",
     fontSize: 11,
+  },
+  systemSubtitle: {
+    color: "#6f8299",
+    fontSize: 11,
+    fontWeight: "bold",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginTop: 12,
+    marginBottom: 2,
+  },
+  providerItem: {
+    paddingVertical: 4,
+  },
+  providerBadge: {
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  providerBadgeOk: {
+    backgroundColor: "rgba(76, 175, 80, 0.15)",
+  },
+  providerBadgeBad: {
+    backgroundColor: "rgba(244, 67, 54, 0.15)",
+  },
+  providerMeta: {
+    color: "#777",
+    fontSize: 11,
+    marginTop: 1,
+  },
+  statLabel: {
+    color: "#9aa4b2",
+    fontSize: 13,
+    flex: 1,
+  },
+  statSub: {
+    color: "#777",
+    fontSize: 11,
+    marginTop: 1,
+    marginBottom: 4,
+  },
+  statSubFlex: {
+    color: "#777",
+    fontSize: 11,
+    flex: 1,
+  },
+  statValue: {
+    color: "#ddd",
+    fontSize: 12,
+    fontWeight: "600",
   },
   acertoSection: {
     marginTop: 10,
