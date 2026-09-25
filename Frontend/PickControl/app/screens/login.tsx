@@ -13,13 +13,13 @@ import { Formik } from "formik";
 import * as Yup from "yup";
 import * as LocalAuthentication from "expo-local-authentication";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import BottomBar from "@/src/components/bottom-bar";
 import TopBar from "@/src/components/top-bar";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/src/context/AuthContext";
 import { login as loginApi } from "@/src/api/auth.api";
 import { ApiError } from "@/src/api/client";
+import { getSecureItem, setSecureItem } from "@/src/storage/secure";
 
 const LoginSchema = Yup.object().shape({
   email: Yup.string().email("Email inválido").required("El email es requerido"),
@@ -46,7 +46,7 @@ const LoginScreen = () => {
 
   const checkSavedCredentials = async () => {
     try {
-      const credentials = await AsyncStorage.getItem("userCredentials");
+      const credentials = await getSecureItem("userCredentials");
       if (credentials) {
         setSavedCredentials(JSON.parse(credentials));
       }
@@ -93,8 +93,9 @@ const LoginScreen = () => {
       });
       console.log("Usuario logueado: ", data.user.name);
 
-      // Guardar credenciales para el login biométrico
-      await AsyncStorage.setItem(
+      // Guardar credenciales para el login biométrico (SecureStore:
+      // Keychain/Keystore cifrado por el SO, no texto plano).
+      await setSecureItem(
         "userCredentials",
         JSON.stringify({
           email: values.email,

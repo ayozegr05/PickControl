@@ -39,7 +39,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 
 | # | Pendiente | Qué falta | Esfuerzo | Ver |
 |---|---|---|---|---|
-| C1 | Credenciales → `expo-secure-store` | Login biométrico guarda credenciales en texto plano en AsyncStorage (`login.tsx`) | Bajo | §4 |
+| C1 | ~~Credenciales → `expo-secure-store`~~ | **Hecho 2026-09-25**: wrapper `src/storage/secure.ts` (Keychain/Keystore) para `userCredentials` y `userToken` con migración en caliente y fallback a AsyncStorage en web/dev-client viejo. Activo tras rebuild del dev-client/APK (C2) | — | §4 |
 | C2 | Build APK producción | `eas.json` ya apunta a prod — falta `eas build` + instalar. Desbloquea B4 | Bajo | §4 |
 | C3 | ~~Borrar sesión vieja de la VM~~ | **Hecho 2026-09-25**: archivo eliminado + mount quitado del compose (local y VM); contenedor recreado sin él | — | §4 |
 | C4 | Retención de media | **Decidido — sin acción**: `media/telegram` ocupa 160 MB tras ~1.5 meses en prod (1720 archivos, ~100 MB/mes); con 34 GB libres hay años de margen. Revisar solo si supera ~2 GB (purga de >30 días bastaría: la evidencia solo sirve para depurar OCR reciente) | — | §4 |
