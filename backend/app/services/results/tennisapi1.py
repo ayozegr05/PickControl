@@ -239,7 +239,7 @@ class TennisApi1Provider:
             events: Optional[list] = response.json().get("events") or []
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
-                mark_rate_limited(_PROVIDER_NAME)
+                mark_rate_limited(_PROVIDER_NAME, exc.response)
                 logger.warning("[TennisApi1] Cuota agotada; se omite hasta mañana")
             else:
                 logger.warning("[TennisApi1] Error de API (%s): %s", cache_key, exc)
@@ -271,7 +271,7 @@ class TennisApi1Provider:
             results: Optional[list] = response.json().get("results") or []
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
-                mark_rate_limited(_PROVIDER_NAME)
+                mark_rate_limited(_PROVIDER_NAME, exc.response)
                 logger.warning("[TennisApi1] Cuota agotada; se omite hasta mañana")
             else:
                 logger.warning("[TennisApi1] Error en search (%s): %s", key, exc)
@@ -314,7 +314,7 @@ class TennisApi1Provider:
             ]
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
-                mark_rate_limited(_PROVIDER_NAME)
+                mark_rate_limited(_PROVIDER_NAME, exc.response)
                 logger.warning("[TennisApi1] Cuota agotada; se omite hasta mañana")
             else:
                 logger.warning(

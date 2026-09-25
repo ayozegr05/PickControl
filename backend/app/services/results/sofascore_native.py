@@ -188,7 +188,7 @@ class _DirectTransport:
         if response.status_code == 404:
             return {}  # página vacía (p. ej. events/next sin próximos)
         if response.status_code in (401, 403, 429):
-            mark_rate_limited(self.name)
+            mark_rate_limited(self.name, response)
             logger.warning(
                 "[SOFASCORE-DIRECT] Bloqueado por Cloudflare (%s); "
                 "se omite hasta mañana",
@@ -205,7 +205,7 @@ class _DirectTransport:
         except ValueError:
             # 200 pero HTML: página de desafío de Cloudflare. No
             # insistir — marca sin cuota hasta mañana igual que un 403.
-            mark_rate_limited(self.name)
+            mark_rate_limited(self.name, response)
             logger.warning(
                 "[SOFASCORE-DIRECT] Respuesta no-JSON (desafío "
                 "Cloudflare); se omite hasta mañana"
@@ -246,7 +246,7 @@ class _RapidApiTransport:
             return data if isinstance(data, dict) else None
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
-                mark_rate_limited(self.name)
+                mark_rate_limited(self.name, exc.response)
                 logger.warning(
                     "[SOFASCORE:%s] Cuota agotada o sin suscripción; "
                     "se omite hasta mañana",
@@ -367,7 +367,7 @@ class _SofaScore6Transport:
             return self._normalize(path, response.json())
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
-                mark_rate_limited(self.name)
+                mark_rate_limited(self.name, exc.response)
                 logger.warning(
                     "[SOFASCORE:%s] Cuota agotada o sin suscripción; "
                     "se omite hasta mañana",

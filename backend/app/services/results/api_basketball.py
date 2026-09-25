@@ -138,7 +138,7 @@ class ApiBasketballProvider:
             log_remaining_quota("api-basketball", response)
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
-                mark_rate_limited("api-basketball")
+                mark_rate_limited("api-basketball", exc.response)
             logger.warning("[API-Basketball] Error de API (%s): %s", date_str, exc)
             return []
         data = response.json()

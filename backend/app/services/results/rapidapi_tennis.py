@@ -166,7 +166,7 @@ class RapidApiTennisProvider:
             log_remaining_quota(_PROVIDER_NAME, response)
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
-                mark_rate_limited(_PROVIDER_NAME)
+                mark_rate_limited(_PROVIDER_NAME, exc.response)
                 logger.warning(
                     "[RapidAPI-Tennis] Cuota agotada (%s); se omite hasta mañana",
                     _PROVIDER_NAME,

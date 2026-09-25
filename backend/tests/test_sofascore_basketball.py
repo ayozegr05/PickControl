@@ -141,7 +141,11 @@ class TestNamespaceYEstado:
     async def test_rate_limit_marca_allsportsapi2(self, monkeypatch):
         """429 en basket marca 'allsportsapi2' (cuota compartida)."""
         marked: list[str] = []
-        monkeypatch.setattr(footapi, "mark_rate_limited", marked.append)
+        monkeypatch.setattr(
+            footapi,
+            "mark_rate_limited",
+            lambda name, response=None: marked.append(name),
+        )
 
         prov = SofascoreBasketballProvider("k", "h")
 

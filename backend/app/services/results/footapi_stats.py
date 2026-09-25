@@ -187,7 +187,7 @@ class FootApiStatsProvider:
             return data if isinstance(data, dict) else None
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
-                mark_rate_limited(self.NAME)
+                mark_rate_limited(self.NAME, exc.response)
                 logger.warning("[FOOTAPI7] Cuota agotada; se omite hasta mañana")
             else:
                 logger.warning("[FOOTAPI7] Error de API (%s): %s", path, exc)

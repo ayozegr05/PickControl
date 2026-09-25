@@ -362,19 +362,74 @@ def count_provider_call(provider_name: str) -> None:
     _save_state()
 
 
-def mark_rate_limited(provider_name: str) -> None:
-    """Marca un proveedor como sin cuota por el resto del día.
+# Cooldown corto cuando el 403/429 fue por RITMO (ráfaga), no por
+# cuota: RapidAPI free tier también limita req/min, y aparcar el
+# provider todo el día por un pico dejaba llamadas sin usar.
+_RATE_LIMIT_COOLDOWN = timedelta(minutes=15)
+_RATE_LIMIT_COOLDOWN_MAX = timedelta(hours=1)
 
-    Solo la PRIMERA marca del día dispara el push a admins (un provider
-    caído recibe 429 en cada intento; re-notificar sería spam).
+
+def _cooldown_from(response: httpx.Response | None) -> timedelta | None:
+    """Cooldown a aplicar si el 403/429 fue por ritmo y no por cuota.
+
+    - `retry-after` del server (capado a 1 h, mínimo 60 s).
+    - `x-ratelimit-requests-remaining` > 0: el propio RapidAPI admite
+      que queda cuota, así que el 429 era de ráfaga -> 15 min.
+    Sin response/headers o remaining=0 -> None: cuota real agotada.
+    """
+    if response is None:
+        return None
+    headers = getattr(response, "headers", None) or {}
+    retry_after = headers.get("retry-after")
+    if retry_after:
+        try:
+            secs = min(
+                max(float(retry_after), 60.0),
+                _RATE_LIMIT_COOLDOWN_MAX.total_seconds(),
+            )
+            return timedelta(seconds=secs)
+        except ValueError:
+            pass
+    remaining = headers.get("x-ratelimit-requests-remaining")
+    if remaining is not None:
+        try:
+            if int(remaining) > 0:
+                return _RATE_LIMIT_COOLDOWN
+        except ValueError:
+            pass
+    return None
+
+
+def mark_rate_limited(
+    provider_name: str, response: httpx.Response | None = None
+) -> None:
+    """Marca un proveedor como bloqueado.
+
+    Con `response` se distingue cuota real de límite de ritmo: si el
+    server admite que queda cuota (`remaining`>0 o `retry-after`), el
+    bloqueo es un cooldown de minutos guardado como timestamp; sin esa
+    evidencia se aparca el día entero (fecha ISO) como siempre. Solo la
+    primera marca de día completo dispara push a admins — un cooldown
+    no notifica: en una ráfaga sería spam.
     """
     today = date_type.today().isoformat()
     state = _load_state()["rate_limited"]
     if state.get(provider_name) == today:
+        return  # aparcado el día entero: no degradar a cooldown
+    cooldown = _cooldown_from(response)
+    if cooldown is None:
+        state[provider_name] = today
+        _save_state()
+        _notify_rate_limited(provider_name)
         return
-    state[provider_name] = today
+    until = utc_now() + cooldown
+    state[provider_name] = until.isoformat()
     _save_state()
-    _notify_rate_limited(provider_name)
+    logger.info(
+        "[QUOTA] %s: 403/429 con cuota restante — cooldown hasta %s UTC",
+        provider_name,
+        until.strftime("%H:%M"),
+    )
 
 
 def _notify_rate_limited(provider_name: str) -> None:
@@ -414,8 +469,17 @@ def providers_snapshot() -> dict:
         missed_by_provider[provider] = missed_by_provider.get(provider, 0) + 1
     today = date_type.today().isoformat()
     calls = state.get("calls", {})
+    now = utc_now()
+    # Solo bloqueos activos: un cooldown ya expirado (timestamp pasado)
+    # sigue en el state hasta la próxima poda, pero no debe pintarse
+    # como "sin cuota" en la vista de sistema.
+    active_limited = {
+        k: v
+        for k, v in state["rate_limited"].items()
+        if (v > now.isoformat() if "T" in v else v == today)
+    }
     return {
-        "rate_limited": dict(state["rate_limited"]),
+        "rate_limited": active_limited,
         "missed_by_provider": missed_by_provider,
         "calls_today": dict(calls.get(today, {})),
         "calls_by_day": dict(calls),
@@ -424,11 +488,20 @@ def providers_snapshot() -> dict:
 
 
 def is_rate_limited(provider_name: str) -> bool:
-    """True si el proveedor agotó su cuota hoy (429/403) y hay que saltarlo."""
-    return (
-        _load_state()["rate_limited"].get(provider_name)
-        == date_type.today().isoformat()
-    )
+    """True si el proveedor está bloqueado y hay que saltarlo.
+
+    El valor guardado es una fecha ISO (sin cuota: dura todo el día)
+    o un timestamp ISO (cooldown por ritmo: dura hasta ese instante —
+    ver `mark_rate_limited`)."""
+    raw = _load_state()["rate_limited"].get(provider_name)
+    if not raw:
+        return False
+    if "T" not in raw:
+        return raw == date_type.today().isoformat()
+    try:
+        return datetime.fromisoformat(raw) > utc_now()
+    except ValueError:
+        return False
 
 
 def mark_missed(key: str) -> None:

@@ -78,7 +78,7 @@ def _neutral_state(monkeypatch):
     monkeypatch.setattr(native, "is_rate_limited", lambda name: False)
     monkeypatch.setattr(native, "is_missed", lambda key, ttl=None: False)
     monkeypatch.setattr(native, "mark_missed", lambda key: None)
-    monkeypatch.setattr(native, "mark_rate_limited", lambda name: None)
+    monkeypatch.setattr(native, "mark_rate_limited", lambda name, response=None: None)
     monkeypatch.setattr(native, "get_entity_id", lambda ns, name: None)
     monkeypatch.setattr(native, "set_entity_id", lambda ns, name, eid: None)
     monkeypatch.setattr(native, "get_event_list", lambda key: None)
@@ -222,7 +222,11 @@ class TestDirectTransport:
 
     async def test_403_marca_rate_limited(self, monkeypatch):
         marked = []
-        monkeypatch.setattr(native, "mark_rate_limited", marked.append)
+        monkeypatch.setattr(
+            native,
+            "mark_rate_limited",
+            lambda name, response=None: marked.append(name),
+        )
         self._mock_session(monkeypatch, _FakeResponse(403))
         transport = _DirectTransport()
         assert await transport.get_json("/api/v1/search/all?q=x") is None
@@ -232,7 +236,11 @@ class TestDirectTransport:
         """Un 200 con HTML (desafío Cloudflare) se trata como bloqueo:
         no se insiste a través del challenge."""
         marked = []
-        monkeypatch.setattr(native, "mark_rate_limited", marked.append)
+        monkeypatch.setattr(
+            native,
+            "mark_rate_limited",
+            lambda name, response=None: marked.append(name),
+        )
 
         class _HtmlResponse(_FakeResponse):
             def json(self):
