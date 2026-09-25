@@ -5,6 +5,8 @@ los deduplica, verifica resultados contra APIs deportivas y compara la rentabili
 publicada del tipster con la real del usuario.
 
 Ver `ROADMAP_MIGRACION.md` para estado de fases y próximos hitos.
+Ver `deploy/OPERACIONES.md` para el runbook de producción (VM Oracle,
+cuenta Telegram dedicada, deploy, backups, cuotas de providers).
 
 ## Arquitectura
 
