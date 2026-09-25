@@ -269,13 +269,18 @@ export default function ParsedPicksScreen() {
         if (aLimited !== bLimited) return aLimited ? -1 : 1;
         return a.localeCompare(b);
       })
-      .map((name) => ({
-        name,
-        limitedSince: providersStatus.rate_limited[name] ?? null,
-        misses: providersStatus.missed_by_provider[name] ?? 0,
-        callsToday: providersStatus.calls_today?.[name] ?? 0,
-        dailyLimit: providersStatus.daily_limits?.[name] ?? null,
-      }));
+      .map((name) => {
+        const limitedSince = providersStatus.rate_limited[name] ?? null;
+        return {
+          name,
+          limitedSince,
+          // Timestamp ISO = cooldown corto por ritmo; fecha = sin cuota.
+          cooldown: limitedSince !== null && limitedSince.includes("T"),
+          misses: providersStatus.missed_by_provider[name] ?? 0,
+          callsToday: providersStatus.calls_today?.[name] ?? 0,
+          dailyLimit: providersStatus.daily_limits?.[name] ?? null,
+        };
+      });
   }, [providersStatus]);
 
   const applyUpdate = (list: ParsedPick[], updated: ParsedPick) =>
@@ -559,18 +564,26 @@ export default function ParsedPicksScreen() {
                       style={[
                         styles.providerBadge,
                         row.limitedSince
-                          ? styles.providerBadgeBad
+                          ? row.cooldown
+                            ? styles.providerBadgeWarn
+                            : styles.providerBadgeBad
                           : styles.providerBadgeOk,
                       ]}
                     >
                       <Text
                         style={
                           row.limitedSince
-                            ? styles.providerBad
+                            ? row.cooldown
+                              ? styles.providerWarn
+                              : styles.providerBad
                             : styles.providerOk
                         }
                       >
-                        {row.limitedSince ? "SIN CUOTA" : "OK"}
+                        {row.limitedSince
+                          ? row.cooldown
+                            ? "EN PAUSA"
+                            : "SIN CUOTA"
+                          : "OK"}
                       </Text>
                     </View>
                   </View>
@@ -1036,6 +1049,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "bold",
   },
+  providerWarn: {
+    color: "#ff9800",
+    fontSize: 12,
+    fontWeight: "bold",
+  },
   providerMisses: {
     color: "#888",
     fontSize: 11,
@@ -1062,6 +1080,9 @@ const styles = StyleSheet.create({
   },
   providerBadgeBad: {
     backgroundColor: "rgba(244, 67, 54, 0.15)",
+  },
+  providerBadgeWarn: {
+    backgroundColor: "rgba(255, 152, 0, 0.15)",
   },
   providerMeta: {
     color: "#777",

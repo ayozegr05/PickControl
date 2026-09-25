@@ -426,11 +426,15 @@ class TestSystemProvidersApi:
         return {"Authorization": f"Bearer {token}"}
 
     async def test_admin_ve_estado_providers(self, client, session, monkeypatch):
+        today = utc_now().date().isoformat()
         monkeypatch.setattr(
             results_base,
             "_STATE",
             {
-                "rate_limited": {"footapi7": "2026-09-21"},
+                # El snapshot solo expone bloqueos ACTIVOS (fecha de hoy
+                # o cooldown con timestamp futuro); entradas viejas se
+                # filtran — un provider marcado ayer no está sin cuota.
+                "rate_limited": {"footapi7": today},
                 "missed": {
                     "footapi7|2026-09-20|x - y": "2026-09-21T10:00:00",
                     "odds|allsportsapi2|tenis|2026-09-20|a vs b": "2026-09-21T10:00:00",
@@ -442,7 +446,7 @@ class TestSystemProvidersApi:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["rate_limited"] == {"footapi7": "2026-09-21"}
+        assert body["rate_limited"] == {"footapi7": today}
         assert body["missed_by_provider"] == {"footapi7": 1, "allsportsapi2": 1}
 
     async def test_usuario_normal_403(self, client, auth_headers):

@@ -108,7 +108,7 @@ class SofaScoreOddsProvider:
             return data if isinstance(data, dict) else None
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
-                mark_rate_limited(self.NAME)
+                mark_rate_limited(self.NAME, exc.response)
                 logger.warning(
                     "[ODDS:%s] Cuota agotada; se omite hasta mañana", self.NAME
                 )

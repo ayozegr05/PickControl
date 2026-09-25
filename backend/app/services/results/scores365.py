@@ -168,7 +168,7 @@ class Scores365Provider:
             return data if isinstance(data, dict) else None
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
-                mark_rate_limited(_PROVIDER_NAME)
+                mark_rate_limited(_PROVIDER_NAME, exc.response)
                 logger.warning("[365SCORES] Rate-limit; se omite hasta mañana")
             else:
                 logger.warning("[365SCORES] Error de API: %s", exc)

@@ -189,7 +189,7 @@ class AllSportsTennisProvider:
             return data if isinstance(data, dict) else None
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):
-                mark_rate_limited(_PROVIDER_NAME)
+                mark_rate_limited(_PROVIDER_NAME, exc.response)
                 logger.warning(
                     "[ALLSPORTS-TENNIS] Cuota agotada; se omite hasta mañana"
                 )

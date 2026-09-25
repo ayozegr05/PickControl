@@ -329,7 +329,7 @@ class OddsPapiClient:
             logger.warning("[ODDS:%s] Error de red en %s: %s", self.NAME, path, exc)
             return 0, None
         if response.status_code in (403, 429):
-            mark_rate_limited(self.NAME)
+            mark_rate_limited(self.NAME, response)
             logger.warning("[ODDS:%s] Cuota agotada; se omite hasta mañana", self.NAME)
             return response.status_code, None
         if response.status_code >= 400:
