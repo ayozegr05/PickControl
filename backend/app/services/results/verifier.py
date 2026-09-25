@@ -1479,12 +1479,31 @@ def _provider_sem(provider: ResultsProvider) -> asyncio.Semaphore:
     return _provider_sems[name]
 
 
+_MIN_LOOKUP_HINT_LEN = 3
+
+
+def _lookup_hint_usable(team_hint: str, pick_id: Optional[int]) -> bool:
+    """False si la pista es vacía o de 1-2 letras ("b" de una extracción
+    rota): ningún jugador/equipo real se busca así — pasarla a /search
+    quema una llamada por provider para devolver 400 o ruido."""
+    if len((team_hint or "").strip()) >= _MIN_LOOKUP_HINT_LEN:
+        return True
+    logger.debug(
+        "[RESULTS_VERIFIER] Pick id=%s: hint %r demasiado corto; se omite",
+        pick_id,
+        team_hint,
+    )
+    return False
+
+
 async def _find_match_across_providers(
     date: datetime,
     team_hint: str,
     providers: list[ResultsProvider],
     pick_id: Optional[int],
 ) -> Optional[MatchResult]:
+    if not _lookup_hint_usable(team_hint, pick_id):
+        return None
     for provider in providers:
         try:
             async with _provider_sem(provider):
@@ -1509,6 +1528,8 @@ async def _find_stats_across_providers(
 ) -> Optional[MatchStats]:
     """Estadísticas del partido (córners, tarjetas...): solo los
     proveedores que implementan `find_match_stats` (hoy API-Football)."""
+    if not _lookup_hint_usable(team_hint, pick_id):
+        return None
     for provider in providers:
         finder = getattr(provider, "find_match_stats", None)
         if finder is None:
@@ -1537,6 +1558,8 @@ async def _find_stats_1h_across_providers(
     """Estadísticas de la PRIMERA parte (córners/tarjetas 1H): solo los
     proveedores que implementan `find_match_stats_1h` (hoy footapi7 con
     el periodo "1ST" de Sofascore)."""
+    if not _lookup_hint_usable(team_hint, pick_id):
+        return None
     for provider in providers:
         finder = getattr(provider, "find_match_stats_1h", None)
         if finder is None:
@@ -1564,6 +1587,8 @@ async def _find_events_across_providers(
 ) -> Optional[MatchEvents]:
     """Eventos del partido (goles/tarjetas/cambios): solo los
     proveedores que implementan `find_match_events` (hoy API-Football)."""
+    if not _lookup_hint_usable(team_hint, pick_id):
+        return None
     for provider in providers:
         finder = getattr(provider, "find_match_events", None)
         if finder is None:
@@ -1591,6 +1616,8 @@ async def _find_players_across_providers(
 ):
     """Jugadores con minutos disputados: solo los proveedores que
     implementan `find_match_players` (hoy API-Football)."""
+    if not _lookup_hint_usable(team_hint, pick_id):
+        return None
     for provider in providers:
         finder = getattr(provider, "find_match_players", None)
         if finder is None:
