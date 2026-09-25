@@ -60,7 +60,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 | # | Idea | Nota |
 |---|---|---|
 | E1 | Filtrar media: OCR solo a fotos | No gastar OpenAI en GIFs/vídeos/docs |
-| E2 | OCR local (`pytesseract`/`easyocr`) | OpenAI solo si el local falla |
+| E2 | OCR local (`pytesseract`/`easyocr`) | **Siguiente candidato de coste**: los slips de boleto son texto limpio y plantillado — un OCR local gratuito cubriría el 90% y OpenAI quedaría solo como fallback cuando el local falle o la imagen sea ambigua |
 | E3 | LLM local (`ollama`) | Cuando el volumen justifique infra |
 | E4 | Batching LLM | Varios mensajes por llamada |
 | E5 | Caché por canal | No reprocesar plantillas/promos repetidas |
