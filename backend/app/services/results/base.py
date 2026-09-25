@@ -69,6 +69,14 @@ def log_remaining_quota(provider_name: str, response: httpx.Response) -> None:
     except ValueError:
         return
     limit = headers.get("x-ratelimit-requests-limit") or "?"
+    # Guardamos el límite diario observado en los headers: la vista de
+    # sistema lo muestra como "llamadas/límite" sin hardcodear caps.
+    if limit != "?":
+        try:
+            _load_state()["limits"][provider_name] = int(limit)
+            _save_state()
+        except ValueError:
+            pass
     if left <= 20:
         logger.warning(
             "[QUOTA] %s: quedan %s/%s llamadas hoy", provider_name, left, limit
@@ -318,6 +326,7 @@ def _load_state() -> dict[str, dict[str, str]]:
         _STATE.setdefault("missed", {})
         _STATE.setdefault("calls", {})
         _STATE.setdefault("loops", {})
+        _STATE.setdefault("limits", {})
     return _STATE
 
 
@@ -398,6 +407,10 @@ def providers_snapshot() -> dict:
     for key in state["missed"]:
         prov_key = key[5:] if key.startswith("odds|") else key
         provider = prov_key.split("|", 1)[0]
+        # "empty" no es un provider: el snapshotter marca así los eventos
+        # consultados que no tenían mercados de cuotas.
+        if provider == "empty":
+            provider = "eventos-sin-mercados"
         missed_by_provider[provider] = missed_by_provider.get(provider, 0) + 1
     today = date_type.today().isoformat()
     calls = state.get("calls", {})
@@ -406,6 +419,7 @@ def providers_snapshot() -> dict:
         "missed_by_provider": missed_by_provider,
         "calls_today": dict(calls.get(today, {})),
         "calls_by_day": dict(calls),
+        "daily_limits": dict(state.get("limits", {})),
     }
 
 

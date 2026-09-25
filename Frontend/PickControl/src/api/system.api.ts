@@ -7,6 +7,9 @@ export interface ProvidersStatus {
   missed_by_provider: Record<string, number>;
   calls_today: Record<string, number>;
   calls_by_day: Record<string, Record<string, number>>;
+  // Límite diario observado vía headers x-ratelimit (solo providers
+  // que lo reportan).
+  daily_limits: Record<string, number>;
 }
 
 export function getProvidersStatus(): Promise<ProvidersStatus> {
