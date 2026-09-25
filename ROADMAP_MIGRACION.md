@@ -52,7 +52,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 |---|---|---|---|
 | D1 | Residuos de cabecera en `seleccion` | Vigilar nuevas extracciones en formatos no vistos | P.6 |
 | D2 | Partidos parados a mitad (SUSP/ABD/INT) | Manual a propósito: hay mercados ya decididos que la casa paga | §1 + hito 3 |
-| D3 | Mini-fix dobles tenis, apellido corto | Solo si aparece un caso real (`_pair_similar` en `_tennis_side`) | Decisiones #6 |
+| D3 | ~~Mini-fix dobles tenis, apellido corto~~ | **Resuelto**: el caso real (Cukierman/Shimanov) ya apareció y `_pair_similar` parte el hint en miembros de pareja exigiendo que todos casen. Los dobles pendientes en BD lo están por cobertura de Challenger, no por matching | Decisiones #6 |
 | D4 | Verificación live/en juego, torneos sin cobertura, hándicap zona ambigua |línea| 2-3 | Aparcados fuera de la lista | Vista completa |
 
 ### E. Optimizaciones de coste (ideas, sin plan)
@@ -843,8 +843,10 @@ El punto 1 de la lista anterior quedó implementado así:
 5. **`verify_now.py`**: footapi7 resuelve props de jugador pendientes y
    allsportsapi2 reintenta los ~31 misses de tenis (clave propia,
    no hereda misses viejos). Encaja con el punto 4 el mismo día.
-6. **Mini-fix pendiente si aparece**: dobles de tenis con apellido muy
-   corto — el provider ya los encuentra pero `_tennis_side` usa
-   `_pair_similar` y podría quedar el pick pendiente. Solo si se ve
-   un caso real.
+6. ~~**Mini-fix pendiente si aparece**: dobles de tenis con apellido
+   muy corto~~ → **hecho**: el caso real ya apareció
+   (Cukierman/Shimanov) y `_pair_similar` fue actualizado para partir
+   el hint en miembros de pareja y exigir que todos casen con la
+   pareja de la API (con penalización simple↔dobles). Los dobles que
+   quedan pendientes lo están por cobertura Challenger, no por matching.
 7. **Limpieza de usuarios** (test@a.com) — trivial, va con el deploy.
