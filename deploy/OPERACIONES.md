@@ -43,7 +43,8 @@ Contenedores (en la VM, `docker ps`):
 │   └── backups/              # dumps diarios (montado a /app/backups)
 └── deploy/
     ├── Caddyfile.snippet     # bloque ya aplicado en checkcoast/Caddyfile
-    └── backup_cron.sh        # instalado en cron diario 04:00
+    ├── backup_cron.sh        # instalado en cron diario 04:00
+    └── verify_backlog_cron.sh  # cron diario 00:30 (backlog >14d)
 ```
 
 ## Cuenta de Telegram en producción
@@ -111,6 +112,10 @@ docker exec controlpick-db psql -U postgres -d controlpick
 # Backup manual
 docker exec controlpick-db pg_dump -U postgres -Fc controlpick \
   > backups/manual-$(date +%F).dump
+
+# Barrido diario de backlog (cron 00:30 UTC, cuotas recién renovadas):
+# verifica pendientes >14 días que el ciclo de 3h ya no reintenta.
+cat verify_backlog.log
 
 # Restaurar un dump
 cat backups/XXX.dump | docker exec -i controlpick-db \

@@ -19,11 +19,22 @@ export interface PicksStatus {
   pendientes_simples: number;
   pendientes_patas: number;
   pendientes_combinadas: number;
+  // Desglose de pendientes verificables por API (simples + patas):
+  // jugadas <14d (el ciclo 3h reintenta), futuras/en juego, backlog
+  // >14d (solo verify_backlog) y sin fecha_evento (no verificables).
+  pendientes_jugados_ventana: number;
+  pendientes_futuros: number;
+  pendientes_backlog: number;
+  pendientes_sin_fecha: number;
+  pendientes_por_deporte: Record<string, number>;
   resueltas_hoy: number;
   resueltas_hoy_evento_hoy: number;
   resueltas_hoy_evento_previo: number;
   resueltas_total: number;
   resueltas_por_dia: Record<string, number>;
+  // Liquidaciones por hora UTC ("YYYY-MM-DD HH:00") — aproxima cada
+  // pasada del verifier (cada ~3 h).
+  resueltas_por_pasada: Record<string, number>;
 }
 
 export function getPicksStatus(): Promise<PicksStatus> {

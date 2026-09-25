@@ -5,9 +5,11 @@ Expone el estado operativo de los providers de resultados/cuotas
 que no debe ser visible para usuarios normales.
 """
 
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, literal
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -55,6 +57,18 @@ class PicksStatus(BaseModel):
     pendientes_simples: int
     pendientes_patas: int
     pendientes_combinadas: int
+    # Desglose de pendientes verificables (es_apuesta, pendiente y no
+    # padre de combinada — los padres esperan a sus patas, no a la API):
+    # cuántos están dentro de la ventana de 14 días que el ciclo de 3 h
+    # reintenta, cuántos son futuros/en juego, cuántos son backlog que
+    # solo toca `verify_backlog.py`, y cuántos no tienen fecha_evento
+    # (nunca verificables por API).
+    pendientes_jugados_ventana: int
+    pendientes_futuros: int
+    pendientes_backlog: int
+    pendientes_sin_fecha: int
+    # Mismo conjunto agrupado por deporte (NULL -> "otros").
+    pendientes_por_deporte: dict[str, int]
     resueltas_hoy: int
     # De las resueltas hoy: cuántas eran de eventos de hoy y cuántas
     # eran backlog (evento de un día anterior — incluye fecha_evento
@@ -64,6 +78,10 @@ class PicksStatus(BaseModel):
     resueltas_total: int
     # Liquidaciones por día ("YYYY-MM-DD" -> n), últimos 14 días.
     resueltas_por_dia: dict[str, int]
+    # Liquidaciones por hora UTC ("YYYY-MM-DD HH:00" -> n), últimas 16
+    # entradas — aproxima cuántas resolvió cada pasada del verifier
+    # (corre cada ~3 h).
+    resueltas_por_pasada: dict[str, int]
 
 
 @router.get("/picks", response_model=PicksStatus)
@@ -81,7 +99,21 @@ async def picks_status(
     pendiente = (ParsedPick.acierto == None) & (  # noqa: E711
         ParsedPick.anulada == False  # noqa: E712
     )
-    hoy = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
+    ahora = utc_now()
+    hoy = ahora.replace(hour=0, minute=0, second=0, microsecond=0)
+    # literal() evita que asyncpg parametrice 'hour' con placeholders
+    # distintos en SELECT/GROUP BY/ORDER BY (GroupingError).
+    pasada_bucket = func.date_trunc(literal("hour"), ParsedPick.verificado_at)
+
+    # Conjunto verificable por API: simples y patas pendientes. Los
+    # padres de combinada se liquidan por sus patas, no por provider.
+    limite_jugado = ahora - timedelta(hours=3)
+    limite_backlog = ahora - timedelta(days=14)
+    verificable = [
+        ParsedPick.es_apuesta == True,  # noqa: E712
+        pendiente,
+        ParsedPick.es_combinada == False,  # noqa: E712
+    ]
 
     async def _count(*conds: object) -> int:
         q = select(func.count()).select_from(ParsedPick).where(*conds)
@@ -100,6 +132,31 @@ async def picks_status(
         pendientes_combinadas=await _count(
             pendiente, ParsedPick.es_combinada == True  # noqa: E712
         ),
+        pendientes_jugados_ventana=await _count(
+            *verificable,
+            ParsedPick.fecha_evento < limite_jugado,
+            ParsedPick.fecha_evento >= limite_backlog,
+        ),
+        pendientes_futuros=await _count(
+            *verificable, ParsedPick.fecha_evento >= limite_jugado
+        ),
+        pendientes_backlog=await _count(
+            *verificable, ParsedPick.fecha_evento < limite_backlog
+        ),
+        pendientes_sin_fecha=await _count(
+            *verificable, ParsedPick.fecha_evento == None  # noqa: E711
+        ),
+        pendientes_por_deporte={
+            dep or "otros": n
+            for dep, n in (
+                await session.exec(
+                    select(ParsedPick.deporte, func.count())
+                    .where(*verificable)
+                    .group_by(ParsedPick.deporte)
+                    .order_by(func.count().desc())
+                )
+            ).all()
+        },
         resueltas_hoy=await _count(ParsedPick.verificado_at >= hoy),
         resueltas_hoy_evento_hoy=await _count(
             ParsedPick.verificado_at >= hoy,
@@ -126,6 +183,18 @@ async def picks_status(
                     .group_by(func.date(ParsedPick.verificado_at))
                     .order_by(func.date(ParsedPick.verificado_at).desc())
                     .limit(14)
+                )
+            ).all()
+        },
+        resueltas_por_pasada={
+            pasada.strftime("%Y-%m-%d %H:00"): n
+            for pasada, n in (
+                await session.exec(
+                    select(pasada_bucket, func.count())
+                    .where(ParsedPick.verificado_at != None)  # noqa: E711
+                    .group_by(pasada_bucket)
+                    .order_by(pasada_bucket.desc())
+                    .limit(16)
                 )
             ).all()
         },

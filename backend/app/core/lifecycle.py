@@ -15,6 +15,7 @@ from app.core.logging import get_logger
 from app.services.maintenance.rescue import run_rescue_cycle
 from app.services.odds.historical_backfill import count_pending_backfill, run
 from app.services.odds.snapshotter import run_odds_snapshot_cycle
+from app.services.results.base import loop_due, mark_loop_ran
 from app.services.results.verifier import verify_pending_picks
 from app.services.telegram.catchup import run_catchup
 from app.services.telegram.channels import (
@@ -51,7 +52,11 @@ async def _run_results_verifier_loop() -> None:
 
     while True:
         try:
-            await verify_pending_picks()
+            # loop_due evita una pasada extra en cada restart/redeploy:
+            # solo corre si la última pasada real ya venció el intervalo.
+            if loop_due("verifier", interval_seconds):
+                await verify_pending_picks()
+                mark_loop_ran("verifier")
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "[RESULTS_VERIFIER] Error verificando picks pendientes: %s", exc
@@ -70,7 +75,9 @@ async def _run_odds_snapshotter_loop() -> None:
 
     while True:
         try:
-            await run_odds_snapshot_cycle()
+            if loop_due("odds_snapshotter", interval_seconds):
+                await run_odds_snapshot_cycle()
+                mark_loop_ran("odds_snapshotter")
         except Exception as exc:  # noqa: BLE001
             logger.error("[ODDS_SNAPSHOTTER] Error en el ciclo de snapshots: %s", exc)
         await asyncio.sleep(interval_seconds)
@@ -87,7 +94,9 @@ async def _run_rescue_loop() -> None:
 
     while True:
         try:
-            await run_rescue_cycle()
+            if loop_due("rescue", interval_seconds):
+                await run_rescue_cycle()
+                mark_loop_ran("rescue")
         except Exception as exc:  # noqa: BLE001
             logger.error("[RESCUE] Error en el ciclo de rescate: %s", exc)
         await asyncio.sleep(interval_seconds)
@@ -106,15 +115,18 @@ async def _run_odds_backfill_loop() -> None:
 
     while True:
         try:
-            async with AsyncSessionLocal() as session:
-                pending = await count_pending_backfill(session)
-            if pending:
-                report = await run(apply=True, limit=None)
-                logger.info(
-                    "[ODDS_BACKFILL] Pasada diaria: %s pendientes, %s filas insertadas.",
-                    pending,
-                    report.filas,
-                )
+            if loop_due("odds_backfill", interval_seconds):
+                async with AsyncSessionLocal() as session:
+                    pending = await count_pending_backfill(session)
+                if pending:
+                    report = await run(apply=True, limit=None)
+                    logger.info(
+                        "[ODDS_BACKFILL] Pasada diaria: %s pendientes, "
+                        "%s filas insertadas.",
+                        pending,
+                        report.filas,
+                    )
+                mark_loop_ran("odds_backfill")
         except Exception as exc:  # noqa: BLE001
             logger.error("[ODDS_BACKFILL] Error en el ciclo de backfill: %s", exc)
         await asyncio.sleep(interval_seconds)

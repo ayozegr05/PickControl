@@ -616,6 +616,40 @@ export default function ParsedPicksScreen() {
               </Text>
             </View>
             <View style={styles.providerRow}>
+              <Text style={styles.providerName}>· jugadas &lt;14d</Text>
+              <Text style={styles.providerMisses}>
+                {picksStatus.pendientes_jugados_ventana ?? 0}
+              </Text>
+            </View>
+            <View style={styles.providerRow}>
+              <Text style={styles.providerName}>· futuras / en juego</Text>
+              <Text style={styles.providerMisses}>
+                {picksStatus.pendientes_futuros ?? 0}
+              </Text>
+            </View>
+            <View style={styles.providerRow}>
+              <Text style={styles.providerName}>· backlog &gt;14d</Text>
+              <Text style={styles.providerBad}>
+                {picksStatus.pendientes_backlog ?? 0}
+              </Text>
+            </View>
+            {(picksStatus.pendientes_sin_fecha ?? 0) > 0 && (
+              <View style={styles.providerRow}>
+                <Text style={styles.providerName}>· sin fecha</Text>
+                <Text style={styles.providerBad}>
+                  {picksStatus.pendientes_sin_fecha}
+                </Text>
+              </View>
+            )}
+            {Object.entries(picksStatus.pendientes_por_deporte ?? {}).map(
+              ([dep, n]) => (
+                <View key={dep} style={styles.providerRow}>
+                  <Text style={styles.providerName}>· {dep}</Text>
+                  <Text style={styles.providerMisses}>{n}</Text>
+                </View>
+              )
+            )}
+            <View style={styles.providerRow}>
               <Text style={styles.providerName}>Resueltas total</Text>
               <Text style={styles.providerOk}>
                 {picksStatus.resueltas_total}
@@ -625,6 +659,22 @@ export default function ParsedPicksScreen() {
               ([dia, n]) => (
                 <View key={dia} style={styles.providerRow}>
                   <Text style={styles.providerMisses}>{dia}</Text>
+                  <Text style={styles.providerName}>{n} liquidadas</Text>
+                </View>
+              )
+            )}
+            {Object.keys(picksStatus.resueltas_por_pasada ?? {}).length >
+              0 && (
+              <View style={styles.providerRow}>
+                <Text style={styles.providerName}>Por pasada (UTC)</Text>
+              </View>
+            )}
+            {Object.entries(picksStatus.resueltas_por_pasada ?? {}).map(
+              ([pasada, n]) => (
+                <View key={pasada} style={styles.providerRow}>
+                  <Text style={styles.providerMisses}>
+                    {pasada.slice(5)}
+                  </Text>
                   <Text style={styles.providerName}>{n} liquidadas</Text>
                 </View>
               )
