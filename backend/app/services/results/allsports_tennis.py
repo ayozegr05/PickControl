@@ -183,8 +183,11 @@ class AllSportsTennisProvider:
             response = await client.get(
                 f"https://{self._api_host}{path}", headers=self._headers()
             )
-            response.raise_for_status()
+            # Leer los headers de cuota ANTES de raise_for_status: en un
+            # 429 es justo esa respuesta la que trae el límite, y si se
+            # lanzara antes la excepción nunca los veríamos.
             log_remaining_quota(_PROVIDER_NAME, response)
+            response.raise_for_status()
             data = response.json()
             return data if isinstance(data, dict) else None
         except httpx.HTTPError as exc:
