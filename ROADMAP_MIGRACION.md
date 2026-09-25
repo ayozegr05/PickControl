@@ -48,7 +48,9 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
     API-Football) y tenis (cadena TheSportsDB → ATP-WTA-ITF → tennisapi1).
     Detalle de mercados en "Próximos hitos" → "Mercados".
   - **Corrección manual** de resultados vía `PATCH /telegram/parsed-picks/{id}`.
-- **Fase 6: Despliegue y Hardening a producción.** (PENDIENTE — ver hitos abajo)
+- **Fase 6: Despliegue y Hardening a producción.** (COMPLETADA 2026-09-24:
+  Oracle VM ARM + Postgres en Docker + Caddy/HTTPS + backups diarios +
+  cuenta Telegram dedicada. Runbook en `deploy/OPERACIONES.md`)
 
 ## Próximos hitos
 
@@ -66,9 +68,10 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 | 8 | "Yo también la jugué" | Hecho | — |
 | 9 | Notificaciones push | Hecho — backend (DeviceToken + Expo Push + hooks) y registro en la app; falta probar en dispositivo físico | Medio |
 | 10 | CRUD de canales desde la app | Hecho — backend verificado en vivo (endpoints, toggle dinámico, catch-up por canales de BD); falta solo revisión visual de la pantalla en Expo | Medio |
-| 11 | Deploy real (servidor + PostgreSQL + HTTPS) | Pendiente | Medio-alto |
+| 11 | Deploy real (servidor + PostgreSQL + HTTPS) | Hecho (2026-09-24): Oracle VM ARM, compose prod, Caddy `controlpick.duckdns.org`, convive con checkcoast — ver `deploy/OPERACIONES.md` | Medio-alto |
 | 12 | Backups: script `backup_db.py` | Hecho | — |
-| 13 | Backups programados diarios | Pendiente (va con el deploy) | Trivial |
+| 13 | Backups programados diarios | Hecho — cron 04:00 en la VM (`deploy/backup_cron.sh`, 14 días de retención) | Trivial |
+| 18 | Cuenta Telegram dedicada | Hecho (2026-09-24): cuenta "Ramón" con eSIM propia + 2FA, sesión QR `controlpick_telegram_new`, 6/6 canales (invite links guardados como `target`), swap en prod hecho | Alto |
 | 14 | Tests del pipeline Telegram | Hecho | — |
 | 15 | Limpieza de usuarios (test@a.com) | Pendiente | Trivial |
 | 16 | Alertas de cuota a admins + panel "Sistema · providers" | Hecho — push admin-only al pasar a rate_limited (dedup 1/día) + `GET /system/providers` (403 no-admin) + panel en parsed-picks solo `isAdmin` | Bajo |
@@ -469,8 +472,23 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
 
 ### 4. Infra / calidad
 
-- [ ] **Deploy real**: backend en servidor + PostgreSQL gestionada + HTTPS
-      (hoy todo corre en local: Uvicorn + Expo en red local).
+- [x] **Deploy real** (hecho 2026-09-24): Oracle Always Free ARM VM,
+      `docker-compose.prod.yml` (backend + Postgres privada), TLS por el
+      Caddy de checkcoast en `controlpick.duckdns.org`, BD restaurada con
+      todo el histórico. Runbook completo en `deploy/OPERACIONES.md`.
+- [x] **Cuenta Telegram dedicada** (hecho 2026-09-24): producción ya no
+      usa la cuenta personal — cuenta "Ramón" (eSIM propia, 2FA, nombre
+      neutro) con sesión QR `controlpick_telegram_new`. Los 6 canales
+      privados guardan su invite link como `target` en `channels`, así
+      `scripts/join_all_channels.py` re-ingresa una cuenta futura sin
+      intervención manual.
+- [ ] **Borrar sesión vieja de la VM**: `controlpick_telegram.session`
+      (cuenta personal) sigue como archivo montado sin uso — eliminar
+      tras unos días de estabilidad (y su línea en `volumes:` del compose).
+      Recuperarla = re-login con código, 2 min.
+- [ ] **Política de retención de media**: `media/telegram` crece ~ilimitado
+      (≈39 GB libres hoy, margen de años). Decidir purga/compresión/volumen
+      Oracle extra (Always Free da hasta 200 GB de block storage).
 - [x] **Backups de PostgreSQL — script** (hecho): `backend/scripts/backup_db.py`
       genera dumps comprimidos (`pg_dump -Fc`) en `backend/backups/` con
       timestamp, retención de 14 días (`BACKUP_RETENTION_DAYS`) y
@@ -478,9 +496,16 @@ tenis de canales Challenger (Lady Bets, Bet Fran) sin resolver:
       directorio está en `.gitignore`. Restaurar:
       `pg_restore -d controlpick backups/<dump>.dump`. En local basta
       ejecución manual antes de migraciones o reprocesos.
-- [ ] **Backups programados diarios** (pendiente): crear la tarea en Task
-      Scheduler / cron para que `backup_db.py` corra solo cada día
-      (comandos en la docstring del script). Se activa junto al deploy.
+- [x] **Backups programados diarios** (hecho 2026-09-24): cron 04:00 en la
+      VM ejecuta `deploy/backup_cron.sh` → `pg_dump` dentro de
+      `controlpick-db`, retención 14 días en `backend/backups/`.
+- [ ] **Higiene de credenciales en la app**: las credenciales para el login
+      biométrico se guardan en texto plano en AsyncStorage
+      (`login.tsx`) — migrar a `expo-secure-store`.
+- [ ] **Build APK producción**: `eas.json` ya apunta a
+      `controlpick.duckdns.org/api/v1` — falta `eas build` + instalar.
+- [ ] **Revisar `Frontend/PickControl/git.ignore`** (untracked): decidir
+      si es `.gitignore` mal nombrado o artefacto a borrar.
 - [x] **Tests del pipeline de Telegram** (hecho): `catchup.py` (marca de
       agua, huecos por debajo de la marca, raw vacío/`processed=False`
       reprocesado, raw con pick vinculado no se toca, corte por 7 días,
