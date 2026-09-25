@@ -5,7 +5,7 @@
 // `process.env.EXPO_PUBLIC_API_BASE_URL` + rutas antiguas de Node
 // (`/login`, `/apuestas`...). El backend FastAPI expone todo bajo el
 // prefijo `/api/v1`.
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { getSecureItem } from "@/src/storage/secure";
 
 const BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
@@ -23,7 +23,7 @@ type RequestOptions = {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   /** Si es true, adjunta `Authorization: Bearer <token>` leyendo el
-   * token guardado por AuthContext en AsyncStorage. */
+   * token guardado por AuthContext en el almacenamiento seguro. */
   auth?: boolean;
 };
 
@@ -56,7 +56,7 @@ export async function apiRequest<T>(
   };
 
   if (auth) {
-    const token = await AsyncStorage.getItem("userToken");
+    const token = await getSecureItem("userToken");
     if (!token) {
       throw new ApiError("No has iniciado sesión", 401);
     }

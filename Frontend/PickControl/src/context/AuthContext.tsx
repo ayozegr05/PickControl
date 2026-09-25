@@ -5,6 +5,11 @@ import React, { createContext, useContext, useState, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { registerForPushNotifications } from "@/src/notifications/push";
+import {
+  getSecureItem,
+  removeSecureItem,
+  setSecureItem,
+} from "@/src/storage/secure";
 
 type AuthContextType = {
   isAuthenticated: boolean;
@@ -28,7 +33,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const checkAuth = async () => {
     try {
-      const token = await AsyncStorage.getItem("userToken");
+      const token = await getSecureItem("userToken");
       const storedUserName = await AsyncStorage.getItem("userName");
       const storedRole = await AsyncStorage.getItem("userRole");
       setIsAuthenticated(!!token);
@@ -45,7 +50,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const login = async (token: string, name: string, role?: string) => {
     try {
-      await AsyncStorage.setItem("userToken", token);
+      await setSecureItem("userToken", token);
       await AsyncStorage.setItem("userName", name);
       await AsyncStorage.setItem("userRole", role ?? "user");
       setIsAuthenticated(true);
@@ -59,7 +64,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const logout = async () => {
     try {
-      await AsyncStorage.removeItem("userToken");
+      await removeSecureItem("userToken");
       await AsyncStorage.removeItem("userName");
       await AsyncStorage.removeItem("userRole");
       setIsAuthenticated(false);
