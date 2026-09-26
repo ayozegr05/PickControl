@@ -17,7 +17,8 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.ayozegr.PickControl"
+      "package": "com.ayozegr.PickControl",
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "bundler": "metro",

@@ -76,3 +76,7 @@ android/.gradle/
 # Backups de PostgreSQL (pg_dump) — nunca commitear dumps
 backups/
 backend/backups/
+
+# APKs locales (builds manuales)
+*.apk
+google-services.json
