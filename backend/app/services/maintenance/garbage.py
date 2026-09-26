@@ -34,6 +34,7 @@ from app.models.informante import Informante  # noqa: F401
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.models.user import User  # noqa: F401
+from app.services.telegram.pick_extractor import _is_settled_ticket
 
 # Solo fechas largas inequívocas, con año explícito — el formato que
 # imprimen las casas en el boleto ("16 de septiembre de 2026, 19:00").
@@ -58,9 +59,16 @@ _SLIP_DATE_RE = re.compile(
     r"(\d{4})\b(?:\s*[,·-]?\s*(\d{1,2}):(\d{2}))?",
     re.IGNORECASE,
 )
+# Formato corto que también imprimen las casas ("24/8/26 19:30").
+_SLIP_DATE_SHORT_RE = re.compile(
+    r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b(?:\s*[,·-]?\s*(\d{1,2}):(\d{2}))?"
+)
 # Cordura: la fecha impresa debe estar cerca de la del mensaje; fuera
 # de este margen es ruido del OCR (fecha de emisión, otro evento...).
 _SLIP_MAX_DISTANCE = timedelta(days=60)
+# Para el descarte por republicación el margen es mucho más amplio:
+# un slip de hace meses republicado sigue siendo marketing.
+_SLIP_FLAG_DISTANCE = timedelta(days=400)
 
 # Texto de marketing que cuela como selección/evento. Palabras/frases
 # que nunca aparecen en una apuesta real.
@@ -94,25 +102,37 @@ class GarbageReport:
 def slip_printed_date(text: Optional[str]) -> Optional[datetime]:
     """Fecha del partido impresa en el boleto, o None.
 
-    Solo acepta el formato largo con año ("16 de septiembre de 2026" /
-    "16 de septiembre de 2026, 19:00") — inequívoco en slips de casas
-    españolas. Sin fecha impresa clara no se inventa nada.
+    Acepta el formato largo con año ("16 de septiembre de 2026, 19:00")
+    y el corto con barras ("24/8/26 19:30") — ambos inequívocos en slips
+    de casas españolas. Sin fecha impresa clara no se inventa nada.
     """
     if not text:
         return None
     match = _SLIP_DATE_RE.search(text)
-    if not match:
+    if match:
+        day, month_name, year, hour, minute = match.groups()
+        try:
+            return datetime(
+                int(year),
+                _MESES_LARGO[month_name.lower()],
+                int(day),
+                int(hour or 0),
+                int(minute or 0),
+            )
+        except (ValueError, KeyError):
+            return None
+    short = _SLIP_DATE_SHORT_RE.search(text)
+    if not short:
         return None
-    day, month_name, year, hour, minute = match.groups()
+    day, month, year, hour, minute = short.groups()
+    year_int = int(year)
+    if year_int < 100:
+        year_int += 2000
     try:
         return datetime(
-            int(year),
-            _MESES_LARGO[month_name.lower()],
-            int(day),
-            int(hour or 0),
-            int(minute or 0),
+            year_int, int(month), int(day), int(hour or 0), int(minute or 0)
         )
-    except (ValueError, KeyError):
+    except ValueError:
         return None
 
 
@@ -125,18 +145,66 @@ def _slip_analysis(raw: TelegramRawMessage) -> tuple[Optional[datetime], str]:
     return None, ""
 
 
+# Teaser de premium: texto que anuncia una combinada/crear-apuesta con
+# cuota pero SIN slip ni patas detalladas ("DOBLE CREAR APUESTA 2X1
+# CUOTA 81 A - B + CUOTA 71 C - D"). La apuesta real nunca se publica —
+# solo fabrica picks irresolubles.
+_TEASER_CTA_RE = re.compile(r"crear?\s+apuesta", re.IGNORECASE)
+# Si el texto trae vocabulario de mercado no es un teaser vacío.
+_TEASER_MARKET_RE = re.compile(
+    r"gana|m[aá]s\s+de|menos\s+de|over|under|c[oó]rner|tarjeta|"
+    r"h[aá]ndicap|marca|anota|recibe|ambos|empate|\bset\b|juego|"
+    r"tiros?|remate|falta|\baces?\b",
+    re.IGNORECASE,
+)
+
+
 def _analyze_raw(
     raw: TelegramRawMessage, picks: list[ParsedPick]
 ) -> list[GarbageAction]:
-    """Reglas de fecha del slip para todos los picks de un mensaje."""
+    """Detectores por mensaje: slip liquidado, teaser y fecha impresa."""
+    full_text = "\n".join(t for t in (raw.extracted_text, raw.text) if t)
+
+    # Slip ya liquidado republicado como prueba (sello GANAD@S, ✓ por
+    # selección, premio pagado): nunca fue apuesta abierta.
+    if _is_settled_ticket(full_text):
+        return [
+            GarbageAction(
+                pick_id=pick.id,
+                action="flag",
+                reason="slip_liquidado",
+                detail=f"sello/premio cobrado (msg {raw.message_id})",
+            )
+            for pick in picks
+        ]
+
+    # Anuncio premium sin patas detalladas: solo cuota total + partidos,
+    # en texto o en imagen del anuncio. Un slip real siempre lista las
+    # selecciones con vocabulario de mercado ("Más de...", "X gana").
+    if (
+        full_text
+        and _TEASER_CTA_RE.search(full_text)
+        and not _TEASER_MARKET_RE.search(full_text)
+    ):
+        return [
+            GarbageAction(
+                pick_id=pick.id,
+                action="flag",
+                reason="teaser_sin_patas",
+                detail=f"anuncio sin slip ni mercados (msg {raw.message_id})",
+            )
+            for pick in picks
+        ]
+
     slip_date, source = _slip_analysis(raw)
     if slip_date is None or raw.received_at is None:
         return []
-    if abs(slip_date - raw.received_at) > _SLIP_MAX_DISTANCE:
-        return []
 
     actions: list[GarbageAction] = []
-    if slip_date.date() < raw.received_at.date():
+    if (
+        slip_date.date() < raw.received_at.date()
+        and abs(slip_date - raw.received_at) <= _SLIP_FLAG_DISTANCE
+    ):
         # La fecha impresa es de un día ANTERIOR al mensaje: el slip ya
         # estaba jugado cuando se publicó — republicación/marketing.
         actions.extend(
@@ -168,9 +236,11 @@ def _analyze_raw(
             )
             for pick in picks
         )
-    else:
+    elif abs(slip_date - raw.received_at) <= _SLIP_MAX_DISTANCE:
         # Mensaje anterior al evento: apuesta real; la fecha impresa
-        # corrige `fecha_evento` cuando difiere de la guardada.
+        # corrige `fecha_evento` cuando difiere de la guardada. La
+        # corrección sí exige proximidad — una fecha lejana en el OCR
+        # es ruido (emisión del boleto, otro evento...).
         for pick in picks:
             current = pick.fecha_evento
             if current is None or current.date() != slip_date.date():

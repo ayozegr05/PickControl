@@ -66,6 +66,19 @@ class TestSlipPrintedDate:
         # "16 de septiembre" a secas es ambiguo: no se usa.
         assert garbage.slip_printed_date("el 16 de septiembre a las 19:00") is None
 
+    def test_formato_corto_barras(self):
+        # "24/8/26 19:30" — formato corto que imprimen algunas casas.
+        found = garbage.slip_printed_date("Osasuna - Levante\n24/8/26 19:30\n")
+        assert found == datetime(2026, 8, 24, 19, 30)
+
+    def test_formato_corto_ano_largo(self):
+        found = garbage.slip_printed_date("Partido 24/08/2026")
+        assert found == datetime(2026, 8, 24)
+
+    def test_formato_corto_invalido_no_casa(self):
+        assert garbage.slip_printed_date("cuota 31/2/26") is None
+        assert garbage.slip_printed_date("24/8") is None
+
 
 class TestAnalyzeRaw:
     def test_slip_de_dia_anterior_es_repost(self):
@@ -98,14 +111,92 @@ class TestAnalyzeRaw:
         assert len(actions) == 1
         assert actions[0].action == "review"
 
-    def test_slip_lejano_ignorado(self):
-        """Fecha impresa a >60 días del mensaje: ruido del OCR."""
+    def test_slip_muy_antiguo_es_repost(self):
+        """Slip de junio republicado en septiembre: repost aunque la
+        distancia supere los 60 días (la guarda corta solo protege las
+        correcciones de fecha, no el descarte)."""
         raw = _raw(datetime(2026, 12, 20, 10, 0), extracted_text=_SLIP_OCR)
-        assert garbage._analyze_raw(raw, [_pick()]) == []
+        actions = garbage._analyze_raw(raw, [_pick()])
+        assert len(actions) == 1
+        assert actions[0].action == "flag"
+        assert actions[0].reason == "slip_republicado"
+
+    def test_slip_futuro_lejano_no_corrige(self):
+        """Fecha impresa FUTURA a >60 días: ruido del OCR — no se
+        corrige fecha_evento con ella."""
+        far_future_slip = _SLIP_OCR.replace("septiembre", "diciembre")
+        raw = _raw(datetime(2026, 9, 15, 19, 57), extracted_text=far_future_slip)
+        pick = _pick(fecha_evento=datetime(2026, 9, 15, 19, 57))
+        assert garbage._analyze_raw(raw, [pick]) == []
 
     def test_sin_fecha_impresa_no_actua(self):
         raw = _raw(datetime(2026, 9, 19, 10, 21), extracted_text="Solo cuotas")
         assert garbage._analyze_raw(raw, [_pick()]) == []
+
+
+class TestSlipLiquidadoYTeaser:
+    _WON_SLIP_CHECKS = (
+        "CREAR APUESTA  61.00\n"
+        "✓ Ante Budimir: 2+ remates a puerta\n"
+        "✓ Ruben Garcia: 2+ remates a puerta\n"
+        "✓ Ivan Romero será Amonestado\n"
+        "Osasuna\nLevante\nImp: 100,00€\n6100,00€  Ganancias\n"
+    )
+    _WON_SLIP_SEAL = (
+        "CREA TU APUESTA 5 pronósticos\nGANAD@S\n"
+        "Osasuna - Levante\n24/8/26 19:30\nGanancias 1.220,00 €\n"
+    )
+
+    def test_slip_con_checkmarks_es_liquidado(self):
+        # Slip "verde" con ✓ por selección + premio pagado — dice
+        # "Crear apuesta" porque así se llama el mercado bet-builder.
+        raw = _raw(datetime(2026, 9, 21, 18, 15), extracted_text=self._WON_SLIP_CHECKS)
+        actions = garbage._analyze_raw(raw, [_pick()])
+        assert [a.reason for a in actions] == ["slip_liquidado"]
+
+    def test_sello_ganad_arroba_es_liquidado(self):
+        raw = _raw(datetime(2026, 9, 21, 18, 46), extracted_text=self._WON_SLIP_SEAL)
+        actions = garbage._analyze_raw(raw, [_pick()])
+        assert [a.reason for a in actions] == ["slip_liquidado"]
+
+    def test_teaser_sin_slip_ni_mercados(self):
+        raw = _raw(
+            datetime(2026, 9, 21, 18, 58),
+            text="‼️ DOBLE CREAR APUESTA 2X1 ⚽ CUOTA 81 BAYERN - CITY "
+            "+ CUOTA 71 JUVENTUS - BENFICA 🚀💣",
+        )
+        actions = garbage._analyze_raw(raw, [_pick()])
+        assert [a.reason for a in actions] == ["teaser_sin_patas"]
+
+    def test_texto_crear_apuesta_con_mercados_no_es_teaser(self):
+        # Texto que sí detalla la apuesta: no es un anuncio vacío.
+        raw = _raw(
+            datetime(2026, 9, 21, 18, 58),
+            text="Mi crear apuesta de hoy: Bayern gana y más de 2.5 goles",
+        )
+        assert garbage._analyze_raw(raw, [_pick()]) == []
+
+    def test_teaser_en_imagen_de_anuncio(self):
+        # El anuncio llega como captura de texto (OCR), no como mensaje —
+        # sigue sin patas ni mercados: teaser igualmente.
+        raw = _raw(
+            datetime(2026, 9, 21, 18, 58),
+            extracted_text="!! DOBLE CREAR APUESTA 2X1 ⚽ CUOTA 81 "
+            "BAYERN - CITY + CUOTA 71 JUVENTUS - BENFICA",
+        )
+        actions = garbage._analyze_raw(raw, [_pick()])
+        assert [a.reason for a in actions] == ["teaser_sin_patas"]
+
+    def test_teaser_con_slip_adjunto_no_flag(self):
+        # Foto + texto "crear apuesta": el OCR del slip lista las patas
+        # con vocabulario de mercado ("Menos de...") — no es teaser.
+        raw = _raw(
+            datetime(2026, 9, 21, 18, 58),
+            extracted_text=_SLIP_OCR,
+            text="CREAR APUESTA CUOTA 91 BARCELONA - PSG",
+        )
+        actions = garbage._analyze_raw(raw, [_pick()])
+        assert all(a.reason != "teaser_sin_patas" for a in actions)
 
 
 class TestAnalyzePickFields:
