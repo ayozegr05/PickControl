@@ -46,6 +46,7 @@ from app.services.results.base import (
     MISSED_TTL_PROVISIONAL,
     is_missed,
     is_rate_limited,
+    log_remaining_quota,
     mark_missed,
     mark_rate_limited,
     match_score,
@@ -103,6 +104,10 @@ class SofaScoreOddsProvider:
             response = await client.get(
                 f"https://{self._api_host}{path}", headers=self._headers()
             )
+            # Antes del raise: también cuenta la llamada y captura el
+            # límite aunque sea 429 (sin esto el panel solo veía las
+            # llamadas del lado de resultados, no las del snapshotter).
+            log_remaining_quota(self.NAME, response)
             response.raise_for_status()
             data = response.json()
             return data if isinstance(data, dict) else None
