@@ -37,6 +37,10 @@ export type ParsedPick = {
   cuota_efectiva: number | null;
   /** Patas de la combinada (solo en el padre). */
   patas: ParsedPick[];
+  /** Pendiente cuyo evento ya salió de la ventana de verificación
+   * (>14 días): el verifier ya no lo reintenta, queda para corrección
+   * manual o descarte. */
+  fuera_ventana: boolean;
 };
 
 export type ParsedPicksQuery = {
@@ -90,6 +94,15 @@ export async function updateParsedPickAcierto(
     body: update,
     auth: true,
   });
+}
+
+/** Anula en bloque los picks pendientes fuera de la ventana de
+ * verificación (>14 días). Devuelve cuántos se anularon. */
+export async function anularResiduoPendiente(): Promise<{ anuladas: number }> {
+  return apiRequest<{ anuladas: number }>(
+    `/telegram/parsed-picks/anular-residuo`,
+    { method: "POST", auth: true }
+  );
 }
 
 export type PickOdds = {

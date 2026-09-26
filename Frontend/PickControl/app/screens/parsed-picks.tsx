@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   RefreshControl,
+  Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -15,6 +16,7 @@ import BottomBar from "@/src/components/bottom-bar";
 import {
   getParsedPicks,
   updateParsedPickAcierto,
+  anularResiduoPendiente,
   ParsedPick,
 } from "@/src/api/parsed-picks.api";
 import { listInformantes } from "@/src/api/informantes.api";
@@ -314,6 +316,29 @@ export default function ParsedPicksScreen() {
     }
   };
 
+  const handleAnularResiduo = useCallback(() => {
+    const n = picksStatus?.pendientes_backlog ?? 0;
+    Alert.alert(
+      "Anular residuo >14d",
+      `Se marcarán como anulados los ${n} pendientes que el verifier ya no reintenta. Salen de la cola y cuentan como void. ¿Seguir?`,
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Anular",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await anularResiduoPendiente();
+              await reload();
+            } catch (err: any) {
+              setError(err.message);
+            }
+          },
+        },
+      ]
+    );
+  }, [picksStatus, reload]);
+
   const estadoPata = (pata: ParsedPick): string => {
     if (pata.anulada) return "Anulada";
     if (pata.acierto === true) return "Acertó";
@@ -334,6 +359,7 @@ export default function ParsedPicksScreen() {
         <Text style={styles.pataMeta}>
           {estadoPata(pata)}
           {pata.verificado_por ? ` (${pata.verificado_por})` : ""}
+          {pata.fuera_ventana ? " · fuera de ventana" : ""}
         </Text>
       </View>
       <View style={styles.pataButtons}>
@@ -458,6 +484,11 @@ export default function ParsedPicksScreen() {
               </Text>
             )}
           </Text>
+          {pick.fuera_ventana && (
+            <Text style={styles.fueraVentana}>
+              fuera de ventana — ya no se reintenta
+            </Text>
+          )}
 
           <View style={styles.acertoButtons}>
             <TouchableOpacity
@@ -654,6 +685,17 @@ export default function ParsedPicksScreen() {
                 {picksStatus.pendientes_backlog ?? 0}
               </Text>
             </View>
+            {(picksStatus.pendientes_backlog ?? 0) > 0 && (
+              <TouchableOpacity
+                style={styles.residuoButton}
+                onPress={handleAnularResiduo}
+              >
+                <Text style={styles.residuoButtonText}>
+                  Anular residuo &gt;14d (
+                  {picksStatus.pendientes_backlog})
+                </Text>
+              </TouchableOpacity>
+            )}
             {Object.keys(picksStatus.pendientes_por_deporte ?? {}).length >
               0 && (
               <Text style={styles.statSub}>
@@ -1057,6 +1099,24 @@ const styles = StyleSheet.create({
   providerMisses: {
     color: "#888",
     fontSize: 11,
+  },
+  fueraVentana: {
+    color: "#ff9800",
+    fontSize: 11,
+    fontStyle: "italic",
+    marginTop: 2,
+  },
+  residuoButton: {
+    marginTop: 6,
+    backgroundColor: "rgba(244, 67, 54, 0.15)",
+    borderRadius: 8,
+    paddingVertical: 8,
+    alignItems: "center",
+  },
+  residuoButtonText: {
+    color: "#f44336",
+    fontSize: 12,
+    fontWeight: "bold",
   },
   systemSubtitle: {
     color: "#6f8299",
