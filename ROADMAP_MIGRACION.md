@@ -64,7 +64,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 | E3 | LLM local (`ollama`) | Cuando el volumen justifique infra |
 | E4 | Batching LLM | Varios mensajes por llamada |
 | E5 | Caché por canal | No reprocesar plantillas/promos repetidas |
-| E6 | **Caché de `football-data.org` por rango de fechas** | Detectado 2026-09-26: cada pick pendiente lanza `GET /matches?dateFrom..dateTo` propio — el log muestra ~15 llamadas idénticas seguidas al mismo rango, todas 429 (su free tier es ~10 req/min). Una llamada por rango (cacheada por pasada) elimina el flood. Además **no aparece en el panel de providers** — no llama `count_provider_call`/`log_remaining_quota`/`mark_rate_limited`, así que sus llamadas y sus 429 son invisibles y nunca se aparca |
+| ~~E6~~ | ~~Caché de `football-data.org` por rango de fechas~~ | ✅ Hecho 2026-09-26: caché negativa + bloqueo por pasada + `count_provider_call` (ya aparece en el panel). Además se añadió **provider ESPN** (`results/espn.py`, gratis sin key, PRIMERO en la cascada de fútbol): marcador FT/HT + stats (córners, tarjetas, tiros, faltas) — descarga a football-data y a los mirrors de cuota. Detector de API rota: 5 fallos consecutivos → aparcado + push a admins |
 
 ## Fases completadas
 

@@ -58,6 +58,7 @@ from app.services.results.base import (
     fold_name,
     match_reversed,
 )
+from app.services.results.espn import EspnProvider
 from app.services.results.footapi_stats import FootApiStatsProvider
 from app.services.results.football_data import FootballDataProvider
 from app.services.results.rapidapi_tennis import RapidApiTennisProvider
@@ -1345,6 +1346,10 @@ def _extract_tennis_sets_prediction(
 async def _get_providers() -> list[ResultsProvider]:
     settings = get_settings()
     providers: list[ResultsProvider] = []
+    # ESPN primero: JSON gratis sin key ni cuota, con marcador FT/HT +
+    # stats (córners, tarjetas, tiros, faltas) en la misma respuesta.
+    # Descarga a football-data (10 req/min) y a los providers de cuota.
+    providers.append(EspnProvider())
     if settings.football_data_api_key:
         providers.append(FootballDataProvider(settings.football_data_api_key))
     if settings.api_football_key:
