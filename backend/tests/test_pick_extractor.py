@@ -330,6 +330,28 @@ class TestIsSettledTicket:
         # abierto, no el sello del boleto.
         assert _is_settled_ticket("Hugo Gaston -1.5\nHandicap Games\nWon") is False
 
+    def test_sello_ganad_arroba(self):
+        # Caso real: OCR del slip ganado lleva el sello "GANAD@S".
+        text = "CREA TU APUESTA 5 pronósticos\nGANAD@S\nCuota 61.00"
+        assert _is_settled_ticket(text) is True
+
+    def test_checkmarks_con_premio_es_liquidado(self):
+        # Caso real msg 8884: slip "verde" con ✓ por selección y premio
+        # pagado — dice "Crear apuesta" porque así se llama el mercado.
+        text = (
+            "CREAR APUESTA  61.00\n"
+            "✓ Ante Budimir: 2+ remates a puerta\n"
+            "✓ Ruben Garcia: 2+ remates a puerta\n"
+            "✓ Ivan Romero será Amonestado\n"
+            "Osasuna\nLevante\nImp: 100,00€\n6100,00€  Ganancias\n"
+        )
+        assert _is_settled_ticket(text) is True
+
+    def test_checkmarks_sin_premio_no_es_liquidado(self):
+        # Checkmarks sueltos sin línea de premio: no basta para sellar.
+        text = "✓ Madrid gana\n✓ Over 2.5\nCrear apuesta @3.00"
+        assert _is_settled_ticket(text) is False
+
 
 class TestExtractLinea:
     def test_extrae_handicap_positivo(self):

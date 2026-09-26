@@ -937,7 +937,8 @@ Reglas:
 - NO son apuestas (es_apuesta = false) aunque mencionen selecciones o cuotas:
   * Mensajes que celebran aciertos pasados ("acertamos", "ganado", "✅ apuesta acertada", "llevamos X aciertos", "ya lo conseguimos", "ver como ganáis dinero"): son marketing del tipster, no picks abiertos.
   * Anuncios o promociones de casas de apuestas: bonos de bienvenida, supercuotas ("Suvidón", "supercuota", "multiplica tus ganancias"), "solo nuevos usuarios", "T&C", "créditos de apuesta", "regístrate".
-  * Boletos ya liquidados reposteados como prueba: sello "GANADOR"/"GANADA" o "Ganancias <importe>" SIN la palabra "potenciales" (en un slip abierto siempre pone "Ganancias potenciales").
+  * Boletos ya liquidados reposteados como prueba: sello "GANADOR"/"GANADA"/"GANAD@S"/"GANADOS", selecciones marcadas una a una con "✓" o "✔", o "Ganancias <importe>" SIN la palabra "potenciales" (en un slip abierto siempre pone "Ganancias potenciales"). Suelen venir acompañados de celebración ("no me lo creo", "vamosss", "eres un grande") y la fecha del partido impresa es ANTERIOR a la del mensaje.
+  * Anuncios/teasers de combinada o "crear apuesta" que solo dan la cuota total y los partidos ("DOBLE CREAR APUESTA 2X1", "CREAR APUESTA CUOTA 91 BARCELONA - PSG") SIN detallar cada selección del boleto: no hay nada verificable — la apuesta real está detrás del premium del tipster.
   Una apuesta abierta real es una recomendación de algo que AÚN no se ha jugado.
 - "seleccion" es SOLO la etiqueta corta del pick (máx ~10 palabras, ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5", "Menos de 3,5 goles"): nunca la frase del análisis ni la justificación — eso va en "explicacion". En mercados de ganador la selección DEBE nombrar al equipo/jugador apostado ("Leyre Romero gana"): nunca frases genéricas sin sujeto como "ganará el encuentro" o "gana el partido" — el nombre apostado suele estar destacado en el texto (negritas, línea propia, ➡️). Si es una combinada/"crear apuesta" (varias selecciones en un mismo boleto), únelas con " + " (ej. "Más de 1 gol + Más de 2 tarjetas").
 - "patas": SOLO si es una combinada/"crear apuesta"/acumulador (varias selecciones en un mismo boleto): un array con UN objeto por selección del boleto, cada uno con la misma estructura {"seleccion", "evento", "mercado", "linea", "deporte", "fecha_evento", "cuota"} y las mismas reglas de formato ("cuota" por pata solo si aparece explícita; si no, null). En una combinada cada pata puede ser de un partido distinto (rellena su "evento" propio) o del mismo partido (bet-builder: repite el mismo "evento" en todas). Si NO es combinada, "patas" = null. Si solo puedes identificar UNA selección, NO es combinada: "patas" = null y trátala como pick simple.
@@ -1040,8 +1041,15 @@ async def _llm_extract(
 # minúsculas para no confundir el sello con el mercado "ganador" de un
 # pick real.
 _SETTLED_TICKET_PATTERN = re.compile(
-    r"\bGANADOR\b|\bGANADA\b|APUESTA\s+GANADA|\bWON\b|(?i:\breturned\b)"
+    r"\bGANADOR\b|\bGANADA\b|\bGANAD[@OA]S\b|APUESTA\s+GANADA|\bWON\b"
+    r"|(?i:\breturned\b)"
 )
+
+# En un slip liquidado cada selección aparece marcada con ✓/✔ (la vista
+# "verde" de bet365 que el tipster repostea); un slip abierto nunca las
+# lleva. Dos o más marcas con el premio pagado ("<importe>€ Ganancias")
+# confirman el boleto cobrado aunque el texto diga "Crear apuesta".
+_SETTLED_CHECKMARKS = re.compile(r"[✓✔]")
 
 # Boleto cobrado SIN el sello (el OCR a veces lo pierde): la línea de
 # premio pagado es "<importe>€ Ganancias" — importe DELANTE de la
@@ -1076,6 +1084,11 @@ def _is_settled_ticket(text: str) -> bool:
         and re.search(r"\bganancias\s*:?\s*€?\s*\d", low)
         and "potencial" not in low
         and not re.search(r"cerrar apuesta|añadir selecci[oó]n", low)
+    ):
+        return True
+    if (
+        _SETTLED_PAYOUT_PATTERN.search(text)
+        and len(_SETTLED_CHECKMARKS.findall(text)) >= 2
     ):
         return True
     return bool(_SETTLED_PAYOUT_PATTERN.search(text)) and not bool(
