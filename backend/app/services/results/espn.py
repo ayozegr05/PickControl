@@ -29,6 +29,7 @@ una cuota agotada.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -56,15 +57,19 @@ logger = get_logger("app.results.espn")
 
 _BASE_URL = "https://site.api.espn.com/apis/site/v2/sports"
 _MIN_TEAM_SIMILARITY = 0.6
-# El pick puede llevar el día de publicación, no el del partido.
-_DATE_WINDOW = timedelta(days=1)
-# Fallos consecutivos (HTTP o formato roto) que declaran la API caída.
+# El pick puede llevar la fecha del mensaje, no la del partido (los
+# tipsters republican slips viejos): se busca por MES con margen ±1.
+_MONTH_OFFSETS = (0, -1, 1)
+# Fallos consecutivos (HTTP 5xx/red/parseo) que declaran la API caída.
 _MAX_CONSECUTIVE_FAILURES = 5
 
 # Ligas consultadas, ordenadas por relevancia para los tipsters que se
 # siguen. ESPN no expone un scoreboard global de fútbol: hay que iterar
 # por liga. Lista extraída de sports.core.api.espn.com/.../leagues
 # (219 disponibles; estas son las relevantes para los picks que entran).
+# Dos niveles: las principales se escanean siempre; la cola solo se
+# consulta si el evento no aparece en las principales (los picks de
+# ligas top — la inmensa mayoría — nunca pagan ese barrido).
 _LEAGUES_FUTBOL = (
     # España
     "esp.1",
@@ -88,6 +93,7 @@ _LEAGUES_FUTBOL = (
     "ita.coppa_italia",
     "ger.dfb_pokal",
     "fra.coupe_de_france",
+    "esp.copa_de_la_reina",
     # Resto de Europa
     "ned.1",
     "por.1",
@@ -111,6 +117,18 @@ _LEAGUES_FUTBOL = (
     "fifa.olympics",
     "fifa.friendly",
     "club.friendly",
+    # Selecciones: clasificatorios, categorías inferiores, Nations
+    "fifa.worldq.uefa",
+    "uefa.euroq",
+    "uefa.euro_u21",
+    "uefa.weuro",
+    "uefa.w.nations",
+    "fifa.friendly.w",
+    "concacaf.nations.league",
+    "caf.nations",
+    "fifa.world.u20",
+    "fifa.friendly_u21",
+    "conmebol.america",
     # América
     "ksa.1",
     "arg.1",
@@ -126,9 +144,173 @@ _LEAGUES_FUTBOL = (
     "concacaf.champions",
     "concacaf.leagues.cup",
 )
+# Cola larga: solo se escanea cuando las principales no resuelven.
+_LEAGUES_FUTBOL_EXTRA = (
+    # Segundas/terceras y copas menores europeas
+    "eng.3",
+    "ned.2",
+    "den.2",
+    "esp.joan_gamper",
+    "ned.supercup",
+    "fra.w.1",
+    "ned.w.1",
+    "ned.w.knvb_cup",
+    "uefa.w.europa",
+    "uefa.europa_qual",
+    "uefa.europa.conf_qual",
+    "uefa.euro_u21_qual",
+    "uefa.euro.u19",
+    # Selecciones menores
+    "fifa.world.u17",
+    "fifa.wworld.u17",
+    "fifa.wworldq.uefa",
+    "fifa.conmebol.olympicsq",
+    "fifa.w.concacaf.olympicsq",
+    "concacaf.u23",
+    "global.u20.intercontinental_cup",
+    "global.w.finalissima",
+    "conmebol.america.femenina",
+    "conmebol.recopa",
+    # América profunda
+    "arg.3",
+    "arg.copa",
+    "arg.copa_de_la_superliga",
+    "arg.trofeo_de_la_campeones",
+    "arg.supercopa",
+    "arg.supercopa.internacional",
+    "bra.copa_do_brazil",
+    "bra.supercopa_do_brazil",
+    "bra.camp.carioca",
+    "bra.camp.paulista",
+    "bra.camp.gaucho",
+    "bra.camp.mineiro",
+    "uru.1",
+    "uru.2",
+    "col.1",
+    "col.copa",
+    "col.superliga",
+    "per.1",
+    "par.1",
+    "par.1.supercopa",
+    "ven.1",
+    "bol.1",
+    "bol.copa",
+    "bol.ply.rel",
+    "chi.super_cup",
+    "ksa.kings.cup",
+    # Resto del mundo
+    "jpn.1",
+    "chn.1",
+    "ind.1",
+    "aus.1",
+    "aus.w.1",
+    "mex.w.1",
+    "usa.ncaa.w.1",
+    "usa.w.usl.1",
+    "can.w.nsl",
+    "friendly.emirates_cup",
+    "jpn.world_challenge",
+    "concacaf.w.gold",
+    "concacaf.w.champions_cup",
+    "concacaf.womens.championship",
+    "afc.w.asian.cup",
+    "caf.w.nations",
+)
 _LEAGUES_TENIS = ("atp", "wta")
 # ESPN solo cubre basket americano/FIBA — no ACB ni Euroliga.
 _LEAGUES_BASKET = ("nba", "wnba", "nbl", "fiba")
+
+# Selecciones: el pick llega en español pero ESPN nombra en inglés.
+# Traducción aplicada al hint antes del cruce (frases antes que palabras).
+_COUNTRY_ALIASES = {
+    "alemania": "germany",
+    "arabia saudita": "saudi arabia",
+    "argelia": "algeria",
+    "armenia": "armenia",
+    "austria": "austria",
+    "azerbaiyán": "azerbaijan",
+    "bélgica": "belgium",
+    "bielorrusia": "belarus",
+    "bolivia": "bolivia",
+    "bosnia-herzegovina": "bosnia-herzegovina",
+    "bosnia": "bosnia-herzegovina",
+    "brasil": "brazil",
+    "bulgaria": "bulgaria",
+    "camerún": "cameroon",
+    "canadá": "canada",
+    "chequia": "czechia",
+    "chipre": "cyprus",
+    "colombia": "colombia",
+    "corea del sur": "south korea",
+    "costa de marfil": "ivory coast",
+    "costa rica": "costa rica",
+    "croacia": "croatia",
+    "dinamarca": "denmark",
+    "ecuador": "ecuador",
+    "egipto": "egypt",
+    "emiratos árabes": "united arab emirates",
+    "escocia": "scotland",
+    "eslovaquia": "slovakia",
+    "eslovenia": "slovenia",
+    "españa": "spain",
+    "estados unidos": "united states",
+    "estonia": "estonia",
+    "finlandia": "finland",
+    "francia": "france",
+    "gales": "wales",
+    "georgia": "georgia",
+    "ghana": "ghana",
+    "gibraltar": "gibraltar",
+    "grecia": "greece",
+    "hungría": "hungary",
+    "inglaterra": "england",
+    "irak": "iraq",
+    "irán": "iran",
+    "irlanda del norte": "northern ireland",
+    "irlanda": "ireland",
+    "islandia": "iceland",
+    "islas féroe": "faroe islands",
+    "israel": "israel",
+    "italia": "italy",
+    "jamaica": "jamaica",
+    "japón": "japan",
+    "kazajistán": "kazakhstan",
+    "kosovo": "kosovo",
+    "letonia": "latvia",
+    "lituania": "lithuania",
+    "luxemburgo": "luxembourg",
+    "macedonia del norte": "north macedonia",
+    "malta": "malta",
+    "marruecos": "morocco",
+    "méxico": "mexico",
+    "moldavia": "moldova",
+    "montenegro": "montenegro",
+    "nigeria": "nigeria",
+    "noruega": "norway",
+    "nueva zelanda": "new zealand",
+    "países bajos": "netherlands",
+    "panamá": "panama",
+    "paraguay": "paraguay",
+    "perú": "peru",
+    "polonia": "poland",
+    "portugal": "portugal",
+    "qatar": "qatar",
+    "república checa": "czechia",
+    "rumanía": "romania",
+    "rusia": "russia",
+    "san marino": "san marino",
+    "senegal": "senegal",
+    "serbia": "serbia",
+    "suecia": "sweden",
+    "suiza": "switzerland",
+    "túnez": "tunisia",
+    "turquía": "türkiye",
+    "ucrania": "ukraine",
+    "uruguay": "uruguay",
+    "venezuela": "venezuela",
+    "andorra": "andorra",
+    "albania": "albania",
+}
 
 # `name` de la estadística ESPN -> clave canónica que ya consume el
 # verificador (mismas que devuelve API-Football `/fixtures/statistics`).
@@ -199,6 +381,20 @@ def _stat_int(competitor: dict, name: str) -> Optional[int]:
     return None
 
 
+def _shift_month(dt: datetime, offset: int) -> datetime:
+    """Primer día del mes `offset` meses desde `dt` (tz-preserving)."""
+    month = dt.month - 1 + offset
+    return datetime(dt.year + month // 12, month % 12 + 1, 1, tzinfo=dt.tzinfo)
+
+
+def _translate_countries(text: str) -> str:
+    """Español -> nombre de la selección en ESPN (palabra completa)."""
+    out = text.lower()
+    for spanish, english in _COUNTRY_ALIASES.items():
+        out = re.sub(rf"\b{re.escape(spanish)}\b", english, out)
+    return out
+
+
 def _competition_date(competition: dict) -> Optional[datetime]:
     """Fecha UTC de la competition (en tenis difiere de la del torneo)."""
     raw = competition.get("date") or competition.get("startDate")
@@ -233,11 +429,18 @@ class EspnCoreProvider:
     SUPPORTED_SPORTS: frozenset = frozenset()
     _SPORT_PATH = ""
     _LEAGUES: tuple[str, ...] = ()
+    # Cola larga: solo se escanea tras fallar el escaneo principal.
+    _LEAGUES_EXTRA: tuple[str, ...] = ()
+    # Cuánto puede desviarse la fecha real del evento de la del pick:
+    # fútbol/basket toleran republicaciones de semanas; en tenis el
+    # board ya trae el torneo completo y un jugador puede tener varios
+    # partidos en días seguidos — ahí el margen corto decide bien.
+    _DATE_TOLERANCE = timedelta(days=45)
     _SPORT_TAG = ""
 
     def __init__(self) -> None:
-        # Scoreboards por (liga, día): una pasada comparte respuestas
-        # entre picks de la misma fecha. Los fallos cachean None.
+        # Scoreboards por (liga, mes): una pasada comparte respuestas
+        # entre picks del mismo mes. Los fallos cachean None.
         self._boards: dict[tuple[str, str], Optional[dict]] = {}
         # Summaries por id de evento (props de jugador y odds).
         self._summaries: dict[str, Optional[dict]] = {}
@@ -274,7 +477,17 @@ class EspnCoreProvider:
                 response = await client.get(url, params=params)
                 response.raise_for_status()
                 data = response.json()
-        except Exception as exc:  # httpx + json decode
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code < 500:
+                # 4xx = slug inválido o competición sin datos — no es
+                # "API caída": no suma al contador de salud.
+                logger.debug(
+                    "[ESPN] %s rechazado (%s)", league, exc.response.status_code
+                )
+                return None
+            self._register_failure(league, exc)
+            return None
+        except Exception as exc:  # red + json decode
             self._register_failure(league, exc)
             return None
         if not isinstance(data, dict):
@@ -283,15 +496,21 @@ class EspnCoreProvider:
         self._consecutive_failures = 0
         return data
 
-    async def _scoreboard(self, league: str, day: str) -> Optional[dict]:
-        """Payload del scoreboard de una liga en un día (yyyymmdd)."""
-        key = (league, day)
+    async def _scoreboard(self, league: str, period: str) -> Optional[dict]:
+        """Payload del scoreboard de una liga en un período.
+
+        `period` va en `dates=`: ESPN acepta día (yyyymmdd), MES
+        (yyyymm — toda la competición del mes en una llamada) o año
+        (yyyy — temporada completa). Se usa el mes: una sola llamada
+        cubre desfases de semanas entre fecha del mensaje y del partido.
+        """
+        key = (league, period)
         if key in self._boards:
             return self._boards[key]
         data = await self._get_json(
             f"{_BASE_URL}/{self._SPORT_PATH}/{league}/scoreboard",
             league,
-            {"dates": day, "limit": 100},
+            {"dates": period, "limit": 400},
         )
         if data is not None and "events" not in data:
             self._register_failure(league, ValueError("payload sin 'events'"))
@@ -330,8 +549,15 @@ class EspnCoreProvider:
 
     def _score_hint(self, hint: str, home_name: str, away_name: str) -> float:
         """Cruce hint->evento. Por defecto equipos; tenis lo sobreescribe
-        con `_pair_similar` (jugadores/parejas)."""
-        return match_score(hint, home_name, away_name)
+        con `_pair_similar` (jugadores/parejas). El hint llega en
+        español pero ESPN nombra selecciones en inglés ("Suecia" vs
+        "Sweden"): se puntúa también con la traducción y se queda el
+        mejor cruce — sin efecto cuando no hay país en el hint."""
+        score = match_score(hint, home_name, away_name)
+        translated = _translate_countries(hint)
+        if translated != hint.lower():
+            score = max(score, match_score(translated, home_name, away_name))
+        return score
 
     async def _find_event(
         self, date: datetime, team_hint: str
@@ -347,8 +573,11 @@ class EspnCoreProvider:
         if not hint or is_rate_limited(self.NAME):
             return None
         provisional = miss_is_provisional(date)
+        # `v2` versiona la cobertura: un miss cacheado cuando la lista de
+        # ligas era más corta (o el provider no existía para el deporte)
+        # no debe bloquear reintentos con la cobertura ampliada.
         miss_key = (
-            f"{self.NAME}|{self._SPORT_TAG}|{date.strftime('%Y-%m-%d')}"
+            f"{self.NAME}|{self._SPORT_TAG}|v3|{date.strftime('%Y-%m-%d')}"
             f"|{hint.lower()}"
         )
         if provisional:
@@ -358,17 +587,57 @@ class EspnCoreProvider:
 
         best = None
         best_score = 0.0
-        best_teams: tuple[str, str] | None = None
         ambiguous = False
-        for offset in (0, -1, 1):
-            day = (date + timedelta(days=offset)).strftime("%Y%m%d")
-            for league in self._LEAGUES:
-                board = await self._scoreboard(league, day)
+        months = [_shift_month(date, off).strftime("%Y%m") for off in _MONTH_OFFSETS]
+        # Fase 1: ligas principales (la inmensa mayoría de los picks).
+        best, best_score, ambiguous = await self._scan(
+            months, self._LEAGUES, date, hint
+        )
+        # Fase 2: cola larga solo si el escaneo principal no resolvió.
+        if (best is None or best_score < _MIN_TEAM_SIMILARITY) and self._LEAGUES_EXTRA:
+            extra, extra_score, extra_amb = await self._scan(
+                months, self._LEAGUES_EXTRA, date, hint
+            )
+            if extra_score > best_score:
+                best, best_score = extra, extra_score
+                ambiguous = extra_amb
+            elif extra_score == best_score and extra is not None:
+                ambiguous = True
+
+        if best is None or best_score < _MIN_TEAM_SIMILARITY or ambiguous:
+            mark_missed(miss_key)
+            return None
+        return best
+
+    async def _scan(
+        self,
+        months: list[str],
+        leagues: tuple[str, ...],
+        date: datetime,
+        hint: str,
+    ) -> tuple[Optional[tuple[dict, dict, str]], float, bool]:
+        """Puntúa eventos de los scoreboards mensuales de `leagues`.
+
+        Devuelve (mejor, score, ambiguo). Recorre mes del pick ±1 para
+        absorber desfases de semanas; la fecha real de cada evento debe
+        caer dentro de `_EVENT_DATE_TOLERANCE` de la del pick.
+        """
+        best = None
+        best_score = 0.0
+        best_teams: tuple[str, str] | None = None
+        best_comp_date: Optional[datetime] = None
+        ambiguous = False
+        for period in months:
+            for league in leagues:
+                board = await self._scoreboard(league, period)
                 if board is None:
                     continue
                 for event, competition in self._iter_competitions(board):
                     comp_date = _competition_date(competition)
-                    if comp_date is not None and abs(comp_date - date) > (_DATE_WINDOW):
+                    if (
+                        comp_date is not None
+                        and abs(comp_date - date) > self._DATE_TOLERANCE
+                    ):
                         continue
                     home, away = _competitors(competition)
                     if home is None or away is None:
@@ -380,6 +649,7 @@ class EspnCoreProvider:
                         best_score = score
                         best = (event, competition, league)
                         best_teams = (home_name, away_name)
+                        best_comp_date = comp_date
                         ambiguous = False
                     elif (
                         score == best_score
@@ -387,13 +657,20 @@ class EspnCoreProvider:
                         and (home_name, away_name) != best_teams
                     ):
                         ambiguous = True
-            if best is not None and best_score >= _MIN_TEAM_SIMILARITY:
-                break  # encontrado en el día exacto: no mirar ±1
-
-        if best is None or best_score < _MIN_TEAM_SIMILARITY or ambiguous:
-            mark_missed(miss_key)
-            return None
-        return best
+                    elif (
+                        score == best_score
+                        and score >= _MIN_TEAM_SIMILARITY
+                        and comp_date is not None
+                        and best_comp_date is not None
+                        and abs(comp_date - date) < abs(best_comp_date - date)
+                    ):
+                        # Mismo cruce y mismos equipos (revancha copa/
+                        # liga dentro de la ventana): gana el más
+                        # cercano a la fecha del pick.
+                        best = (event, competition, league)
+                        best_comp_date = comp_date
+                        ambiguous = False
+        return best, best_score, ambiguous
 
     def _is_completed(self, competition: dict) -> bool:
         status = (competition.get("status") or {}).get("type") or {}
@@ -448,6 +725,7 @@ class EspnProvider(EspnCoreProvider):
     SUPPORTED_SPORTS = frozenset({"futbol"})
     _SPORT_PATH = "soccer"
     _LEAGUES = _LEAGUES_FUTBOL
+    _LEAGUES_EXTRA = _LEAGUES_FUTBOL_EXTRA
     _SPORT_TAG = "futbol"
 
     def _match_result(self, competition: dict) -> Optional[MatchResult]:
@@ -663,6 +941,10 @@ class EspnTennisProvider(EspnCoreProvider):
     SUPPORTED_SPORTS = frozenset({"tenis"})
     _SPORT_PATH = "tennis"
     _LEAGUES = _LEAGUES_TENIS
+    # El board mensual agrupa el torneo entero y el mismo jugador puede
+    # tener partidos en días seguidos: margen corto para no casar el de
+    # otra ronda.
+    _DATE_TOLERANCE = timedelta(days=2)
     _SPORT_TAG = "tenis"
 
     def _score_hint(self, hint: str, home_name: str, away_name: str) -> float:

@@ -8,6 +8,7 @@ de la fecha actual.
 
 from datetime import datetime
 
+import httpx
 import pytest
 
 import app.services.results.espn as espn
@@ -175,9 +176,9 @@ def provider(monkeypatch):
 
     prov = EspnProvider()
 
-    async def fake_scoreboard(league, day):
-        # Solo esp.1 tiene datos el día del partido; el resto vacío.
-        if league == "esp.1" and day == "20260915":
+    async def fake_scoreboard(league, period):
+        # Solo esp.1 tiene datos en el mes del partido; el resto vacío.
+        if league == "esp.1" and period == "202609":
             return _BOARD
         return {"events": []}
 
@@ -580,3 +581,190 @@ class TestOddsProvider:
 
     async def test_deporte_no_soportado(self, odds_provider):
         assert await odds_provider.find_event("tenis", _DATE, "Alcaraz") is None
+
+
+class TestBusquedaMensual:
+    """`dates=YYYYMM`: una llamada por liga-mes cubre todo el mes — los
+    picks con fecha de mensaje desplazada del partido se rescatan."""
+
+    async def test_periodo_es_mes_mas_vecinos(self, provider, monkeypatch):
+        periods = []
+
+        async def fake(league, period):
+            periods.append(period)
+            return {"events": []}
+
+        prov = EspnProvider()
+        monkeypatch.setattr(prov, "_scoreboard", fake)
+        await prov.find_match(datetime(2026, 9, 19), "Elche - Real Madrid")
+        assert set(periods) == {"202609", "202608", "202610"}
+
+    async def test_partido_otro_dia_del_mes(self, provider):
+        # Caso Deportivo-Sevilla: pick del 22-sep, partido real del 15.
+        match = await provider.find_match(
+            datetime(2026, 9, 22, 10, 0), "Elche - Real Madrid"
+        )
+        assert match is not None
+        assert match.home_score == 2
+
+    async def test_competition_fuera_de_tolerancia_descartada(self, monkeypatch):
+        # Un cruce de equipos a más de 45 días no debe casar (revancha
+        # de otra vuelta dentro del mismo mes consultado).
+        old_event = {
+            "id": "old",
+            "competitions": [
+                {
+                    "date": "2026-07-05T18:00Z",
+                    "status": {"type": {"name": "STATUS_FULL_TIME", "completed": True}},
+                    "competitors": _EVENT["competitions"][0]["competitors"],
+                }
+            ],
+        }
+
+        async def fake(league, period):
+            return (
+                {"events": [old_event]}
+                if league == "esp.1" and period == "202608"
+                else {"events": []}
+            )
+
+        prov = EspnProvider()
+        monkeypatch.setattr(prov, "_scoreboard", fake)
+        assert (
+            await prov.find_match(datetime(2026, 8, 30), "Elche - Real Madrid") is None
+        )
+
+
+class TestLigasDosNiveles:
+    async def test_cola_larga_solo_tras_fallo_principal(self, monkeypatch):
+        called = []
+
+        async def fake(league, period):
+            called.append(league)
+            if league in espn._LEAGUES_FUTBOL_EXTRA and period == "202609":
+                return _BOARD
+            return {"events": []}
+
+        prov = EspnProvider()
+        monkeypatch.setattr(prov, "_scoreboard", fake)
+        match = await prov.find_match(_DATE, "Elche - Real Madrid")
+        assert match is not None
+        # Se escanearon las principales primero; la cola solo entró
+        # porque ninguna resolvió.
+        assert set(espn._LEAGUES_FUTBOL) <= set(called)
+        assert any(league in espn._LEAGUES_FUTBOL_EXTRA for league in called)
+
+    async def test_cola_no_se_escanea_si_resuelve_principal(self, monkeypatch):
+        called = []
+
+        async def fake(league, period):
+            called.append(league)
+            if league == "esp.1" and period == "202609":
+                return _BOARD
+            return {"events": []}
+
+        prov = EspnProvider()
+        monkeypatch.setattr(prov, "_scoreboard", fake)
+        match = await prov.find_match(_DATE, "Elche - Real Madrid")
+        assert match is not None
+        assert not any(league in espn._LEAGUES_FUTBOL_EXTRA for league in called)
+
+
+class TestAliasPaises:
+    """Selecciones: el hint llega en español, ESPN nombra en inglés."""
+
+    _NATIONS_BOARD = {
+        "events": [
+            {
+                "id": "n1",
+                "competitions": [
+                    {
+                        "date": "2026-09-25T20:00Z",
+                        "status": {
+                            "type": {"name": "STATUS_FULL_TIME", "completed": True}
+                        },
+                        "competitors": [
+                            {
+                                "homeAway": "home",
+                                "score": "3",
+                                "team": {"displayName": "Sweden"},
+                            },
+                            {
+                                "homeAway": "away",
+                                "score": "0",
+                                "team": {"displayName": "Romania"},
+                            },
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+
+    async def test_suecia_rumania_casa_con_sweden_romania(self, monkeypatch):
+        async def fake(league, period):
+            return (
+                self._NATIONS_BOARD
+                if league == "uefa.nations" and period == "202609"
+                else {"events": []}
+            )
+
+        prov = EspnProvider()
+        monkeypatch.setattr(prov, "_scoreboard", fake)
+        match = await prov.find_match(datetime(2026, 9, 25), "Suecia - Rumania")
+        assert match is not None
+        assert match.home_team == "Sweden"
+        assert match.home_score == 3
+
+    async def test_sin_alias_no_afecta_a_clubes(self, provider):
+        # "Elche - Real Madrid" no contiene país: el cruce es el de
+        # siempre (el alias no puede empeorar un matching de clubes).
+        match = await provider.find_match(_DATE, "Elche - Real Madrid")
+        assert match is not None
+
+
+class TestSlugInvalido:
+    """Un slug que ESPN rechaza con 400 no es "API caída": no suma al
+    contador de salud ni aparca el provider."""
+
+    class _Client:
+        """AsyncClient falso que devuelve un status concreto."""
+
+        status = 200
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, params=None):
+            return httpx.Response(self.status, request=httpx.Request("GET", str(url)))
+
+    async def test_400_no_cuenta_como_fallo(self, monkeypatch):
+        monkeypatch.setattr(espn, "is_rate_limited", lambda name: False)
+        monkeypatch.setattr(espn, "count_provider_call", lambda name: None)
+
+        class BadSlugClient(self._Client):
+            status = 400
+
+        monkeypatch.setattr(espn.httpx, "AsyncClient", BadSlugClient)
+        prov = EspnProvider()
+        assert await prov._scoreboard("liga.inexistente", "202609") is None
+        assert prov._consecutive_failures == 0
+
+    async def test_500_si_cuenta_como_fallo(self, monkeypatch):
+        monkeypatch.setattr(espn, "is_rate_limited", lambda name: False)
+        monkeypatch.setattr(espn, "count_provider_call", lambda name: None)
+        monkeypatch.setattr(espn, "mark_rate_limited", lambda name: None)
+
+        class DownClient(self._Client):
+            status = 500
+
+        monkeypatch.setattr(espn.httpx, "AsyncClient", DownClient)
+        prov = EspnProvider()
+        assert await prov._scoreboard("esp.1", "202609") is None
+        assert prov._consecutive_failures == 1
