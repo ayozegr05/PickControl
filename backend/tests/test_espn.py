@@ -723,6 +723,105 @@ class TestAliasPaises:
         assert match is not None
 
 
+class TestRematchDesempate:
+    """Ida y vuelta dentro de la ventana mensual (p. ej. Nations
+    League): dos cruces iguales con equipos invertidos no son
+    ambigüedad — la fecha del pick desempata."""
+
+    @staticmethod
+    def _ev(eid, date, home, hs, away, as_):
+        return {
+            "id": eid,
+            "competitions": [
+                {
+                    "date": date,
+                    "status": {"type": {"name": "STATUS_FULL_TIME", "completed": True}},
+                    "competitors": [
+                        {
+                            "homeAway": "home",
+                            "score": str(hs),
+                            "team": {"displayName": home},
+                        },
+                        {
+                            "homeAway": "away",
+                            "score": str(as_),
+                            "team": {"displayName": away},
+                        },
+                    ],
+                }
+            ],
+        }
+
+    @pytest.fixture
+    def nations_provider(self, monkeypatch):
+        monkeypatch.setattr(espn, "is_rate_limited", lambda name: False)
+        monkeypatch.setattr(espn, "is_missed", lambda key, ttl=None: False)
+        monkeypatch.setattr(espn, "mark_missed", lambda key: None)
+        boards = {
+            "202609": {
+                "events": [
+                    self._ev("ida", "2026-09-25T18:45Z", "Sweden", 3, "Romania", 1)
+                ]
+            },
+            "202610": {
+                "events": [
+                    self._ev("vta", "2026-10-05T18:45Z", "Romania", 2, "Sweden", 0)
+                ]
+            },
+        }
+        prov = EspnProvider()
+
+        async def fake(league, period):
+            if league == "uefa.nations":
+                return boards.get(period, {"events": []})
+            return {"events": []}
+
+        monkeypatch.setattr(prov, "_scoreboard", fake)
+        return prov
+
+    async def test_vuelta_invertida_gana_la_fecha_cercana(self, nations_provider):
+        # Caso real Suecia-Rumanía: vuelta a 10 días puntuaba igual y
+        # marcaba el cruce como ambiguo -> miss permanente.
+        match = await nations_provider.find_match(
+            datetime(2026, 9, 25, 6, 24), "Suecia - Rumanía"
+        )
+        assert match is not None
+        assert match.home_team == "Sweden"
+        assert match.home_score == 3
+
+    async def test_desde_la_vuelta_tambien(self, nations_provider):
+        match = await nations_provider.find_match(
+            datetime(2026, 10, 5, 20, 0), "Rumanía - Suecia"
+        )
+        assert match is not None
+        assert match.home_team == "Romania"
+        assert match.home_score == 2
+
+    async def test_misma_fecha_equipos_invertidos_si_es_ambiguo(self, monkeypatch):
+        # Mismo cruce, equipos invertidos y misma fecha: no hay forma
+        # de desambiguar -> miss (no inventar).
+        monkeypatch.setattr(espn, "is_rate_limited", lambda name: False)
+        monkeypatch.setattr(espn, "is_missed", lambda key, ttl=None: False)
+        monkeypatch.setattr(espn, "mark_missed", lambda key: None)
+        board = {
+            "events": [
+                self._ev("a", "2026-09-25T18:45Z", "Sweden", 3, "Romania", 1),
+                self._ev("b", "2026-09-25T18:45Z", "Romania", 2, "Sweden", 0),
+            ]
+        }
+
+        async def fake(league, period):
+            return (
+                board
+                if league == "uefa.nations" and period == "202609"
+                else {"events": []}
+            )
+
+        prov = EspnProvider()
+        monkeypatch.setattr(prov, "_scoreboard", fake)
+        assert await prov.find_match(datetime(2026, 9, 25), "Suecia - Rumanía") is None
+
+
 class TestSlugInvalido:
     """Un slug que ESPN rechaza con 400 no es "API caída": no suma al
     contador de salud ni aparca el provider."""

@@ -575,11 +575,11 @@ class EspnCoreProvider:
         if not hint or is_rate_limited(self.NAME):
             return None
         provisional = miss_is_provisional(date)
-        # `v2` versiona la cobertura: un miss cacheado cuando la lista de
-        # ligas era más corta (o el provider no existía para el deporte)
-        # no debe bloquear reintentos con la cobertura ampliada.
+        # `v4` versiona la cobertura/emparejado: un miss cacheado con
+        # lógica vieja (p. ej. ambigüedad ida/vuelta de v3) no debe
+        # bloquear reintentos con la cobertura corregida.
         miss_key = (
-            f"{self.NAME}|{self._SPORT_TAG}|v3|{date.strftime('%Y-%m-%d')}"
+            f"{self.NAME}|{self._SPORT_TAG}|v4|{date.strftime('%Y-%m-%d')}"
             f"|{hint.lower()}"
         )
         if provisional:
@@ -656,22 +656,31 @@ class EspnCoreProvider:
                     elif (
                         score == best_score
                         and score >= _MIN_TEAM_SIMILARITY
-                        and (home_name, away_name) != best_teams
-                    ):
-                        ambiguous = True
-                    elif (
-                        score == best_score
-                        and score >= _MIN_TEAM_SIMILARITY
                         and comp_date is not None
                         and best_comp_date is not None
                         and abs(comp_date - date) < abs(best_comp_date - date)
                     ):
-                        # Mismo cruce y mismos equipos (revancha copa/
-                        # liga dentro de la ventana): gana el más
-                        # cercano a la fecha del pick.
+                        # Empate de cruce: gana el más cercano a la fecha
+                        # del pick. Cubre revanchas (ida/vuelta dentro de
+                        # la ventana mensual puntúan igual con equipos
+                        # invertidos) y dobles jornadas del mismo club.
                         best = (event, competition, league)
+                        best_teams = (home_name, away_name)
                         best_comp_date = comp_date
                         ambiguous = False
+                    elif (
+                        score == best_score
+                        and score >= _MIN_TEAM_SIMILARITY
+                        and (home_name, away_name) != best_teams
+                        and (
+                            comp_date is None
+                            or best_comp_date is None
+                            or abs(comp_date - date) == abs(best_comp_date - date)
+                        )
+                    ):
+                        # Mismo cruce, equipos distintos y la fecha no
+                        # desempata: ambigüedad real.
+                        ambiguous = True
         return best, best_score, ambiguous
 
     def _is_completed(self, competition: dict) -> bool:
