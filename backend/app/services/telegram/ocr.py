@@ -53,15 +53,23 @@ async def extract_text_from_image(image_path: str, api_key: str | None) -> str |
                             {
                                 "type": "text",
                                 "text": (
-                                    "Extrae TODO el texto visible de la imagen. "
+                                    "Extrae TODO el texto visible de la imagen, "
+                                    "incluidos los distintivos pequeños: si junto "
+                                    "a cada selección hay un check/tick (✓ o ✅) "
+                                    "transcríbelo literalmente, y si junto a los "
+                                    "equipos aparece un marcador final tipo "
+                                    "'Marcador 0-2' transcribe también ese texto. "
                                     "Devuelve solo el texto plano, sin comentarios. "
                                     "Si la imagen es un boleto de apuestas ya "
-                                    "liquidado/cobrado — lo reconocerás por un "
-                                    "sello o marca grande encima del boleto: un "
-                                    "check/tick (✓) de cualquier color "
-                                    "(habitualmente verde), la palabra "
-                                    "GANADOR/GANADA/WON, o un premio ya pagado — "
-                                    "escribe como primera línea 'SELLO: GANADOR'."
+                                    "liquidado/cobrado escribe como primera línea "
+                                    "'SELLO: GANADOR'. Lo reconocerás por: la "
+                                    "palabra GANADOR/GANADA/WON, un premio ya "
+                                    "pagado, selecciones marcadas con ticks de "
+                                    "color (habitualmente verde), marcadores "
+                                    "finales junto a los equipos, o un pie con el "
+                                    "importe cobrado ('54000€ Ganancias') sin el "
+                                    "botón 'Cerrar apuesta' que tienen las "
+                                    "apuestas aún abiertas."
                                 ),
                             },
                             {"type": "image_url", "image_url": {"url": data_url}},

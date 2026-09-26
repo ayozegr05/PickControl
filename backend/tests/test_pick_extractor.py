@@ -352,6 +352,38 @@ class TestIsSettledTicket:
         text = "✓ Madrid gana\n✓ Over 2.5\nCrear apuesta @3.00"
         assert _is_settled_ticket(text) is False
 
+    def test_marcador_final_en_slip_es_liquidado(self):
+        # Caso real msg 84305: bet builder multi-partido reposteado — el
+        # OCR transcribe "Marcador 0-2" junto a los equipos, algo que un
+        # slip abierto nunca lleva.
+        text = (
+            "Bet Builder 1.78\nFC Porto\nManchester City  Marcador 0-2\n"
+            "Más 1.5 Goles totales\nReal Madrid\nInter de Milán  Marcador 2-1\n"
+            "Apuesta S/200.00\nGanancias S/496.69"
+        )
+        assert _is_settled_ticket(text) is True
+
+    def test_payout_footer_con_compartir_es_liquidado(self):
+        # Caso real msg 83914: slip cobrado de bet365 — la vista liquidada
+        # muestra el botón "Compartir" y el mercado "CREAR APUESTA", que
+        # no deben vetar el pie de cobro "<importe>€ Ganancias".
+        text = (
+            "Compartir\nCREAR APUESTA 1.80\nMenos de 5 goles\n"
+            "Más de 2 tarjetas\nBorussia Dortmund\nBayern de Múnich\n"
+            "Imp:\n30.000,00€\n54000,00€ Ganancias\n"
+        )
+        assert _is_settled_ticket(text) is True
+
+    def test_slip_abierto_con_cerrar_apuesta_no_es_liquidado(self):
+        # Caso real msg 84039: slip vivo — botón "Cerrar apuesta"
+        # (cash-out) presente: nunca se marca como liquidado.
+        text = (
+            "CREAR APUESTA 1.50\nResultado final: Barcelona\n"
+            "Más de 2 goles\nBarcelona\nRayo Vallecano\n"
+            "Imp: 2.000,00€\nGanancias 3.000,00€\nCerrar apuesta 2.000,00€"
+        )
+        assert _is_settled_ticket(text) is False
+
 
 class TestExtractLinea:
     def test_extrae_handicap_positivo(self):

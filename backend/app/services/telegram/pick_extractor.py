@@ -937,7 +937,7 @@ Reglas:
 - NO son apuestas (es_apuesta = false) aunque mencionen selecciones o cuotas:
   * Mensajes que celebran aciertos pasados ("acertamos", "ganado", "✅ apuesta acertada", "llevamos X aciertos", "ya lo conseguimos", "ver como ganáis dinero"): son marketing del tipster, no picks abiertos.
   * Anuncios o promociones de casas de apuestas: bonos de bienvenida, supercuotas ("Suvidón", "supercuota", "multiplica tus ganancias"), "solo nuevos usuarios", "T&C", "créditos de apuesta", "regístrate".
-  * Boletos ya liquidados reposteados como prueba: sello "GANADOR"/"GANADA"/"GANAD@S"/"GANADOS", selecciones marcadas una a una con "✓" o "✔", o "Ganancias <importe>" SIN la palabra "potenciales" (en un slip abierto siempre pone "Ganancias potenciales"). Suelen venir acompañados de celebración ("no me lo creo", "vamosss", "eres un grande") y la fecha del partido impresa es ANTERIOR a la del mensaje.
+  * Boletos ya liquidados reposteados como prueba: sello "GANADOR"/"GANADA"/"GANAD@S"/"GANADOS", selecciones marcadas una a una con "✓" o "✔", marcadores finales impresos junto a los equipos ("Marcador 0-2"), o "Ganancias <importe>" SIN la palabra "potenciales" (en un slip abierto siempre pone "Ganancias potenciales"). Suelen venir acompañados de celebración ("no me lo creo", "vamosss", "eres un grande") y la fecha del partido impresa es ANTERIOR a la del mensaje.
   * Anuncios/teasers de combinada o "crear apuesta" que solo dan la cuota total y los partidos ("DOBLE CREAR APUESTA 2X1", "CREAR APUESTA CUOTA 91 BARCELONA - PSG") SIN detallar cada selección del boleto: no hay nada verificable — la apuesta real está detrás del premium del tipster.
   Una apuesta abierta real es una recomendación de algo que AÚN no se ha jugado.
 - "seleccion" es SOLO la etiqueta corta del pick (máx ~10 palabras, ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5", "Menos de 3,5 goles"): nunca la frase del análisis ni la justificación — eso va en "explicacion". En mercados de ganador la selección DEBE nombrar al equipo/jugador apostado ("Leyre Romero gana"): nunca frases genéricas sin sujeto como "ganará el encuentro" o "gana el partido" — el nombre apostado suele estar destacado en el texto (negritas, línea propia, ➡️). Si es una combinada/"crear apuesta" (varias selecciones en un mismo boleto), únelas con " + " (ej. "Más de 1 gol + Más de 2 tarjetas").
@@ -1045,6 +1045,12 @@ _SETTLED_TICKET_PATTERN = re.compile(
     r"|(?i:\breturned\b)"
 )
 
+# La casa solo imprime el marcador final junto a los equipos cuando el
+# boleto YA está revisado ("Marcador 0-2" al lado de FC Porto/Man City).
+# Un slip abierto nunca lleva resultado. Detecta reposts de "verdes"
+# aunque el sello y los ✓ se pierdan en el OCR.
+_SETTLED_SCORE_PATTERN = re.compile(r"\bmarcador\s+\d+\s*[-–:]\s*\d+\b", re.IGNORECASE)
+
 # En un slip liquidado cada selección aparece marcada con ✓/✔ (la vista
 # "verde" de bet365 que el tipster repostea); un slip abierto nunca las
 # lleva. Dos o más marcas con el premio pagado ("<importe>€ Ganancias")
@@ -1062,8 +1068,7 @@ _SETTLED_CHECKMARKS = re.compile(r"[✓✔]")
 # línea, p. ej. el payout final "23333,33€ Ganancias" del slip cobrado.
 _SETTLED_PAYOUT_PATTERN = re.compile(r"\d[\d.,]*\s*€\s*Ganancias\s*$", re.MULTILINE)
 _OPEN_SLIP_PATTERN = re.compile(
-    r"Cerrar apuesta|Añadir selecci[oó]n|potencial|Crear apuesta|"
-    r"Reutilizar|hoja de apuestas|Compartir",
+    r"Cerrar apuesta|Añadir selecci[oó]n|potencial|" r"Reutilizar|hoja de apuestas",
     re.IGNORECASE,
 )
 
@@ -1071,6 +1076,8 @@ _OPEN_SLIP_PATTERN = re.compile(
 def _is_settled_ticket(text: str) -> bool:
     """True si el texto parece un boleto YA liquidado/cobrado."""
     if _SETTLED_TICKET_PATTERN.search(text):
+        return True
+    if _SETTLED_SCORE_PATTERN.search(text):
         return True
     low = text.lower()
     # Premio pagado sin "potencial": en slips ABIERTOS de bet365 el premio
