@@ -213,6 +213,8 @@ _LEAGUES_FUTBOL_EXTRA = (
     "concacaf.w.gold",
     "concacaf.w.champions_cup",
     "concacaf.womens.championship",
+    "afc.champions",
+    "afc.cup",
     "afc.w.asian.cup",
     "caf.w.nations",
 )
