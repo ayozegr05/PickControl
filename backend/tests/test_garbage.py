@@ -287,6 +287,71 @@ class TestDryRunYApply:
             assert pick.fecha_evento == datetime(2026, 9, 16, 19, 0)
             assert pick.es_apuesta is True
 
+    async def test_padre_huerfano_se_descarta_con_sus_patas(self, db):
+        """Combinada con todas las patas ya descartadas: el padre no
+        tiene evento propio — debe morir con ellas."""
+        async with db() as session:
+            raw = _raw(datetime(2026, 9, 24, 10, 0), text="pack premium")
+            session.add(raw)
+            await session.flush()
+            parent = ParsedPick(
+                raw_message_id=raw.id,
+                es_apuesta=True,
+                es_combinada=True,
+                seleccion="PORTUGAL GALES + NORUEGA DINAMARCA",
+                fecha_evento=datetime(2026, 9, 24, 10, 0),
+            )
+            session.add(parent)
+            await session.flush()
+            for sel in ("PORTUGAL GALES", "NORUEGA DINAMARCA"):
+                session.add(
+                    ParsedPick(
+                        raw_message_id=raw.id,
+                        es_apuesta=False,  # patas ya descartadas
+                        combinada_id=parent.id,
+                        seleccion=sel,
+                        fecha_evento=datetime(2026, 9, 24, 10, 0),
+                    )
+                )
+            await session.commit()
+            parent_id = parent.id
+        report = await garbage.analyze_garbage()
+        parent_actions = [a for a in report.actions if a.pick_id == parent_id]
+        assert [a.reason for a in parent_actions] == ["combinada_sin_patas"]
+
+    async def test_padre_con_pata_viva_sobrevive(self, db):
+        """Padre con al menos una pata abierta no se toca."""
+        async with db() as session:
+            raw = _raw(datetime(2026, 9, 24, 10, 0), text="combinada")
+            session.add(raw)
+            await session.flush()
+            parent = ParsedPick(
+                raw_message_id=raw.id,
+                es_apuesta=True,
+                es_combinada=True,
+                seleccion="Madrid gana + Over 2.5",
+                fecha_evento=datetime(2026, 9, 24, 10, 0),
+            )
+            session.add(parent)
+            await session.flush()
+            session.add(
+                ParsedPick(
+                    raw_message_id=raw.id,
+                    es_apuesta=True,
+                    combinada_id=parent.id,
+                    seleccion="Madrid gana",
+                    evento="Real Madrid - Girona",
+                    fecha_evento=datetime(2026, 9, 24, 10, 0),
+                )
+            )
+            await session.commit()
+            parent_id = parent.id
+        report = await garbage.analyze_garbage()
+        assert not any(
+            a.pick_id == parent_id and a.reason == "combinada_sin_patas"
+            for a in report.actions
+        )
+
     async def test_picks_ya_resueltos_no_se_tocan(self, db):
         async with db() as session:
             raw = _raw(datetime(2026, 9, 19, 10, 21), extracted_text=_SLIP_OCR)

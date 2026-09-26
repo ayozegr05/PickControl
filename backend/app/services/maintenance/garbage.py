@@ -327,6 +327,43 @@ async def analyze_garbage() -> GarbageReport:
             action = _analyze_pick_fields(pick)
             if action is not None:
                 report.actions.append(action)
+                if action.action == "flag":
+                    flagged.add(pick.id)
+
+        # Padres de combinada huérfanos: el padre nunca tiene `evento`
+        # propio (lo heredan las patas), así que `evento_vacio` los
+        # deja pasar — pero si TODAS sus patas están descartadas, el
+        # padre muere con ellas.
+        all_flagged = {a.pick_id for a in report.actions if a.action == "flag"}
+        for parent in (p for p in picks if p.es_combinada):
+            if parent.id in all_flagged:
+                continue
+            legs = list(
+                (
+                    await session.exec(
+                        select(ParsedPick).where(ParsedPick.combinada_id == parent.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not legs:
+                continue
+            open_legs = [
+                leg for leg in legs if leg.es_apuesta and leg.id not in all_flagged
+            ]
+            if not open_legs:
+                report.actions.append(
+                    GarbageAction(
+                        pick_id=parent.id,
+                        action="flag",
+                        reason="combinada_sin_patas",
+                        detail=(
+                            f"{len(legs)} patas descartadas "
+                            f"(msg {parent.raw_message_id})"
+                        ),
+                    )
+                )
 
     return report
 
