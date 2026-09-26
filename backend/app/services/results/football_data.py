@@ -13,7 +13,12 @@ from typing import Optional
 import httpx
 
 from app.core.logging import get_logger
-from app.services.results.base import MatchResult, MatchState, match_score
+from app.services.results.base import (
+    MatchResult,
+    MatchState,
+    count_provider_call,
+    match_score,
+)
 
 logger = get_logger("app.results.football_data")
 
@@ -37,24 +42,35 @@ class FootballDataProvider:
     """Consulta football-data.org por partidos finalizados cerca de una fecha."""
 
     SUPPORTED_SPORTS = frozenset({"futbol"})
+    NAME = "football-data"
 
     def __init__(self, api_key: str) -> None:
         self._api_key = api_key
         # Caché de partidos por ventana de fechas (vive solo durante una
         # pasada del verificador): picks del mismo día comparten la misma
-        # respuesta en vez de repetir la llamada.
+        # respuesta en vez de repetir la llamada. Los fallos también se
+        # cachean ([]): un rango que ya devolvió error no se reintenta
+        # por cada pick pendiente.
         self._matches_cache: dict[tuple[str, str], list] = {}
+        # Tras el primer error HTTP (p. ej. 429: el free tier es ~10
+        # req/min y el contador es compartido entre rangos), el resto de
+        # la pasada se salta sin llamar — insistir solo encola 429s. El
+        # bloqueo muere con la instancia: la próxima pasada reintenta.
+        self._blocked = False
 
     async def _fetch_matches(self, date: datetime) -> list:
         date_from = (date - _DATE_WINDOW).strftime("%Y-%m-%d")
         date_to = (date + _DATE_WINDOW).strftime("%Y-%m-%d")
         cache_key = (date_from, date_to)
 
+        if self._blocked:
+            return []
         if cache_key in self._matches_cache:
             return self._matches_cache[cache_key]
 
         async with httpx.AsyncClient(timeout=15) as client:
             try:
+                count_provider_call(self.NAME)
                 response = await client.get(
                     f"{_BASE_URL}/matches",
                     params={"dateFrom": date_from, "dateTo": date_to},
@@ -63,6 +79,8 @@ class FootballDataProvider:
                 response.raise_for_status()
             except httpx.HTTPError as exc:
                 logger.warning("[football-data.org] Error de API: %s", exc)
+                self._blocked = True
+                self._matches_cache[cache_key] = []
                 return []
 
         matches = response.json().get("matches", [])
