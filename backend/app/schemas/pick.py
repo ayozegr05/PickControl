@@ -96,3 +96,6 @@ class ParsedPickRead(ParsedPickBase):
     informante_id: Optional[int] = None
     created_at: datetime
     patas: list["ParsedPickRead"] = []
+    # True solo en pendientes cuyo evento ya salió de la ventana de
+    # verificación automática: el verifier ya no los reintenta.
+    fuera_ventana: bool = False

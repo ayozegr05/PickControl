@@ -19,6 +19,7 @@ from app.schemas.pick import ParsedPickRead, PickRead
 from app.services.odds.compare import compare_pick
 from app.services.pick_service import calcular_ganancia, to_naive_utc
 from app.services.results.verifier import (
+    _MAX_VERIFICATION_AGE,
     cascade_user_settlements,
     settle_combinada,
 )
@@ -140,16 +141,86 @@ async def listar_picks_extraidos(
         for leg in legs:
             patas_por_padre.setdefault(leg.combinada_id, []).append(leg)
 
+    # `fuera_ventana`: solo tiene sentido en pendientes — marca los que
+    # el verifier ya no reintenta (misma ventana que _should_attempt).
+    ventana_min = utc_now() - _MAX_VERIFICATION_AGE
+
+    def _fuera_ventana(p: ParsedPick) -> bool:
+        return (
+            p.acierto is None
+            and not p.anulada
+            and p.fecha_evento is not None
+            and p.fecha_evento < ventana_min
+        )
+
     return [
         ParsedPickRead(
             **p.model_dump(),
+            fuera_ventana=_fuera_ventana(p),
             patas=[
-                ParsedPickRead(**leg.model_dump())
+                ParsedPickRead(**leg.model_dump(), fuera_ventana=_fuera_ventana(leg))
                 for leg in patas_por_padre.get(p.id, [])
             ],
         )
         for p in picks
     ]
+
+
+@router.post("/telegram/parsed-picks/anular-residuo")
+async def anular_residuo_pendiente(
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(get_current_user),
+) -> dict[str, int]:
+    """Anula en bloque los picks pendientes fuera de la ventana de
+    verificación (>14 días desde `fecha_evento`).
+
+    El verifier ya no los reintenta — quedaban en "pendiente" para
+    siempre contaminando la cola. Marcarlos anulados es la corrección
+    honesta: la apuesta no pudo comprobarse, se trata como void y sale
+    de stats/pendientes. Las patas anuladas re-liquidan su combinada
+    padre (puede liquidarla o dejarla pendiente según el resto).
+    """
+    cutoff = utc_now() - _MAX_VERIFICATION_AGE
+    residuo = (
+        await session.exec(
+            select(ParsedPick)
+            .where(ParsedPick.es_apuesta == True)  # noqa: E712
+            .where(ParsedPick.acierto == None)  # noqa: E711
+            .where(ParsedPick.anulada == False)  # noqa: E712
+            # Los padres no se anulan aquí: tras anular sus patas,
+            # `settle_combinada` los liquidará con lo que quede.
+            .where(ParsedPick.es_combinada == False)  # noqa: E712
+            .where(ParsedPick.fecha_evento != None)  # noqa: E711
+            .where(ParsedPick.fecha_evento < cutoff)
+        )
+    ).all()
+
+    now = utc_now()
+    afectados = 0
+    for pick in residuo:
+        pick.anulada = True
+        pick.verificado_por = "manual"
+        pick.verificado_at = now
+        session.add(pick)
+        afectados += 1
+    await session.flush()
+
+    # Patas anuladas pueden desbloquear padres pendientes: se recalculan
+    # todas las combinadas abiertas (pocas, operación barata).
+    padres = (
+        await session.exec(
+            select(ParsedPick)
+            .where(ParsedPick.es_combinada == True)  # noqa: E712
+            .where(ParsedPick.acierto == None)  # noqa: E711
+            .where(ParsedPick.anulada == False)  # noqa: E712
+        )
+    ).all()
+    for parent in padres:
+        await settle_combinada(session, parent)
+
+    await cascade_user_settlements(session)
+    await session.commit()
+    return {"anuladas": afectados}
 
 
 @router.get("/telegram/parsed-picks/{pick_id}/odds", response_model=PickOddsRead)
