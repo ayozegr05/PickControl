@@ -16,7 +16,8 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     `processor.py` (persistencia + dedup), `pick_extractor.py` (pre-filtro →
     reglas → LLM `gpt-4o-mini`), `ocr.py` (OpenAI vision).
   - `app/services/results/` — verificador de resultados por deporte:
-    fútbol (football-data.org → API-Football → footapi7/Sofascore vía
+    fútbol (ESPN primero — gratis, stats incluidas → football-data.org
+    → API-Football → footapi7/Sofascore vía
     RapidAPI, sin ventana de fechas), tenis (TheSportsDB →
     RapidAPI ATP-WTA-ITF → tennisapi1). Rescate manual de stats:
     `scripts/backfill_stats_csv.py` (CSVs football-data.co.uk, dry-run por
