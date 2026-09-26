@@ -384,6 +384,18 @@ class TestIsSettledTicket:
         )
         assert _is_settled_ticket(text) is False
 
+    def test_sello_alucinado_con_cerrar_apuesta_no_es_liquidado(self):
+        # El modelo de OCR a veces estampa 'SELLO: GANADOR' en slips
+        # vivos por el pie "Ganancias <importe>". Si el texto transcrito
+        # muestra el botón "Cerrar apuesta" (cash-out = apuesta viva),
+        # la UI manda sobre el sello.
+        text = (
+            "SELLO: GANADOR\nCREAR APUESTA 1.50\nResultado final: Barcelona\n"
+            "2 GOLES DE VENTAJA\nMás de 2 goles\nBarcelona\nRayo Vallecano\n"
+            "Imp: 2.000,00€\nGanancias 3.000,00€\nCerrar apuesta 2.000,00€"
+        )
+        assert _is_settled_ticket(text) is False
+
 
 class TestExtractLinea:
     def test_extrae_handicap_positivo(self):

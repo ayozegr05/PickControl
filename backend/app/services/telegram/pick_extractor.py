@@ -1075,6 +1075,11 @@ _OPEN_SLIP_PATTERN = re.compile(
 
 def _is_settled_ticket(text: str) -> bool:
     """True si el texto parece un boleto YA liquidado/cobrado."""
+    # El botón "Cerrar apuesta" (cash-out) solo existe en apuestas VIVAS.
+    # Si el OCR estampa 'SELLO: GANADOR' pero el slip lo muestra, el
+    # sello es una alucinación del modelo — el texto de la UI manda.
+    if "SELLO: GANADOR" in text and re.search(r"cerrar apuesta", text, re.IGNORECASE):
+        text = text.replace("SELLO: GANADOR", "", 1)
     if _SETTLED_TICKET_PATTERN.search(text):
         return True
     if _SETTLED_SCORE_PATTERN.search(text):
