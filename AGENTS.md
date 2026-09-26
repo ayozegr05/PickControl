@@ -16,8 +16,12 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     `processor.py` (persistencia + dedup), `pick_extractor.py` (pre-filtro →
     reglas → LLM `gpt-4o-mini`), `ocr.py` (OpenAI vision).
   - `app/services/results/` — verificador de resultados por deporte:
-    fútbol (ESPN primero — gratis, stats incluidas → football-data.org
-    → API-Football → footapi7/Sofascore vía
+    ESPN (`espn.py`, gratis sin key) va PRIMERO en los tres deportes —
+    fútbol (~46 ligas: marcador FT/HT + stats de equipo + props de
+    jugador vía `summary.rosters`), tenis (ATP/WTA, sets por
+    `linescores`; sin aces/dobles faltas ni retiradas), basket
+    (NBA/WNBA/NBL/FIBA; sin ACB ni Euroliga). Después: fútbol
+    (football-data.org → API-Football → footapi7/Sofascore vía
     RapidAPI, sin ventana de fechas), tenis (TheSportsDB →
     RapidAPI ATP-WTA-ITF → tennisapi1). Rescate manual de stats:
     `scripts/backfill_stats_csv.py` (CSVs football-data.co.uk, dry-run por
@@ -32,9 +36,13 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     solo a usuarios con "Yo también la jugué"). Kill-switch:
     `PUSH_NOTIFICATIONS_ENABLED`.
   - `app/services/odds/` — snapshots de cuotas de mercado (auditoría del
-    tipster): provider Sofascore (allsportsapi2 dedicado, tennisapi1
-    scavenger), job periódico `snapshotter.py`, mapeo pick→mercado y
-    comparación en `compare.py`. Ver ROADMAP §5.
+    tipster): ESPN (`espn_odds.py`, pickcenter/DraftKings gratis) primero
+    para fútbol/basket (solo ganador/total/hándicap), luego Sofascore
+    (allsportsapi2 dedicado, tennisapi1 scavenger). Espacios de ids por
+    familia (`ID_PREFIX` "espn:"/"sofascore:"): el snapshotter solo pasa
+    a capturar ids al provider que los emitió. Job periódico
+    `snapshotter.py`, mapeo pick→mercado y comparación en `compare.py`.
+    Ver ROADMAP §5.
 - **Frontend** `Frontend/PickControl/` — Expo + React Native + TypeScript,
   Expo Router (`app/screens/`, `app/dynamic-routes/`), cliente en `src/api/`.
 

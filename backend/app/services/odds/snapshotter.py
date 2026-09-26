@@ -23,9 +23,15 @@ Corre cada `odds_snapshot_interval_minutes` en segundo plano (ver
 Cadena de proveedores por deporte (misma semántica que el
 verificador: un 403/429 lo marca sin cuota y se pasa al siguiente):
 
-- tenis:  allsportsapi2 (dedicada) -> tennisapi1 (scavenger, mismo
-          espacio de ids Sofascore)
-- futbol: allsportsapi2
+- futbol:     espn (pickcenter/DraftKings, gratis) -> allsportsapi2 ->
+              espejos RapidAPI -> Sofascore directo
+- baloncesto: espn (NBA/WNBA/NBL/FIBA; sin ACB ni Euroliga)
+- tenis:      allsportsapi2 (dedicada) -> tennisapi1 (scavenger, mismo
+              espacio de ids Sofascore)
+
+Los espacios de ids no se mezclan: cada provider declara su
+`ID_PREFIX` ("espn:" / "sofascore:") y el ciclo solo le pasa a capturar
+ids de su propia familia — un `espn:*` nunca llega a Sofascore.
 
 Así las suscripciones compartidas solo se gastan cuando la dedicada
 se agota — los resultados siempre tienen prioridad en su cuota.
@@ -47,6 +53,7 @@ from app.db.postgres import AsyncSessionLocal
 from app.models.odds_snapshot import OddsEvent, OddsSnapshot
 from app.models.parsed_pick import ParsedPick
 from app.services.odds.base import EventRef, OddsProvider
+from app.services.odds.espn_odds import EspnOddsProvider
 from app.services.odds.sofascore import SofaScoreOddsProvider
 from app.services.results.base import is_missed, mark_missed
 from app.services.results.sofascore_native import (
@@ -86,6 +93,10 @@ async def _get_odds_providers() -> list[OddsProvider]:
     """
     settings = get_settings()
     providers: list[OddsProvider] = []
+    # ESPN primero para fútbol/basket: pickcenter (DraftKings) gratis,
+    # sin key ni cuota. Solo trae ganador/hándicap/total — los mercados
+    # ricos (córners, BTTS, props) siguen necesitando Sofascore abajo.
+    providers.append(EspnOddsProvider())
     # Sofascore directo primero: cuota ilimitada (API nativa vía
     # curl_cffi) — absorbe el grueso de resoluciones y capturas; las
     # suscripciones RapidAPI quedan como respaldo si Cloudflare cierra.
@@ -195,6 +206,12 @@ async def _fetch_odds_across_providers(
     for provider in providers:
         if sport not in getattr(provider, "SUPPORTED_SPORTS", frozenset()):
             continue
+        # Espacios de ids por familia: un id "espn:*" no es válido en
+        # Sofascore ni viceversa — saltar sin llamar (ni siquiera se
+        # intenta; un split(":",1) crudo extraería basura).
+        prefix = getattr(provider, "ID_PREFIX", None)
+        if prefix and not event_ext_id.startswith(prefix):
+            continue
         try:
             choices = await provider.fetch_odds(event_ext_id, sport)
         except Exception as exc:  # noqa: BLE001
@@ -245,7 +262,7 @@ async def _resolve_missing_event_ids(
         if pick.odds_event_id and pick.odds_event_id in registered:
             continue
         sport = _canonical_sport(pick.deporte)
-        if sport not in ("tenis", "futbol"):
+        if sport not in ("tenis", "futbol", "baloncesto"):
             continue
         hint = _lookup_hint(pick, sport)
         if not hint:
@@ -302,7 +319,7 @@ async def run_odds_snapshot_cycle() -> dict[str, int]:
         picks = [
             p
             for p in result.scalars().all()
-            if _canonical_sport(p.deporte) in ("tenis", "futbol")
+            if _canonical_sport(p.deporte) in ("tenis", "futbol", "baloncesto")
         ]
         stats["candidatos"] = len(picks)
 

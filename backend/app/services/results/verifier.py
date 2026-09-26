@@ -58,7 +58,11 @@ from app.services.results.base import (
     fold_name,
     match_reversed,
 )
-from app.services.results.espn import EspnProvider
+from app.services.results.espn import (
+    EspnBasketballProvider,
+    EspnProvider,
+    EspnTennisProvider,
+)
 from app.services.results.footapi_stats import FootApiStatsProvider
 from app.services.results.football_data import FootballDataProvider
 from app.services.results.rapidapi_tennis import RapidApiTennisProvider
@@ -1374,6 +1378,9 @@ async def _get_providers() -> list[ResultsProvider]:
     # consulta si los de fútbol no encontraron el partido. Y dentro de
     # tenis, TheSportsDB (gratis) primero y RapidAPI (cuota limitada) de
     # último recurso para Challenger/ITF.
+    # ESPN tenis primero del deporte: gratis, sin cuota, marcador por
+    # sets en ATP/WTA (individuales y dobles).
+    providers.append(EspnTennisProvider())
     if settings.api_tennis_key:
         providers.append(ApiTennisProvider(settings.api_tennis_key))
     # 365scores para tenis: cubre ATP/WTA/Challenger/ITF/dobles en una
@@ -1404,9 +1411,12 @@ async def _get_providers() -> list[ResultsProvider]:
                 settings.rapidapi_tennis_key, settings.rapidapi_allsports_host
             )
         )
-    # Baloncesto: API-Basketball (api-sports, cuota propia de 100/día —
-    # no toca footapi7). Va al final: es el único provider de basket y
-    # para picks sin deporte solo se alcanza si los demás no resolvieron.
+    # Baloncesto: ESPN primero — gratis, sin cuota, cubre NBA/WNBA/NBL/
+    # FIBA (sin ACB ni Euroliga: ESPN no las publica; esas siguen en
+    # API-Basketball y los mirrors).
+    providers.append(EspnBasketballProvider())
+    # API-Basketball (api-sports, cuota propia de 100/día — no toca
+    # footapi7): rescata las ligas europeas que ESPN no cubre.
     if settings.api_basketball_key:
         providers.append(
             ApiBasketballProvider(
