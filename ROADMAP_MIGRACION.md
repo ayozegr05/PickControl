@@ -64,7 +64,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 | E3 | LLM local (`ollama`) | Cuando el volumen justifique infra |
 | E4 | Batching LLM | Varios mensajes por llamada |
 | E5 | Caché por canal | No reprocesar plantillas/promos repetidas |
-| ~~E6~~ | ~~Caché de `football-data.org` por rango de fechas~~ | ✅ Hecho 2026-09-26: caché negativa + bloqueo por pasada + `count_provider_call` (ya aparece en el panel). Además se añadió **provider ESPN** (`results/espn.py`, gratis sin key, PRIMERO en la cascada de fútbol): marcador FT/HT + stats (córners, tarjetas, tiros, faltas) — descarga a football-data y a los mirrors de cuota. Detector de API rota: 5 fallos consecutivos → aparcado + push a admins |
+| ~~E6~~ | ~~Caché de `football-data.org` por rango de fechas~~ | ✅ Hecho 2026-09-26: caché negativa + bloqueo por pasada + `count_provider_call` (ya aparece en el panel). Además se añadió **provider ESPN** (`results/espn.py`, gratis sin key): primero en los 3 deportes — fútbol (~46 ligas: FT/HT + stats + props de jugador vía `summary.rosters`), tenis (ATP/WTA con sets; retiradas → pendiente, nunca liquidar parciales), basket (NBA/WNBA/NBL/FIBA, sin ACB/Euroliga). Y en odds (`odds/espn_odds.py`): pickcenter/DraftKings → "Full time"/"Match goals"/"Asian handicap"; espacios de ids por familia (`ID_PREFIX`). Detector de API rota: 5 fallos consecutivos → aparcado + push a admins |
 
 ## Fases completadas
 

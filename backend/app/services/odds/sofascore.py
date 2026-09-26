@@ -64,6 +64,9 @@ _DATE_TOLERANCE = timedelta(days=1)
 
 
 class SofaScoreOddsProvider:
+    # Prefijo del espacio de ids de la familia Sofascore — el
+    # snapshotter salta este provider con ids de otra familia (espn:*).
+    ID_PREFIX = "sofascore:"
     """Cliente de odds para hosts de la familia Sofascore.
 
     Una instancia por suscripción RapidAPI: el `name` va a

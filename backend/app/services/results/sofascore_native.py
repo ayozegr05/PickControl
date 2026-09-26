@@ -602,6 +602,10 @@ class SofaScoreNativeOddsProvider:
     ±1 día como el wrapper).
     """
 
+    # Espacio de ids "sofascore:<id>" — el snapshotter salta este
+    # provider al capturar ids de otra familia (espn:*).
+    ID_PREFIX = "sofascore:"
+
     def __init__(self, transport: _Transport, sports: frozenset) -> None:
         self.NAME = transport.name
         self.SUPPORTED_SPORTS = sports
