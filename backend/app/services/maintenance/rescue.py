@@ -42,7 +42,7 @@ from app.models.telegram_raw_message import TelegramRawMessage
 from app.models.user import User  # noqa: F401
 from app.services.pick_service import get_or_create_informante
 from app.services.telegram.ocr import extract_text_from_image
-from app.services.telegram.pick_extractor import extract_pick
+from app.services.telegram.pick_extractor import _llm_extract, extract_pick
 from app.services.telegram.processor import _find_duplicate_pick
 
 logger = get_logger("app.maintenance.rescue")
@@ -285,15 +285,132 @@ async def reprocess_pending_raws(
     }
 
 
+# Campos que la pasada LLM aporta a un pick incompleto de reglas: el
+# LLM manda cuando trae valor — una extracción `rule` sin evento ya
+# está rota y su selección/cuota también suelen ser menos fiables.
+_LLM_BACKFILL_FIELDS = (
+    "evento",
+    "seleccion",
+    "deporte",
+    "mercado",
+    "cuota",
+    "linea",
+    "casa",
+    "explicacion",
+)
+
+
+async def retry_incomplete_picks(
+    max_age_days: Optional[float] = None,
+) -> dict[str, int]:
+    """Reintenta la pasada LLM en picks `rule` simples sin `evento`.
+
+    Caso real: el pick salió por reglas con el rival solo en la prosa
+    del análisis y la 2ª pasada LLM falló en ese momento (429/red) —
+    queda `es_apuesta=True` con `evento` vacío y nunca verificará. El
+    ciclo lo reintenta hasta que el LLM lo analiza de verdad:
+
+    - LLM rellena `evento` -> se actualizan los campos que aporta.
+    - LLM dice "no es apuesta" -> `es_apuesta=False` (basura confirmada
+      por análisis, no por patrón).
+    - LLM falla (429/red) o no aporta evento -> no se toca nada; se
+      reintenta en el siguiente ciclo hasta `rescue_max_age_days`.
+
+    Solo picks simples: en combinadas el LLM devuelve el pick completo
+    y no hay forma segura de mapearlo pata a pata.
+    """
+    settings = get_settings()
+    resumen = {"candidatos": 0, "rellenados": 0, "descartados": 0, "fallos": 0}
+    if not settings.openai_api_key:
+        return resumen
+
+    cutoff = _rescue_cutoff(settings, max_age_days)
+    async with AsyncSessionLocal() as session:
+        stmt = (
+            select(ParsedPick, TelegramRawMessage)
+            .join(
+                TelegramRawMessage,
+                ParsedPick.raw_message_id == TelegramRawMessage.id,
+            )
+            .where(ParsedPick.es_apuesta == True)  # noqa: E712
+            .where(ParsedPick.acierto.is_(None))
+            .where(ParsedPick.anulada == False)  # noqa: E712
+            .where(ParsedPick.combinada_id.is_(None))
+            .where(ParsedPick.es_combinada == False)  # noqa: E712
+            .where(
+                or_(
+                    ParsedPick.evento.is_(None),
+                    func.trim(ParsedPick.evento) == "",
+                )
+            )
+        )
+        if cutoff is not None:
+            stmt = stmt.where(TelegramRawMessage.received_at >= cutoff)
+        rows = (await session.exec(stmt)).all()
+        resumen["candidatos"] = len(rows)
+
+        for pick, raw in rows:
+            text = (raw.extracted_text or raw.text or "").strip()
+            if not text:
+                continue
+            try:
+                llm = await _llm_extract(
+                    text,
+                    settings.openai_api_key,
+                    informante=raw.channel_name,
+                    fecha_referencia=raw.received_at,
+                )
+            except RateLimitError:
+                # Sin cuota: no se tocó nada, reintento en el próximo ciclo.
+                resumen["fallos"] += 1
+                continue
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "[RESCUE] LLM incompleto pick %s falló: %s", pick.id, exc
+                )
+                resumen["fallos"] += 1
+                continue
+            if llm is None:
+                resumen["fallos"] += 1
+                continue
+            if not llm.es_apuesta:
+                # Analizado de verdad y no es apuesta -> descarte.
+                pick.es_apuesta = False
+                session.add(pick)
+                resumen["descartados"] += 1
+                continue
+            if not llm.evento:
+                continue
+            for campo in _LLM_BACKFILL_FIELDS:
+                valor = getattr(llm, campo, None)
+                if valor is not None:
+                    setattr(pick, campo, valor)
+            pick.metodo = "rule+llm"
+            session.add(pick)
+            resumen["rellenados"] += 1
+
+        await session.commit()
+    return resumen
+
+
 async def run_rescue_cycle() -> dict[str, dict[str, int]]:
     """Una pasada completa de rescate: primero OCR, luego reproceso
-    (así los raws recién rescatados se extraen en el mismo ciclo)."""
+    (así los raws recién rescatados se extraen en el mismo ciclo) y por
+    último los picks incompletos sin `evento`."""
     ocr = await retry_pending_ocr()
     reproc = await reprocess_pending_raws()
-    if ocr["hechos"] or reproc["picks"] or reproc["antiguos"]:
+    incomplete = await retry_incomplete_picks()
+    if (
+        ocr["hechos"]
+        or reproc["picks"]
+        or reproc["antiguos"]
+        or incomplete["rellenados"]
+        or incomplete["descartados"]
+    ):
         logger.info(
             "[RESCUE] Ciclo: OCR %s ok/%s fallos de %s (%s sin fichero); "
-            "reproceso %s/%s (+%s picks, %s dups, %s sin pick, %s antiguos)",
+            "reproceso %s/%s (+%s picks, %s dups, %s sin pick, %s antiguos); "
+            "incompletos %s/%s rellenados, %s descartados, %s fallos",
             ocr["hechos"],
             ocr["fallos"],
             ocr["pendientes"],
@@ -304,5 +421,9 @@ async def run_rescue_cycle() -> dict[str, dict[str, int]]:
             reproc["duplicados"],
             reproc["sin_pick"],
             reproc["antiguos"],
+            incomplete["rellenados"],
+            incomplete["candidatos"],
+            incomplete["descartados"],
+            incomplete["fallos"],
         )
-    return {"ocr": ocr, "reprocess": reproc}
+    return {"ocr": ocr, "reprocess": reproc, "incomplete": incomplete}
