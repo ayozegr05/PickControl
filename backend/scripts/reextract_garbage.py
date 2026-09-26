@@ -13,8 +13,11 @@ Recorre los picks abiertos y propone, SIN escribir nada:
 Uso:
     .venv\\Scripts\\python.exe scripts\\reextract_garbage.py
     .venv\\Scripts\\python.exe scripts\\reextract_garbage.py --apply
+    .venv\\Scripts\\python.exe scripts\\reextract_garbage.py --fix-incomplete
 
 `--apply` escribe SOLO las acciones flag/fix_date del informe.
+`--fix-incomplete` reintenta con el LLM los picks `rule` sin `evento`
+(la misma función que corre el ciclo de rescate cada 6h).
 """
 
 import asyncio
@@ -29,10 +32,23 @@ from sqlalchemy import select
 from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
 from app.services.maintenance.garbage import analyze_garbage, apply_garbage
+from app.services.maintenance.rescue import retry_incomplete_picks
 
 
 async def main() -> None:
     apply = "--apply" in sys.argv
+
+    if "--fix-incomplete" in sys.argv:
+        # Rescate de picks 'rule' sin evento: SÍ escribe (no es dry-run).
+        resumen = await retry_incomplete_picks()
+        print(
+            f"Picks incompletos: {resumen['candidatos']} candidatos -> "
+            f"{resumen['rellenados']} rellenados, "
+            f"{resumen['descartados']} descartados (no apuesta), "
+            f"{resumen['fallos']} fallos de LLM (reintento luego)."
+        )
+        return
+
     report = await analyze_garbage()
 
     flags = report.by_action("flag")
@@ -54,8 +70,10 @@ async def main() -> None:
     if ids:
         async with AsyncSessionLocal() as session:
             picks = (
-                await session.exec(select(ParsedPick).where(ParsedPick.id.in_(ids)))
-            ).all()
+                (await session.exec(select(ParsedPick).where(ParsedPick.id.in_(ids))))
+                .scalars()
+                .all()
+            )
             print("\nDetalle de picks afectados:")
             for p in sorted(picks, key=lambda x: x.id or 0):
                 print(

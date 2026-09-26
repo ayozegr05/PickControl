@@ -262,6 +262,126 @@ class TestReprocessPendingRaws:
         extract.assert_not_called()
 
 
+class TestRetryIncompletePicks:
+    """`retry_incomplete_picks`: 2ª pasada LLM sobre picks `rule` sin
+    `evento`. El LLM manda en los campos que aporta; un fallo no toca
+    nada y un "no es apuesta" analizado descarta la fila."""
+
+    async def _pick_sin_evento(self, session, raw, **kwargs) -> ParsedPick:
+        pick = ParsedPick(
+            raw_message_id=raw.id,
+            es_apuesta=True,
+            seleccion="CHALL GÉNOVA",
+            deporte="tenis",
+            metodo="rule",
+            evento=None,
+            **kwargs,
+        )
+        session.add(pick)
+        await session.commit()
+        await session.refresh(pick)
+        return pick
+
+    async def test_llm_rellena_evento_y_campos(self, session, monkeypatch):
+        raw = await _raw(session, text="Neumayer gana cuota 1.5", processed=True)
+        pick = await self._pick_sin_evento(session, raw)
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+        monkeypatch.setattr(
+            rescue,
+            "_llm_extract",
+            AsyncMock(
+                return_value=ExtractedPick(
+                    es_apuesta=True,
+                    evento="Neumayer vs Manzano",
+                    seleccion="Neumayer gana",
+                    deporte="tenis",
+                    mercado="ganador",
+                    cuota=1.5,
+                )
+            ),
+        )
+
+        resumen = await rescue.retry_incomplete_picks()
+
+        assert resumen == {
+            "candidatos": 1,
+            "rellenados": 1,
+            "descartados": 0,
+            "fallos": 0,
+        }
+        await session.refresh(pick)
+        assert pick.evento == "Neumayer vs Manzano"
+        assert pick.seleccion == "Neumayer gana"
+        assert pick.cuota == 1.5
+        assert pick.metodo == "rule+llm"
+
+    async def test_llm_dice_no_apuesta_descarta(self, session, monkeypatch):
+        raw = await _raw(session, text="marketing del canal", processed=True)
+        pick = await self._pick_sin_evento(session, raw)
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+        monkeypatch.setattr(
+            rescue,
+            "_llm_extract",
+            AsyncMock(return_value=ExtractedPick(es_apuesta=False)),
+        )
+
+        resumen = await rescue.retry_incomplete_picks()
+
+        assert resumen["descartados"] == 1
+        await session.refresh(pick)
+        assert pick.es_apuesta is False
+
+    async def test_llm_falla_no_toca_nada(self, session, monkeypatch):
+        raw = await _raw(session, text="Sakkari gana", processed=True)
+        pick = await self._pick_sin_evento(session, raw)
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+        monkeypatch.setattr(
+            rescue, "_llm_extract", AsyncMock(side_effect=Exception("boom"))
+        )
+
+        resumen = await rescue.retry_incomplete_picks()
+
+        assert resumen["fallos"] == 1
+        await session.refresh(pick)
+        assert pick.evento is None
+        assert pick.es_apuesta is True
+
+    async def test_pick_antiguo_queda_fuera(self, session, monkeypatch):
+        raw = await _raw(
+            session,
+            text="pick viejo",
+            processed=True,
+            received_at=utc_now() - timedelta(days=60),
+        )
+        await self._pick_sin_evento(session, raw)
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+        llm = AsyncMock()
+        monkeypatch.setattr(rescue, "_llm_extract", llm)
+
+        resumen = await rescue.retry_incomplete_picks()
+
+        assert resumen["candidatos"] == 0
+        llm.assert_not_called()
+
+    async def test_patas_y_padres_de_combinada_no_entran(self, session, monkeypatch):
+        raw = await _raw(session, text="combinada", processed=True)
+        padre = await self._pick_sin_evento(session, raw, es_combinada=True)
+        await self._pick_sin_evento(session, raw, combinada_id=padre.id)
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+        llm = AsyncMock()
+        monkeypatch.setattr(rescue, "_llm_extract", llm)
+
+        resumen = await rescue.retry_incomplete_picks()
+
+        assert resumen["candidatos"] == 0
+        llm.assert_not_called()
+
+
 class TestBackfillPendingCount:
     async def test_cuenta_solo_pendientes_reales(self, session, monkeypatch):
         # Pick elegible sin backfill.
