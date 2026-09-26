@@ -130,10 +130,14 @@ async def picks_status(
             ParsedPick.es_combinada == False,  # noqa: E712
         ),
         pendientes_patas=await _count(
-            pendiente, ParsedPick.combinada_id != None  # noqa: E711
+            ParsedPick.es_apuesta == True,  # noqa: E712
+            pendiente,
+            ParsedPick.combinada_id != None,  # noqa: E711
         ),
         pendientes_combinadas=await _count(
-            pendiente, ParsedPick.es_combinada == True  # noqa: E712
+            ParsedPick.es_apuesta == True,  # noqa: E712
+            pendiente,
+            ParsedPick.es_combinada == True,  # noqa: E712
         ),
         pendientes_jugados_ventana=await _count(
             *verificable,
