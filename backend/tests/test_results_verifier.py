@@ -253,6 +253,74 @@ class TestTennisRearrangedFixture:
         assert (acierto, anulada) == (True, False)
 
 
+class _StubTennisStatsProvider:
+    """Tenis con tabla de stats (aces, dobles faltas) — simula el
+    provider-investigador (`find_match_stats`)."""
+
+    SUPPORTED_SPORTS = frozenset({"tenis"})
+
+    def __init__(self, stats: MatchStats | None):
+        self._stats = stats
+
+    async def find_match(self, date, team_hint):
+        return None
+
+    async def find_match_stats(self, date, team_hint):
+        return self._stats
+
+
+class TestTennisStatMarkets:
+    """Tenis: mercados de estadística (aces, dobles faltas) se
+    resuelven contra la tabla de stats, no contra el marcador."""
+
+    def _pick(self, seleccion: str) -> ParsedPick:
+        pick = _pick_tenis(seleccion, mercado="over/under")
+        pick.evento = "Valentin Vacherot vs Lloyd Harris"
+        pick.fecha_evento = datetime.now() - timedelta(hours=5)
+        return pick
+
+    async def test_aces_over_total_acierta(self):
+        stats = MatchStats(
+            home_team="Vacherot",
+            away_team="Harris",
+            values={"Aces": (14, 12)},
+        )
+        acierto, anulada = await verify_pick(
+            self._pick("25+ aces en el partido"),
+            [_StubTennisStatsProvider(stats)],
+        )
+        assert (acierto, anulada) == (True, False)  # 26 > 24.5
+
+    async def test_aces_under_total_acierta(self):
+        stats = MatchStats(
+            home_team="Vacherot",
+            away_team="Harris",
+            values={"Aces": (8, 6)},
+        )
+        pick = self._pick("Menos de 25.5 aces")
+        pick.linea = 25.5
+        acierto, anulada = await verify_pick(pick, [_StubTennisStatsProvider(stats)])
+        assert (acierto, anulada) == (True, False)  # 14 < 25.5
+
+    async def test_aces_sin_stats_queda_pendiente(self):
+        acierto, anulada = await verify_pick(
+            self._pick("25+ aces en el partido"),
+            [_StubTennisStatsProvider(None)],
+        )
+        assert (acierto, anulada) == (None, False)
+
+    async def test_dobles_faltas_over(self):
+        stats = MatchStats(
+            home_team="A",
+            away_team="B",
+            values={"Double Faults": (5, 7)},
+        )
+        pick = self._pick("Más de 10.5 dobles faltas")
+        pick.linea = 10.5
+        acierto, anulada = await verify_pick(pick, [_StubTennisStatsProvider(stats)])
+        assert (acierto, anulada) == (True, False)  # 12 > 10.5
+
+
 class TestTennisMarkets:
     """Tenis: sets exactos ("gana 2-0"), over/under y hándicap de juegos
     (con el desglose por sets del proveedor) o de sets."""
