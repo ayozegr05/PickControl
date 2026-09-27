@@ -22,19 +22,19 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 from urllib.parse import quote_plus, urlparse
 
 import httpx
 
+from app.core.dates import utc_now
 from app.core.logging import get_logger
 from app.services.results.base import (
     MatchResult,
     MatchState,
     MatchStats,
     is_rate_limited,
-    mark_rate_limited,
     rate_limit_from,
 )
 
@@ -53,6 +53,10 @@ _ENDPOINT = (
 )
 _TIMEOUT = 90.0
 _MAX_VERIFIED_URLS = 3
+# Cooldown propio tras un 429: el free tier de Gemini limita por ritmo
+# (RPM), no por día — aparcar hasta mañana (comportamiento estándar de
+# `mark_rate_limited`) dejaría al investigador muerto por una ráfaga.
+_429_COOLDOWN = timedelta(minutes=20)
 
 # Dominios de resultados que validan una respuesta (allowlist anti-
 # alucinación): la cita tiene que caer en alguno de estos — un blog
@@ -287,6 +291,13 @@ class GeminiResearchProvider:
     def __init__(self, sport: str, api_key: str) -> None:
         self._sport = sport
         self._api_key = api_key
+        self._cooldown_until: Optional[datetime] = None
+
+    def _in_cooldown(self) -> bool:
+        """429 reciente (ritmo del free tier) o marca global del día."""
+        if self._cooldown_until and self._cooldown_until > utc_now():
+            return True
+        return is_rate_limited(_PROVIDER_NAME)
 
     async def _call_model(
         self, model: str, prompt: str
@@ -328,8 +339,10 @@ class GeminiResearchProvider:
         for model in _MODELS:
             payload, quota_resp = await self._call_model(model, prompt)
             if quota_resp is not None:
-                mark_rate_limited(_PROVIDER_NAME, quota_resp)
-                logger.warning("[GEMINI] Cuota agotada; se omite")
+                self._cooldown_until = utc_now() + _429_COOLDOWN
+                logger.warning(
+                    "[GEMINI] 429 — cooldown %s min", _429_COOLDOWN.seconds // 60
+                )
                 return None
             if payload is not None:
                 return payload
@@ -447,7 +460,7 @@ class GeminiResearchProvider:
         de las URLs fiables leídas. "played"/"unknown" o respuestas sin
         fuentes devuelven None — el pick sigue pendiente.
         """
-        if is_rate_limited(_PROVIDER_NAME):
+        if self._in_cooldown():
             return None
         hint = (team_hint or "").strip()
         if not hint:
@@ -483,7 +496,7 @@ class GeminiResearchProvider:
         recurso de la cascada: solo ve los fixtures que ningún
         proveedor determinista encontró.
         """
-        if is_rate_limited(_PROVIDER_NAME):
+        if self._in_cooldown():
             return None
         hint = (team_hint or "").strip()
         if not hint:
@@ -622,7 +635,7 @@ class GeminiResearchProvider:
         modelo solo la interpreta; cada valor se verifica contra el
         texto real antes de aceptarse.
         """
-        if is_rate_limited(_PROVIDER_NAME):
+        if self._in_cooldown():
             return None
         hint = (team_hint or "").strip()
         if not hint:
