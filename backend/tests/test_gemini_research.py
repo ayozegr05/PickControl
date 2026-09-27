@@ -102,7 +102,8 @@ class TestSearchUrls:
 
         monkeypatch.setattr(provider, "_ask", spy)
         await provider._search_urls(_DATE, "x")
-        assert calls == [True]
+        # Sin resultados prueba la segunda query; todas con tool.
+        assert calls and all(c is True for c in calls)
 
 
 class TestFindPostponedMatch:

@@ -397,24 +397,41 @@ class GeminiResearchProvider:
         degradado), así que la lectura de resultados la hace el
         fetcher de Google vía url_context sobre DDG Lite — la única
         llamada con tool del pipeline; el resto va por fetch propio
-        y texto plano para no quemar su cuota mínima."""
-        query = f"{hint} {self._sport_es()} {date.strftime('%d %B %Y')}"
-        search_url = f"https://lite.duckduckgo.com/lite/?q={quote_plus(query)}"
-        payload = await self._ask(
-            _SEARCH_PROMPT.format(
-                search_url=search_url,
-                sport=self._sport_es(),
-                hint=hint,
-                date=date.strftime("%d de %B de %Y"),
-            ),
-            use_tool=True,
-        )
-        if payload is None:
-            return []
-        data = _extract_json(self._payload_text(payload))
-        if not data:
-            return []
-        urls = [str(u) for u in (data.get("urls") or []) if u]
+        y texto plano para no quemar su cuota mínima.
+
+        El día exacto en la query empobrece los resultados de DDG (las
+        páginas no indexan la fecha como texto), así que se prueba
+        primero solo hint+deporte y luego con mes/año; la fecha queda
+        en el prompt para que el modelo filtre por relevancia."""
+        queries = [
+            f"{hint} {self._sport_es()}",
+            f"{hint} {self._sport_es()} {date.strftime('%B %Y')}",
+        ]
+        urls: list[str] = []
+        seen: set[str] = set()
+        for query in queries:
+            search_url = "https://lite.duckduckgo.com/lite/?q=" + quote_plus(query)
+            payload = await self._ask(
+                _SEARCH_PROMPT.format(
+                    search_url=search_url,
+                    sport=self._sport_es(),
+                    hint=hint,
+                    date=date.strftime("%d de %B de %Y"),
+                ),
+                use_tool=True,
+            )
+            if payload is None:
+                continue
+            data = _extract_json(self._payload_text(payload))
+            if not data:
+                continue
+            for u in data.get("urls") or []:
+                u = str(u)
+                if u and u not in seen:
+                    seen.add(u)
+                    urls.append(u)
+            if urls:
+                break
         return _filter_trusted_urls(urls)[:_MAX_VERIFIED_URLS]
 
     async def _verify_data(
