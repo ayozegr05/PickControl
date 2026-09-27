@@ -365,6 +365,21 @@ class TestFindMatchStats:
         monkeypatch.setattr(provider, "_ask", _stub(_payload(_stats_answer({}))))
         assert await provider.find_match_stats(_DATE, "x") is None
 
+    async def test_layout_valor_antes_del_nombre(self, provider, monkeypatch):
+        # tennis.com: "4 Aces 16" (v1 nombre v2), no "Aces v1 v2".
+        page = "Vacherot Harris Completed Match Statistics 4 Aces 16 2 Double Faults 2"
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub(page))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(_payload(_stats_answer({"Aces": [4, 16], "Double Faults": [2, 2]}))),
+        )
+        stats = await provider.find_match_stats(_DATE, "x")
+        assert stats is not None
+        assert stats.values["Aces"] == (4, 16)
+        assert stats.values["Double Faults"] == (2, 2)
+
     async def test_fetch_fallido_pasa_a_siguiente_url(self, provider, monkeypatch):
         monkeypatch.setattr(
             provider, "_search_urls", _stub_search([_SOFA_URL, _TENNIS_URL])

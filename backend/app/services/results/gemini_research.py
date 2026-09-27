@@ -673,15 +673,24 @@ class GeminiResearchProvider:
     @staticmethod
     def _values_in_text(text: str, canonical: str, v1: int, v2: int) -> bool:
         """Los dos valores aparecen en el texto junto al nombre de la
-        estadística (en ese orden, dentro de una ventana corta)."""
+        estadística, en ese orden, dentro de una ventana corta.
+
+        Hay dos layouts: `nombre v1 v2` (tabla clásica) y
+        `v1 nombre v2` (tennis.com pinta el valor antes de la barra).
+        Se aceptan ambos, siempre preservando el orden v1 -> v2."""
         pattern = next(p for k, p in _STAT_KEYWORDS if k == canonical)
         for m in pattern.finditer(text):
-            window = text[m.start() : m.start() + _STATS_VALIDATION_WINDOW]
-            i1 = re.search(rf"(?<!\d){re.escape(str(v1))}(?!\d)", window)
-            if not i1:
-                continue
-            i2 = re.search(rf"(?<!\d){re.escape(str(v2))}(?!\d)", window[i1.end() :])
-            if i2:
+            after = text[m.start() : m.start() + _STATS_VALIDATION_WINDOW]
+            i1 = re.search(rf"(?<!\d){re.escape(str(v1))}(?!\d)", after)
+            if i1 and re.search(
+                rf"(?<!\d){re.escape(str(v2))}(?!\d)", after[i1.end() :]
+            ):
+                return True
+            before = text[max(0, m.start() - _STATS_VALIDATION_WINDOW) : m.end()]
+            i1 = re.search(rf"(?<!\d){re.escape(str(v1))}(?!\d)", before)
+            if i1 and re.search(
+                rf"(?<!\d){re.escape(str(v2))}(?!\d)", text[m.end() : m.end() + 60]
+            ):
                 return True
         return False
 
