@@ -34,8 +34,12 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     liquida marcadores solo con fuente leída + doble lectura que debe
     coincidir; `find_match_stats` extrae aces/córners/etc. validando
     que cada número aparece literalmente junto al nombre de la
-    estadística en la página. Queries de búsqueda sin día exacto
-    (DDG no indexa fechas). Config: `GOOGLE_API_KEY`. Rescate manual de stats:
+    estadística en la página. Queries de búsqueda sin día exacto ni
+    conectores ("X vs Y" empobrece DDG). Config: `GOOGLE_API_KEY`.
+    Fetch de páginas con fallback a **FlareSolverr** (contenedor
+    `controlpick-flaresolverr`, Chromium anti-Cloudflare, solo red
+    interna, `FLARESOLVERR_URL`) para webs que devuelven 403/challenge
+    (totalcorner, sofascore web...). Rescate manual de stats:
     `scripts/backfill_stats_csv.py` (CSVs football-data.co.uk, dry-run por
     defecto). Mercados de 1ª parte/descanso: `MatchResult.ht_*` +
     `_ht_view()` en el verifier (stats 1H vía `find_match_stats_1h` de
