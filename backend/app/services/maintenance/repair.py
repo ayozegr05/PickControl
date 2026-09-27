@@ -26,6 +26,7 @@ el wrapper manual (dry-run por defecto, `--apply` para escribir).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Optional
@@ -46,6 +47,67 @@ logger = get_logger("app.maintenance.repair")
 # processor._PAIR_WINDOW): al re-extraer un pick cuyo raw es el texto
 # se reutiliza el OCR del slip de al lado si existe, y viceversa.
 _PAIR_WINDOW = timedelta(minutes=10)
+
+# Líneas de publi/afiliación del pie ("[REGÍSTRATE Y GANA 200€](t.ly/x)"):
+# en la re-extracción hacen que el LLM etiquete el pick entero como
+# anuncio. Si la primera pasada rechaza, se reintenta sin ellas.
+_PROMO_LINE = re.compile(
+    r"https?://|www\.|t\.me/|\]\(|reg[ií]strate|gratis|bono|afiliad",
+    re.IGNORECASE,
+)
+
+
+def _strip_promo_lines(text: str) -> str:
+    return "\n".join(
+        ln for ln in text.splitlines() if not _PROMO_LINE.search(ln)
+    ).strip()
+
+
+# Último recurso determinista: el LLM rechazó incluso sin publi, pero el
+# texto tiene una línea de apuesta inequívoca ("GANA DE JONG Y +7,5
+# JUEGOS EN EL 1° SET"). La selección se toma verbatim del mensaje —
+# nada se inventa (cuota/rival ausentes quedan a None).
+_BET_LINE = re.compile(r"\bgana\w*\b", re.IGNORECASE)
+_PROMO_WORD = re.compile(
+    r"€|euros?|reg[ií]str|juega\s+\d|bono|click|aqu[ií]|desde", re.IGNORECASE
+)
+
+
+def _rule_fallback_pick(source: str, pick: ParsedPick) -> Optional[ExtractedPick]:
+    """Reconstruye el pick por reglas cuando el LLM insiste en que el
+    mensaje no es apuesta pero el texto guardado contiene la selección.
+
+    Solo se usa en reparación de filas ya existentes: confianza baja y
+    `metodo` propio para que quede auditable.
+    """
+    from app.services.telegram.pick_extractor import (  # noqa: PLC0415
+        _ensure_combinada_shape,
+        _looks_like_bet,
+    )
+
+    if not _looks_like_bet(source):
+        return None
+    candidates = []
+    for ln in source.splitlines():
+        if not _BET_LINE.search(ln) or _PROMO_WORD.search(ln):
+            continue
+        # Corta desde "gana" en adelante: lo anterior es deco markdown.
+        m = _BET_LINE.search(ln)
+        sel = ln[m.start() :].strip().strip("*_# ")
+        if sel:
+            candidates.append(sel)
+    if not candidates:
+        return None
+    fallback = ExtractedPick(
+        es_apuesta=True,
+        deporte=pick.deporte,
+        seleccion=max(candidates, key=len),
+        stake=pick.stake,
+        linea=pick.linea,
+        metodo="reext-rules",
+        confianza=0.4,
+    )
+    return _ensure_combinada_shape(fallback)
 
 
 @dataclass
@@ -131,10 +193,14 @@ async def _supersede_legs(session, parent: ParsedPick) -> int:
     del reparto de `settle_combinada` y `es_apuesta=False` las saca del
     escaneo de pendientes. La fila se conserva para auditoría."""
     legs = (
-        await session.exec(
-            select(ParsedPick).where(ParsedPick.combinada_id == parent.id)
+        (
+            await session.exec(
+                select(ParsedPick).where(ParsedPick.combinada_id == parent.id)
+            )
         )
-    ).all()
+        .scalars()
+        .all()
+    )
     for leg in legs:
         if leg.es_apuesta or not leg.anulada:
             leg.es_apuesta = False
@@ -195,13 +261,34 @@ async def repair_pick(session, pick: ParsedPick, *, apply: bool) -> RepairReport
         return report
 
     settings = get_settings()
-    try:
-        new = await extract_pick(
-            source,
+
+    async def _extract(src: str) -> Optional[ExtractedPick]:
+        return await extract_pick(
+            src,
             settings.openai_api_key,
             informante=raw.channel_name if raw else None,
             fecha_referencia=raw.received_at if raw else None,
         )
+
+    rules_fallback = False
+    try:
+        new = await _extract(source)
+        if new is not None and not new.es_apuesta:
+            # Rechazo con publi presente: el pie de afiliado puede haber
+            # convencido al LLM de que es un anuncio — reintento limpio.
+            stripped = _strip_promo_lines(source)
+            if stripped != source:
+                retry = await _extract(stripped)
+                if retry is not None and retry.es_apuesta:
+                    new = retry
+            if not new.es_apuesta:
+                # Ni limpio lo reconoce: si el texto tiene una línea de
+                # apuesta inequívoca se reconstruye por reglas (verbatim,
+                # sin inventar cuota ni rival).
+                fallback = _rule_fallback_pick(stripped, pick)
+                if fallback is not None and fallback.es_apuesta:
+                    new = fallback
+                    rules_fallback = True
     except Exception as exc:  # noqa: BLE001
         report.action = "error"
         report.detail = f"extract_pick falló: {exc!r}"
@@ -248,11 +335,13 @@ async def repair_pick(session, pick: ParsedPick, *, apply: bool) -> RepairReport
         report.detail = (
             f"combinada {was_combinada}->{n_patas >= 2}, "
             f"{superseded} patas viejas excluidas, {n_patas} nuevas"
+            + (" [vía reglas: LLM rechazó]" if rules_fallback else "")
         )
     else:
         report.action = "repaired"
         report.detail = (
             f"combinada {was_combinada}->{n_patas >= 2}, {n_patas} patas nuevas"
+            + (" [vía reglas: LLM rechazó]" if rules_fallback else "")
         )
     return report
 
