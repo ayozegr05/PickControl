@@ -934,6 +934,7 @@ Recibirás texto de canales de Telegram de tipsters. Devuelve ÚNICAMENTE un JSO
 
 Reglas:
 - Si no es una apuesta, devuelve es_apuesta = false y el resto null.
+- Una transcripción OCR de captura de boleto (bet365 "Crear apuesta"/"Bet Builder", líneas sueltas sin prosa) ES una apuesta detallada: cada selección viene como par de líneas — titular de la selección ("Stefanos Sakellaridis - Ganará el encuentro") y debajo el nombre del mercado ("Ganará el encuentro") —, seguida de los dos participantes sueltos y la fecha. El boleto publicado por el tipster ES la recomendación; extráelo como apuesta (combinada si hay varias selecciones).
 - NO son apuestas (es_apuesta = false) aunque mencionen selecciones o cuotas:
   * Mensajes que celebran aciertos pasados ("acertamos", "ganado", "✅ apuesta acertada", "llevamos X aciertos", "ya lo conseguimos", "ver como ganáis dinero"): son marketing del tipster, no picks abiertos.
   * Anuncios o promociones de casas de apuestas: bonos de bienvenida, supercuotas ("Suvidón", "supercuota", "multiplica tus ganancias"), "solo nuevos usuarios", "T&C", "créditos de apuesta", "regístrate".
@@ -979,6 +980,34 @@ def _fixture_from_slip_ocr(ocr_text: str | None) -> str | None:
     return score_line or v_line
 
 
+# Líneas de "chrome" del boleto (Imp:/Ganancias/Cerrar apuesta/Compartir,
+# importes sueltos) que no aportan a la extracción y confunden al LLM:
+# las lee como boleto liquidado o como teaser sin selecciones. Solo se
+# quitan del texto que va al LLM — los detectores de liquidado corren
+# antes sobre el texto completo.
+_SLIP_CHROME_LINE = re.compile(
+    r"(?i)^\s*(?:"
+    r"sello:\s*ganador\b.*"
+    r"|imp(?:orte)?:?\s*[\d.,]*\s*[€$]?"
+    r"|ganancias\s*:?\s*[\d.,]*\s*[€$]?"
+    r"|cerrar apuesta\b.*"
+    r"|compartir\b.*"
+    r"|reutilizar selecciones\b.*"
+    r"|a[ñn]adir selecci[oó]n\b.*"
+    r"|[sS]/\s*[\d.,]+"
+    r"|[\d.,]+\s*€"
+    r")\s*$"
+)
+
+
+def _strip_slip_chrome(text: str) -> str:
+    """Quita el chrome UI del boleto antes de mandar el texto al LLM."""
+    cleaned = "\n".join(
+        ln for ln in text.splitlines() if not _SLIP_CHROME_LINE.match(ln)
+    )
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
 async def _llm_extract(
     text: str,
     api_key: str,
@@ -986,6 +1015,7 @@ async def _llm_extract(
     fecha_referencia: Optional[datetime] = None,
 ) -> Optional[ExtractedPick]:
     client = AsyncOpenAI(api_key=api_key)
+    text = _strip_slip_chrome(text)
     fecha_str = (
         fecha_referencia.strftime("%Y-%m-%d %H:%M")
         if fecha_referencia
