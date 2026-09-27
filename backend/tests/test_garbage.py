@@ -187,6 +187,32 @@ class TestSlipLiquidadoYTeaser:
         actions = garbage._analyze_raw(raw, [_pick()])
         assert [a.reason for a in actions] == ["teaser_sin_patas"]
 
+    def test_varios_boletos_en_una_captura_es_multi_slip(self):
+        # Pantallazo "mis apuestas" de un suscriptor: varios boletos
+        # con su cabecera CREAR APUESTA + cuota — historial, no pick.
+        raw = _raw(
+            datetime(2026, 8, 31, 13, 35),
+            extracted_text=(
+                "400,00€ Crear apuesta\nCREAR APUESTA 1.22\n"
+                "Celta de Vigo\nAthletic Club\nCREAR APUESTA 1.12\n"
+                "Lazio\nGenoa\nCREAR APUESTA 1.05\nMónaco\n"
+            ),
+        )
+        actions = garbage._analyze_raw(raw, [_pick()])
+        assert [a.reason for a in actions] == ["multi_slip"]
+
+    def test_un_solo_slip_no_es_multi(self):
+        # Slip normal: botón "Crear apuesta" sin cuota + UNA cabecera.
+        raw = _raw(
+            datetime(2026, 9, 13, 13, 35),
+            extracted_text=(
+                "1.000,00€ Crear apuesta\nCREAR APUESTA 1.50\n"
+                "Sakellaridis - Ganará el encuentro\n"
+                "1° set - Más de 7.5 juegos\nCerrar apuesta"
+            ),
+        )
+        assert garbage._analyze_raw(raw, [_pick()]) == []
+
     def test_teaser_con_slip_adjunto_no_flag(self):
         # Foto + texto "crear apuesta": el OCR del slip lista las patas
         # con vocabulario de mercado ("Menos de...") — no es teaser.
@@ -352,12 +378,14 @@ class TestDryRunYApply:
             for a in report.actions
         )
 
-    async def test_picks_ya_resueltos_no_se_tocan(self, db):
+    async def test_pick_resuelto_limpio_no_se_toca(self, db):
+        # Pick resuelto de un slip normal (fecha impresa el mismo día,
+        # antes del partido): la auditoría no propone nada.
         async with db() as session:
-            raw = _raw(datetime(2026, 9, 19, 10, 21), extracted_text=_SLIP_OCR)
+            raw = _raw(datetime(2026, 9, 16, 10, 21), extracted_text=_SLIP_OCR)
             session.add(raw)
             await session.flush()
-            pick = _pick(fecha_evento=datetime(2026, 9, 19, 10, 21))
+            pick = _pick(fecha_evento=datetime(2026, 9, 16, 10, 21))
             pick.raw_message_id = raw.id
             pick.acierto = False  # ya liquidado
             pick.verificado_por = "auto"
@@ -365,3 +393,27 @@ class TestDryRunYApply:
             await session.commit()
         report = await garbage.analyze_garbage()
         assert report.actions == []
+
+    async def test_pick_resuelto_de_slip_liquidado_se_descarta(self, db):
+        """Auditoría post-liquidación: un pick que ya contó como
+        acierto pero viene de un slip ganado republicado también sale
+        de stats con `es_apuesta=False`."""
+        async with db() as session:
+            raw = _raw(
+                datetime(2026, 9, 21, 18, 15),
+                extracted_text=TestSlipLiquidadoYTeaser._WON_SLIP_CHECKS,
+            )
+            session.add(raw)
+            await session.flush()
+            pick = _pick(fecha_evento=datetime(2026, 9, 21, 18, 15))
+            pick.raw_message_id = raw.id
+            pick.acierto = True  # coló como acierto
+            pick.verificado_por = "auto"
+            session.add(pick)
+            await session.commit()
+            pick_id = pick.id
+        report = await garbage.analyze_garbage()
+        assert any(
+            a.pick_id == pick_id and a.reason == "slip_liquidado"
+            for a in report.actions
+        )

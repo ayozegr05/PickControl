@@ -1,6 +1,12 @@
 """Limpieza de picks basura y slips republicados (dry-run por defecto).
 
-Tres detectores sobre los picks abiertos (`es_apuesta=True`, pendientes):
+Barre TODOS los picks vivos (`es_apuesta=True`): pendientes y ya
+resueltos — un slip liquidado republicado que coló como pick y contó
+como acierto contamina las stats igual que uno pendiente, así que la
+auditoría cubre ambos (los resueltos son la "auditoría post-
+liquidación": `es_apuesta=False` los saca de stats, reversible).
+
+Detectores por mensaje:
 
 - **Slip republicado**: la casa imprime la fecha del partido en el
   boleto ("16 de septiembre de 2026, 19:00"). Si esa fecha cae en un
@@ -149,6 +155,12 @@ def _slip_analysis(raw: TelegramRawMessage) -> tuple[Optional[datetime], str]:
 # cuota pero SIN slip ni patas detalladas ("DOBLE CREAR APUESTA 2X1
 # CUOTA 81 A - B + CUOTA 71 C - D"). La apuesta real nunca se publica —
 # solo fabrica picks irresolubles.
+# Pantallazo "mis apuestas" (historial de un suscriptor republicado):
+# cada boleto lleva su cabecera en mayúsculas con cuota, así que >=2
+# significa varios slips en una captura — nunca un pick abierto. El
+# botón "Crear apuesta" suelto no lleva la cuota pegada y no cuenta.
+_MULTI_SLIP_RE = re.compile(r"CREAR APUESTA\s+[\d.,]+")
+
 _TEASER_CTA_RE = re.compile(r"crear?\s+apuesta", re.IGNORECASE)
 # Si el texto trae vocabulario de mercado no es un teaser vacío.
 _TEASER_MARKET_RE = re.compile(
@@ -174,6 +186,19 @@ def _analyze_raw(
                 action="flag",
                 reason="slip_liquidado",
                 detail=f"sello/premio cobrado (msg {raw.message_id})",
+            )
+            for pick in picks
+        ]
+
+    # Historial multi-boleto: capturas de "mis apuestas" que un
+    # suscriptor manda agradeciendo un verde — no son picks del canal.
+    if len(_MULTI_SLIP_RE.findall(raw.extracted_text or "")) >= 2:
+        return [
+            GarbageAction(
+                pick_id=pick.id,
+                action="flag",
+                reason="multi_slip",
+                detail=f"varios boletos en una captura (msg {raw.message_id})",
             )
             for pick in picks
         ]
@@ -282,7 +307,12 @@ def _analyze_pick_fields(pick: ParsedPick) -> Optional[GarbageAction]:
 
 
 async def analyze_garbage() -> GarbageReport:
-    """Recorre los picks abiertos y propone acciones — SOLO LEE."""
+    """Recorre los picks vivos y propone acciones — SOLO LEE.
+
+    Pendientes y resueltos: la auditoría post-liquidación vuelve a
+    pasar los detectores sobre picks ya liquidados porque un "verde"
+    republicado que contó como acierto contamina las stats igual que
+    uno pendiente — ambos se descartan con `es_apuesta=False`."""
     report = GarbageReport()
     async with AsyncSessionLocal() as session:
         picks = list(
@@ -290,7 +320,6 @@ async def analyze_garbage() -> GarbageReport:
                 await session.exec(
                     select(ParsedPick)
                     .where(ParsedPick.es_apuesta == True)  # noqa: E712
-                    .where(ParsedPick.acierto.is_(None))
                     .where(ParsedPick.anulada == False)  # noqa: E712
                 )
             )
