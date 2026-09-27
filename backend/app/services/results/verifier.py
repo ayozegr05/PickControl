@@ -65,6 +65,7 @@ from app.services.results.espn import (
 )
 from app.services.results.footapi_stats import FootApiStatsProvider
 from app.services.results.football_data import FootballDataProvider
+from app.services.results.gemini_research import GeminiResearchProvider
 from app.services.results.rapidapi_tennis import RapidApiTennisProvider
 from app.services.results.scores365 import Scores365Provider
 from app.services.results.sofascore_basketball import SofascoreBasketballProvider
@@ -1553,6 +1554,14 @@ async def _get_providers() -> list[ResultsProvider]:
     if getattr(settings, "sofascore_direct_enabled", True):
         for sport in ("futbol", "tenis", "baloncesto"):
             providers.append(SofaScoreNativeResultsProvider(direct_transport(), sport))
+    # Investigador de último recurso (Gemini + url_context): SOLO
+    # detecta fixtures cancelados/aplazados/walkover con cita de
+    # fuente fiable — `find_match` devuelve None, así que su posición
+    # en la cascada de resultados es inofensiva y solo trabaja en el
+    # camino de aplazados/anuladas cuando todo lo determinista falló.
+    if settings.google_api_key:
+        for sport in ("futbol", "tenis", "baloncesto"):
+            providers.append(GeminiResearchProvider(sport, settings.google_api_key))
     return providers
 
 

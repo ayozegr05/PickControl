@@ -117,6 +117,11 @@ class Settings(BaseSettings):
     # poner false apaga esa vía por completo sin tocar código — útil
     # si algún día aparecen bloqueos 403 en los logs.
     sofascore_direct_enabled: bool = True
+    # Gemini API (proyecto propio en GCP): investigador de último
+    # recurso vía url_context (DDG -> webs de resultados). Detecta
+    # fixtures cancelados/aplazados/walkover citando fuentes fiables
+    # cuando la cascada entera falla. Sin key no se registra.
+    google_api_key: str | None = None
     # Notificaciones push vía Expo Push API (gratis, sin Firebase para
     # el caso básico). `push_notifications_enabled` apaga el envío sin
     # tocar código (dev/tests); `expo_access_token` solo hace falta para
