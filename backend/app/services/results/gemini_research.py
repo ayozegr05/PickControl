@@ -143,6 +143,10 @@ _ALLOWED_DOMAINS = (
     # FotMob sirve directo (sin Cloudflare) y embebe __NEXT_DATA__ con
     # marcador, estado y eventos — cubre ligas que ningún provider toca.
     "fotmob.com",
+    # HTML estático con tabla de stats (Corners/Shots/Possession) de
+    # reservas y ligas menores — la única fuente estática hallada con
+    # córners de la Danish Reserve League.
+    "football24hours.com",
 )
 
 # Estados "no jugado" que el modelo puede devolver -> normalizado.
