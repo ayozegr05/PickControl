@@ -65,6 +65,7 @@ from app.services.results.espn import (
     _translate_countries,
 )
 from app.services.results.footapi_stats import FootApiStatsProvider
+from app.services.results.football24h import Football24hProvider
 from app.services.results.football_data import FootballDataProvider
 from app.services.results.gemini_research import GeminiResearchProvider
 from app.services.results.rapidapi_tennis import RapidApiTennisProvider
@@ -262,11 +263,13 @@ _DOUBLE_CHANCE_PATTERN = re.compile(
     r"doble\s+oportunidad|double\s*chance|doble\s+resultado", re.IGNORECASE
 )
 _BTTS_YES_PATTERN = re.compile(
-    r"ambos\s+(?:equipos?\s+)?(?:marcan|anotan)|both\s+teams\s+to\s+score|\bbtts\b",
+    r"ambos\s+(?:equipos?\s+)?(?:marcan|marcar[áa]n|anotan|anotar[áa]n|anotar[aá])|"
+    r"both\s+teams\s+to\s+score|\bbtts\b",
     re.IGNORECASE,
 )
 _BTTS_NO_PATTERN = re.compile(
-    r"no\s+(?:anotan|marcan)\s+ambos|ambos\s+equipos?\s+no\s+(?:marcan|anotan)|"
+    r"no\s+(?:anotan|anotar[áa]n|marcan|marcar[áa]n)\s+ambos|"
+    r"ambos\s+equipos?\s+no\s+(?:marcan|marcar[áa]n|anotan|anotar[áa]n)|"
     r"al\s+menos\s+un\s+equipo\s+no\s+(?:marca|anota)",
     re.IGNORECASE,
 )
@@ -1486,6 +1489,10 @@ async def _get_providers() -> list[ResultsProvider]:
     # Va justo tras ESPN: cubre ligas menores que ESPN no lista y
     # descarga a los providers de cuota que van después.
     providers.append(Scores365Provider("futbol"))
+    # football24hours.com: listados estáticos de liga/día sin key ni
+    # cuota — cubre la cola larga (reservas DK, AFC Cup, ligas menores)
+    # que ningún provider de API toca. Free: va antes que los de cuota.
+    providers.append(Football24hProvider())
     if settings.football_data_api_key:
         providers.append(FootballDataProvider(settings.football_data_api_key))
     if settings.api_football_key:
@@ -2124,8 +2131,25 @@ async def verify_pick(
             and not (sport == "baloncesto" and _BASKET_POINTS_WORD.search(ou_text))
         ):
             # Línea alta sin la palabra "gol" (o "puntos" en basket): en
-            # fútbol casi seguro son córners, no goles. Mejor pendiente
-            # que mal verificado.
+            # fútbol casi seguro son córners, no goles. Antes quedaba
+            # pendiente por precaución; ahora, si algún proveedor trae
+            # las stats del partido, se resuelve contra "Corner Kicks" —
+            # el dato decide, no una suposición. Sin stats sigue
+            # pendiente (nunca se resuelve contra el marcador).
+            if sport == "futbol":
+                stats = await _find_stats_across_providers(
+                    pick.fecha_evento, team_hint, providers_for_sport, pick.id
+                )
+                if stats:
+                    result = _resolve_stat_over_under(
+                        stats,
+                        ("Corner Kicks",),
+                        team_total_team,
+                        direction,
+                        pick.linea,
+                    )
+                    if result != (None, False):
+                        return result
             return None, False
         match = await _find_match_across_providers(
             pick.fecha_evento, team_hint, providers_for_sport, pick.id

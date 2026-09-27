@@ -23,7 +23,15 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     (NBA/WNBA/NBL/FIBA; sin ACB ni Euroliga). Después: fútbol
     (football-data.org → API-Football → footapi7/Sofascore vía
     RapidAPI, sin ventana de fechas), tenis (TheSportsDB →
-    RapidAPI ATP-WTA-ITF → tennisapi1). Al final de la cascada,
+    RapidAPI ATP-WTA-ITF → tennisapi1). Tras 365scores va
+    `football24h.py`: HTML estático sin key — escanea listados de
+    liga/día (`/{pais}/{liga}/`, `/yesterday-matches`...), casa
+    fixtures por slug `DD-MM-YYYY-equipo-vs-equipo` y lee marcador +
+    tabla de stats (Corners→"Corner Kicks"...) de la página del
+    partido. Cubre la cola larga (reservas DK, AFC Cup, ligas
+    menores); `_LEAGUE_PAGES` se extiende al aparecer ligas nuevas y
+    `_CLUB_ALIASES` mapea renombrados (Lion City=Home United,
+    BG Pathum=Bangkok Glass). Al final de la cascada,
     `gemini_research.py` (Gemini, free tier): salto 1 = `url_context`
     lee DDG Lite (los buscadores bloquean la IP de la VM) y filtra URLs
     por allowlist de dominios de resultados; los saltos 2/3 descargan
