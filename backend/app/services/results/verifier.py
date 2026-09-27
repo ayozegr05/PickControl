@@ -1106,6 +1106,8 @@ async def _verify_tennis_pick(
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
             return None, True
+        if await _rearranged_fixture_void(pick, match, team_hint, providers):
+            return None, True
         if not match.sets:
             return None, False
         player_side = _tennis_side(match, team)
@@ -1139,6 +1141,8 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
+            return None, True
+        if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         scores = _tennis_scores(match, team)
         if scores is None:
@@ -1181,6 +1185,8 @@ async def _verify_tennis_pick(
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
             return None, True
+        if await _rearranged_fixture_void(pick, match, team_hint, providers):
+            return None, True
         winner_side = _tennis_set_winner_index(match, set_idx)
         if winner_side is None or not player:
             return None, False  # set no jugado o sin desglose
@@ -1201,6 +1207,8 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
+            return None, True
+        if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         had_tiebreak = _tennis_had_tiebreak(match)
         if had_tiebreak is None:
@@ -1223,6 +1231,8 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
+            return None, True
+        if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         if not player:
             return None, False
@@ -1278,6 +1288,8 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
+            return None, True
+        if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         # Over/under sobre un set concreto ("más de 9.5 juegos en el
         # 1er set"): se compara solo ese set, no el total del partido.
@@ -1335,6 +1347,8 @@ async def _verify_tennis_pick(
     if not match:
         return None, False
     if match.status in _TENNIS_VOID_STATUSES:
+        return None, True
+    if await _rearranged_fixture_void(pick, match, player, providers):
         return None, True
     if set_idx is not None:
         # Hándicap de juegos dentro de un set ("-1.5 juegos 1er set").
@@ -1745,6 +1759,51 @@ async def _find_postponed_across_providers(
     return None
 
 
+async def _rearranged_fixture_void(
+    pick: ParsedPick,
+    match: MatchResult,
+    hint: Optional[str],
+    providers: list[ResultsProvider],
+) -> bool:
+    """El fixture apostado se canceló y el cuadro se rehízo -> anulada.
+
+    Si el feed trae un Cancelled/Postponed de la misma pista (misma
+    pareja/jugador, mismo día) cuyos participantes NO son los del
+    partido encontrado, el cruce apostado no se disputó: el partido
+    jugado corresponde a otro rival (caso Szczecin dobles, #1715).
+    Solo tenis: una pareja con un cancelado y un jugado el mismo día
+    es reordenación — una doble jornada real tendría ambos Ended.
+    """
+    if not hint:
+        return False
+    state = await _find_postponed_across_providers(
+        pick.fecha_evento, hint, providers, pick.id
+    )
+    if state is None:
+        return False
+    thr = _MIN_TEAM_SIMILARITY
+    same_fixture = (
+        _pair_similar(state.home_team, match.home_team) >= thr
+        and _pair_similar(state.away_team, match.away_team) >= thr
+    ) or (
+        _pair_similar(state.home_team, match.away_team) >= thr
+        and _pair_similar(state.away_team, match.home_team) >= thr
+    )
+    if same_fixture:
+        return False
+    logger.info(
+        "[RESULTS_VERIFIER] Pick id=%s anulado por fixture reordenado: "
+        "apostado %s vs %s (%s), jugado %s vs %s.",
+        pick.id,
+        state.home_team,
+        state.away_team,
+        state.status,
+        match.home_team,
+        match.away_team,
+    )
+    return True
+
+
 async def verify_pick(
     pick: ParsedPick, providers: list[ResultsProvider]
 ) -> tuple[Optional[bool], bool]:
@@ -2077,6 +2136,10 @@ async def verify_pick(
         return None, False
     if match.status in _TENNIS_VOID_STATUSES:
         # Retirada/walkover (tenis): la casa suele devolver la apuesta.
+        return None, True
+    if sport == "tenis" and await _rearranged_fixture_void(
+        pick, match, predicted_team, providers_for_sport
+    ):
         return None, True
 
     if is_first_half:
