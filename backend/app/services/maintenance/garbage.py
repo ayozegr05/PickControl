@@ -161,6 +161,29 @@ def _slip_analysis(raw: TelegramRawMessage) -> tuple[Optional[datetime], str]:
 # botón "Crear apuesta" suelto no lleva la cuota pegada y no cuenta.
 _MULTI_SLIP_RE = re.compile(r"CREAR APUESTA\s+[\d.,]+")
 
+# Promo de casa de apuestas con link de afiliado: "CUOTA 5.00 que
+# debería ser 1.12", supercuotas y cuotas mejoradas — la cuota es un
+# gancho ficticio de marketing, no el pick del tipster a precio justo.
+_PROMO_BOOST_RE = re.compile(
+    r"cuota\s+[\d.,]+\s+que\s+deber[ií]a\s+ser|super\s*cuota|"
+    r"cuota\s+(?:mejorada|especial)\b",
+    re.IGNORECASE,
+)
+# Dominio de afiliado confirmado.
+_AFFILIATE_DOMAIN_RE = re.compile(r"bdeal\.io", re.IGNORECASE)
+# Patrones de marketing de afiliación genéricos: solo delatan promo
+# si el mensaje habla de cuota (evita falsos positivos en links
+# compartidos sin contexto de apuesta).
+_PROMO_HINT_RE = re.compile(
+    r"link\s+de\s+afiliado|c[oó]digo\s+promo|" r"utm_(?:source|campaign|medium)",
+    re.IGNORECASE,
+)
+_CUOTA_WORD_RE = re.compile(r"cuota", re.IGNORECASE)
+# Los canales pegan el link de afiliado en el footer de CADA pick
+# ("Apuesta con responsabilidad...") — el discriminador entre pick
+# real y post promocional es que el pick declara STAKE.
+_STAKE_WORD_RE = re.compile(r"stake", re.IGNORECASE)
+
 _TEASER_CTA_RE = re.compile(r"crear?\s+apuesta", re.IGNORECASE)
 # Si el texto trae vocabulario de mercado no es un teaser vacío.
 _TEASER_MARKET_RE = re.compile(
@@ -199,6 +222,26 @@ def _analyze_raw(
                 action="flag",
                 reason="multi_slip",
                 detail=f"varios boletos en una captura (msg {raw.message_id})",
+            )
+            for pick in picks
+        ]
+
+    # Post de supercuota/afiliado: cuota inflada de promo (gancho de
+    # la casa) marca siempre; el link de afiliado solo delata promo
+    # cuando NO hay stake declarado — si lo hay, el link es el footer
+    # habitual del canal y el contenido es un pick real.
+    affiliate_link = _AFFILIATE_DOMAIN_RE.search(full_text) or (
+        _PROMO_HINT_RE.search(full_text) and _CUOTA_WORD_RE.search(full_text)
+    )
+    if _PROMO_BOOST_RE.search(full_text) or (
+        affiliate_link and not _STAKE_WORD_RE.search(full_text)
+    ):
+        return [
+            GarbageAction(
+                pick_id=pick.id,
+                action="flag",
+                reason="promo_afiliado",
+                detail=f"supercuota/link de afiliado (msg {raw.message_id})",
             )
             for pick in picks
         ]

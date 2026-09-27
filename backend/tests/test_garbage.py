@@ -213,6 +213,54 @@ class TestSlipLiquidadoYTeaser:
         )
         assert garbage._analyze_raw(raw, [_pick()]) == []
 
+    def test_supercuota_es_promo(self):
+        # "CUOTA 5.00 que debería ser 1.12" + link de afiliado: promo
+        # de la casa, no pick a precio real (raw 13 / pick 129 real).
+        raw = _raw(
+            datetime(2026, 9, 12, 7, 51),
+            text="REAL MADRID - RAYO VALLECANO\n"
+            "CUOTA 5.00 que debería ser 1.12... EL REAL MADRID GANA\n"
+            "https://bdeal.io/marcaapuestas/76406/1",
+        )
+        actions = garbage._analyze_raw(raw, [_pick()])
+        assert [a.reason for a in actions] == ["promo_afiliado"]
+
+    def test_link_normal_no_es_promo(self):
+        # Un link cualquiera (con utm incluso) sin contexto de cuota
+        # no es promo: no queremos falsos positivos en picks que
+        # compartan enlaces.
+        raw = _raw(
+            datetime(2026, 9, 12, 7, 51),
+            text="Madrid gana, análisis aquí: https://x.com/pick?utm_source=tg",
+        )
+        assert all(
+            a.reason != "promo_afiliado" for a in garbage._analyze_raw(raw, [_pick()])
+        )
+
+    def test_utm_con_cuota_es_promo(self):
+        raw = _raw(
+            datetime(2026, 9, 12, 7, 51),
+            text="CUOTA 2.50 APROVECHA https://bet.es/p?utm_campaign=go",
+        )
+        actions = garbage._analyze_raw(raw, [_pick()])
+        assert [a.reason for a in actions] == ["promo_afiliado"]
+
+    def test_link_afiliado_en_footer_con_stake_no_es_promo(self):
+        # Los canales pegan "REGÍSTRATE...DESDE AQUÍ (bdeal.io)" al pie
+        # de CADA pick. Con STAKE declarado el link es footer, no promo
+        # (caso real: msgs 78737/13328 — picks legítimos flaggeados).
+        raw = _raw(
+            datetime(2026, 9, 12, 8, 10),
+            text="🔘 STAKE 3 ⚽ PREMIER LEAGUE\n"
+            "🍀 ASTON VILLA RESULTADO SIN EMPATE\n"
+            "🔞 Apuesta con responsabilidad "
+            "[REGÍSTRATE, JUEGA 30€ Y GANA 200€ DESDE AQUÍ]"
+            "(https://bdeal.io/10128/ALLSPORTS)",
+        )
+        assert all(
+            a.reason != "promo_afiliado" for a in garbage._analyze_raw(raw, [_pick()])
+        )
+
     def test_teaser_con_slip_adjunto_no_flag(self):
         # Foto + texto "crear apuesta": el OCR del slip lista las patas
         # con vocabulario de mercado ("Menos de...") — no es teaser.
