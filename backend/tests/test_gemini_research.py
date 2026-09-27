@@ -531,3 +531,33 @@ class TestFindFixture:
         assert (
             await provider.find_fixture(_DATE, "Brunold", "Challenger Biella") is None
         )
+
+
+class TestTickerCornerSummary:
+    """Conteo determinista de córners de tickers tipo Opta (El País)."""
+
+    def test_cuenta_eventos_por_equipo(self):
+        from app.services.results.gemini_research import _ticker_corner_summary
+
+        text = (
+            "87 Corner,Real Madrid Femenino. Corner cometido por Jade. "
+            "82 Corner,Paris Saint-Germain Féminines. otro evento. "
+            "77 Corner,Real Madrid Femenino."
+        )
+        summary = _ticker_corner_summary(text)
+        assert "Real Madrid Femenino 2" in summary
+        assert "Paris Saint-Germain Féminines 1" in summary
+        # Las dos ordenaciones: valida sea cual sea el orden del modelo.
+        assert "Paris Saint-Germain Féminines 1 Real Madrid Femenino 2" in summary
+
+    def test_sin_ticker_devuelve_vacio(self):
+        from app.services.results.gemini_research import _ticker_corner_summary
+
+        assert _ticker_corner_summary("resumen del partido sin ticker") == ""
+
+    def test_un_solo_equipo_no_genera_resumen(self):
+        from app.services.results.gemini_research import _ticker_corner_summary
+
+        # Con un solo equipo no hay par home/away que validar.
+        text = "10 Corner,Solo FC. 20 Corner,Solo FC."
+        assert _ticker_corner_summary(text) == ""

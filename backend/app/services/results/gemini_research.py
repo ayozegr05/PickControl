@@ -95,6 +95,10 @@ _ALLOWED_DOMAINS = (
     "as.com",
     "sport.es",
     "mundodeportivo.com",
+    # El País: ticker de eventos estático tipo Opta (córners, tarjetas,
+    # faltas contables) para ligas grandes — el total lo computa
+    # `_ticker_corner_summary`, no el modelo.
+    "elpais.com",
     # Agregadores de resultados de segunda línea: menos fiables que los
     # de arriba pero válidos cuando la doble lectura coincide. Los de
     # nicho (stats de córners, fútbol femenino, Challenger) son los que
@@ -212,6 +216,32 @@ _STAT_KEYWORDS: tuple[tuple[str, re.Pattern], ...] = (
         re.compile(r"offsides?|fuera\s*de\s*juego|fueras?\s*de\s*juego", re.I),
     ),
 )
+
+# Tickers estilo Opta (El País): no publican "Total córners: N" — cada
+# saque es un evento suelto "87 Corner, Real Madrid Femenino.". El
+# conteo se hace aquí de forma DETERMINISTA y se añade como resumen al
+# texto: la validación literal ve los números y el modelo no cuenta.
+_TICKER_CORNER = re.compile(r"corner\s*,\s*([^.]{3,60}?)\.", re.IGNORECASE)
+
+
+def _ticker_corner_summary(text: str) -> str:
+    """Cuenta los eventos "Corner,<equipo>." del ticker y devuelve un
+    resumen citable, o "" si la página no trae ese formato.
+
+    Se emiten las dos ordenaciones (local-visitante / visitante-local)
+    porque la ventana de `_values_in_text` exige los valores en el orden
+    reportado por el modelo, que no sabemos de antemano.
+    """
+    counts: dict[str, int] = {}
+    for m in _TICKER_CORNER.finditer(text):
+        team = m.group(1).strip()
+        if team:
+            counts[team] = counts.get(team, 0) + 1
+    if len(counts) < 2:
+        return ""
+    (t1, c1), (t2, c2) = sorted(counts.items(), key=lambda kv: -kv[1])[:2]
+    return f" Corner Kicks {t1} {c1} {t2} {c2}." f" Corner Kicks {t2} {c2} {t1} {c1}."
+
 
 _FETCH_HEADERS = {
     "User-Agent": (
@@ -718,7 +748,8 @@ class GeminiResearchProvider:
         text = re.sub(r"&amp;", "&", text)
         text = re.sub(r"&#\d+;|&\w+;", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
-        return text[:_MAX_PAGE_CHARS] or None
+        summary = _ticker_corner_summary(text)
+        return (text[:_MAX_PAGE_CHARS] + summary).strip() or None
 
     def _stats_from_text(self, text: str, data: dict[str, Any]) -> Optional[MatchStats]:
         """Stats normalizadas y VERIFICADAS contra el texto de la página.
