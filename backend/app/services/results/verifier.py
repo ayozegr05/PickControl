@@ -1254,19 +1254,20 @@ async def _verify_tennis_pick(
                 linea = float(mm.group(1).replace(",", ".")) - 0.5
                 direction = direction or "over"
                 break
-    if linea is None:
-        # Notación bet365 "+7,5 juegos": el mercado es over N (la línea
-        # es N, no N-0.5). Solo si el mercado declara un total — un
-        # "+1,5" de hándicap no debe leerse como over.
-        m_low = (pick.mercado or "").lower()
-        if (
-            any(w in m_low for w in ("over", "under", "total", "juegos"))
-            and "dicap" not in m_low
-        ):
-            m = re.search(r"\+(\d+(?:[.,]\d+)?)", seleccion)
-            if m:
-                linea = float(m.group(1).replace(",", "."))
-                direction = direction or "over"
+    # Notación bet365 "+7,5 juegos": el mercado es over N. Aplica tanto
+    # si falta la línea (la línea es N, no N-0.5) como si falta la
+    # dirección ("over/under juegos" no dice lado). Solo cuando el
+    # mercado declara un total — un "+1,5" de hándicap no es over.
+    m_low = (pick.mercado or "").lower()
+    if (
+        any(w in m_low for w in ("over", "under", "total", "juegos"))
+        and "dicap" not in m_low
+    ):
+        plus_first = re.search(r"\+(\d+(?:[.,]\d+)?)", seleccion)
+        if plus_first:
+            if linea is None:
+                linea = float(plus_first.group(1).replace(",", "."))
+            direction = direction or "over"
     if linea is None:
         return None
 
