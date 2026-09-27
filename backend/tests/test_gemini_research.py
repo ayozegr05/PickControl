@@ -60,32 +60,44 @@ def _stub_search(urls: list[str]):
     return fake
 
 
+def _stub_page(text: str = "contenido de la página"):
+    async def fake(url):
+        return text
+
+    return fake
+
+
 @pytest.fixture
 def provider():
     return GeminiResearchProvider("tenis", "k")
 
 
 class TestSearchUrls:
+    """Salto 1: DDG Lite parseado por nosotros, filtro allowlist."""
+
     async def test_urls_no_fiables_se_filtran(self, provider, monkeypatch):
-        text = json.dumps(
-            {
-                "urls": [
-                    _TENNIS_URL,
-                    "https://blog-random.io/pick",
-                    "javascript:alert(1)",
-                ]
-            }
+        from urllib.parse import quote
+
+        html = (
+            f'<a href="//duckduckgo.com/l/?uddg={quote(_TENNIS_URL)}">r</a>'
+            '<a href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fblog-random.io%2Fpick">r</a>'
+            '<a href="javascript:void(0)">x</a>'
         )
-        monkeypatch.setattr(provider, "_ask", _stub(_payload(text)))
+        monkeypatch.setattr(provider, "_fetch_html", _stub(html))
         urls = await provider._search_urls(_DATE, "Kestelboim/Romboli")
         assert urls == [_TENNIS_URL]
 
-    async def test_error_api_devuelve_vacio(self, provider, monkeypatch):
-        monkeypatch.setattr(provider, "_ask", _stub(None))
+    async def test_error_fetch_devuelve_vacio(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_fetch_html", _stub(None))
         assert await provider._search_urls(_DATE, "x") == []
 
 
 class TestFindPostponedMatch:
+    @pytest.fixture(autouse=True)
+    def _pages(self, provider, monkeypatch):
+        # La verificación descarga las páginas: texto cualquiera vale.
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub_page())
+
     async def test_cancelado_con_fuente_fiable(self, provider, monkeypatch):
         monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
         monkeypatch.setattr(
@@ -197,6 +209,10 @@ def _played_answer(home: int, away: int, sets=None) -> str:
 
 
 class TestFindMatch:
+    @pytest.fixture(autouse=True)
+    def _pages(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub_page())
+
     async def test_played_con_doble_lectura_liquida(self, provider, monkeypatch):
         monkeypatch.setattr(provider, "_search_urls", _stub_search([_SOFA_URL]))
         payload = _payload(_played_answer(2, 1, sets=[[6, 4], [3, 6], [7, 5]]))
