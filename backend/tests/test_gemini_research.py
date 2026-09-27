@@ -73,19 +73,22 @@ def provider():
 
 
 class TestSearchUrls:
-    """Salto 1: DDG Lite parseado por nosotros, filtro allowlist."""
+    """Salto 1: Bing parseado por nosotros, filtro allowlist."""
 
     async def test_urls_no_fiables_se_filtran(self, provider, monkeypatch):
-        from urllib.parse import quote
+        import base64
 
+        sofa_b64 = base64.urlsafe_b64encode(_SOFA_URL.encode()).decode().rstrip("=")
         html = (
-            f'<a href="//duckduckgo.com/l/?uddg={quote(_TENNIS_URL)}">r</a>'
-            '<a href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fblog-random.io%2Fpick">r</a>'
-            '<a href="javascript:void(0)">x</a>'
+            f'<a href="{_TENNIS_URL}">r</a>'
+            f'<a href="https://www.bing.com/ck/a?u=a1{sofa_b64}">r</a>'
+            '<a href="https://blog-random.io/pick">r</a>'
+            '<a href="https://www.bing.com/search?q=x">self</a>'
+            "javascript:void(0)"
         )
         monkeypatch.setattr(provider, "_fetch_html", _stub(html))
         urls = await provider._search_urls(_DATE, "Kestelboim/Romboli")
-        assert urls == [_TENNIS_URL]
+        assert urls == [_TENNIS_URL, _SOFA_URL]
 
     async def test_error_fetch_devuelve_vacio(self, provider, monkeypatch):
         monkeypatch.setattr(provider, "_fetch_html", _stub(None))
