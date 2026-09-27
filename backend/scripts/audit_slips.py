@@ -71,7 +71,7 @@ def _reasons(raw: TelegramRawMessage, new_ocr: str | None) -> list[str]:
     return found
 
 
-async def main(limit: int | None, only_raws: list[int] | None) -> None:
+async def main(limit: int | None, only_raws: list[int] | None, save_ocr: bool) -> None:
     settings = get_settings()
     if not settings.openai_api_key:
         print("Sin OPENAI_API_KEY — no se puede hacer OCR.")
@@ -93,39 +93,56 @@ async def main(limit: int | None, only_raws: list[int] | None) -> None:
             stmt = stmt.where(TelegramRawMessage.id.in_(only_raws))  # type: ignore[union-attr]
         raws = list((await session.exec(stmt)).scalars().all())
 
-    raws.sort(key=lambda r: r.id)
-    if limit:
-        raws = raws[:limit]
-    print(f"PICKS VIVOS: {len(picks)} | FOTOS A RE-OCR: {len(raws)}")
-    print()
+        raws.sort(key=lambda r: r.id)
+        if limit:
+            raws = raws[:limit]
+        print(f"PICKS VIVOS: {len(picks)} | FOTOS A RE-OCR: {len(raws)}")
+        print()
 
-    suspects = 0
-    skipped = 0
-    for i, raw in enumerate(raws, 1):
-        path = raw.media_path or ""
-        if not os.path.exists(path):
-            skipped += 1
-            continue
-        new_ocr = await extract_text_from_image(path, settings.openai_api_key)
-        reasons = _reasons(raw, new_ocr)
-        if reasons:
-            suspects += 1
-            rps = by_raw.get(raw.id, [])
-            est = {"P": 0, "W": 0, "L": 0}
-            for p in rps:
-                est["P" if p.acierto is None else ("W" if p.acierto else "L")] += 1
-            ev = (rps[0].evento or "?")[:45] if rps else "?"
-            print(
-                f"[{i}/{len(raws)}] SOSPECHOSO raw={raw.id} "
-                f"{','.join(reasons)} picks={len(rps)} "
-                f"(P{est['P']}/W{est['W']}/L{est['L']}) | {ev}"
-            )
-        elif i % 10 == 0:
-            print(f"[{i}/{len(raws)}] limpio...")
-        await asyncio.sleep(_DELAY)
+        suspects = 0
+        skipped = 0
+        saved = 0
+        for i, raw in enumerate(raws, 1):
+            # La ruta guardada puede llevar separador Windows (\) si la
+            # ingesta corrió en local — el contenedor usa '/'.
+            path = (raw.media_path or "").replace("\\", "/")
+            if not os.path.exists(path):
+                skipped += 1
+                continue
+            new_ocr = await extract_text_from_image(path, settings.openai_api_key)
+            if save_ocr and new_ocr and new_ocr != raw.extracted_text:
+                # Transcripción mejor de la MISMA imagen: el prompt
+                # actual sí transcribe ticks/marcadores — dejarla en el
+                # raw permite que analyze_garbage detecte el slip por
+                # el conducto normal.
+                raw.extracted_text = new_ocr
+                session.add(raw)
+                saved += 1
+            reasons = _reasons(raw, new_ocr)
+            if reasons:
+                suspects += 1
+                rps = by_raw.get(raw.id, [])
+                est = {"P": 0, "W": 0, "L": 0}
+                for p in rps:
+                    est["P" if p.acierto is None else ("W" if p.acierto else "L")] += 1
+                ev = (rps[0].evento or "?")[:45] if rps else "?"
+                print(
+                    f"[{i}/{len(raws)}] SOSPECHOSO raw={raw.id} "
+                    f"{','.join(reasons)} picks={len(rps)} "
+                    f"(P{est['P']}/W{est['W']}/L{est['L']}) | {ev}"
+                )
+            elif i % 10 == 0:
+                print(f"[{i}/{len(raws)}] limpio...")
+            await asyncio.sleep(_DELAY)
+
+        if save_ocr:
+            await session.commit()
 
     print()
-    print(f"FIN: {suspects} raws sospechosos, {skipped} sin fichero")
+    print(
+        f"FIN: {suspects} raws sospechosos, {skipped} sin fichero"
+        + (f", {saved} OCR guardados" if save_ocr else "")
+    )
 
 
 if __name__ == "__main__":
@@ -137,6 +154,11 @@ if __name__ == "__main__":
         default=None,
         help="ids de raw separados por coma (p. ej. 372,1833)",
     )
+    parser.add_argument(
+        "--save-ocr",
+        action="store_true",
+        help="persiste el OCR nuevo en extracted_text del raw",
+    )
     args = parser.parse_args()
     only = [int(x) for x in args.raws.split(",")] if args.raws else None
-    asyncio.run(main(args.limit, only))
+    asyncio.run(main(args.limit, only, args.save_ocr))
