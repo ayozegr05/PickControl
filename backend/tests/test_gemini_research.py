@@ -487,3 +487,47 @@ class TestFlareSolverrFallback:
     async def test_sin_url_devuelve_none(self, provider, monkeypatch):
         monkeypatch.setattr(get_settings(), "flaresolverr_url", None)
         assert await provider._fetch_via_flaresolverr("https://x.com") is None
+
+
+class TestFindFixture:
+    """Reconstrucción del cruce cuando el pick solo guardó el torneo."""
+
+    async def test_fixture_con_jugador_valido(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub_page("cronica"))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(_payload(json.dumps({"fixture": "Brunold vs Kopriva"}))),
+        )
+        fixture = await provider.find_fixture(_DATE, "Brunold", "Challenger Biella")
+        assert fixture == "Brunold vs Kopriva"
+
+    async def test_fixture_sin_apellido_descartado(self, provider, monkeypatch):
+        # Anti-alucinación: el cruce debe contener al jugador buscado.
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub_page("cronica"))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(_payload(json.dumps({"fixture": "Nadal vs Federer"}))),
+        )
+        assert (
+            await provider.find_fixture(_DATE, "Brunold", "Challenger Biella") is None
+        )
+
+    async def test_fixture_null_devuelve_none(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub_page("cronica"))
+        monkeypatch.setattr(
+            provider, "_ask", _stub(_payload(json.dumps({"fixture": None})))
+        )
+        assert (
+            await provider.find_fixture(_DATE, "Brunold", "Challenger Biella") is None
+        )
+
+    async def test_sin_urls_devuelve_none(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([]))
+        assert (
+            await provider.find_fixture(_DATE, "Brunold", "Challenger Biella") is None
+        )
