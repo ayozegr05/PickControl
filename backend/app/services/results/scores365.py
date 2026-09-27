@@ -196,19 +196,23 @@ class Scores365Provider:
         self._day_cache: dict[date_type, list] = {}
 
     async def _get_json(self, client: httpx.AsyncClient, url: str) -> Optional[dict]:
-        try:
-            response = await client.get(url, timeout=15)
-            count_provider_call(_PROVIDER_NAME)
-            response.raise_for_status()
-            data = response.json()
-            return data if isinstance(data, dict) else None
-        except httpx.HTTPError as exc:
-            if rate_limit_from(exc):
-                mark_rate_limited(_PROVIDER_NAME, exc.response)
-                logger.warning("[365SCORES] Rate-limit; se omite hasta mañana")
-            else:
-                logger.warning("[365SCORES] Error de API: %s", exc)
-            return None
+        # Las páginas pesan ~100-200 KB; con varios picks en paralelo el
+        # endpoint responde lento — timeout holgado + un reintento.
+        response: Optional[httpx.Response] = None
+        for _ in range(2):
+            try:
+                response = await client.get(url, timeout=30)
+                count_provider_call(_PROVIDER_NAME)
+                response.raise_for_status()
+                data = response.json()
+                return data if isinstance(data, dict) else None
+            except httpx.HTTPError as exc:
+                if rate_limit_from(exc):
+                    mark_rate_limited(_PROVIDER_NAME, exc.response)
+                    logger.warning("[365SCORES] Rate-limit; se omite hasta mañana")
+                    return None
+                logger.warning("[365SCORES] Error de API: %r", exc)
+        return None
 
     def _cached_day(self, day: date_type) -> Optional[list]:
         """Partidos del día desde la caché persistente, si cerró."""
