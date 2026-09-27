@@ -62,6 +62,7 @@ from app.services.results.espn import (
     EspnBasketballProvider,
     EspnProvider,
     EspnTennisProvider,
+    _translate_countries,
 )
 from app.services.results.footapi_stats import FootApiStatsProvider
 from app.services.results.football_data import FootballDataProvider
@@ -521,8 +522,9 @@ def _stat_total(
 
     if team is None:
         return side_total(0) + side_total(1)
-    home_similarity = _similar(team, stats.home_team)
-    away_similarity = _similar(team, stats.away_team)
+    candidates = {team, _translate_countries(team)}
+    home_similarity = max(_similar(t, stats.home_team) for t in candidates)
+    away_similarity = max(_similar(t, stats.away_team) for t in candidates)
     if max(home_similarity, away_similarity) < _MIN_TEAM_SIMILARITY:
         return None
     return side_total(0) if home_similarity >= away_similarity else side_total(1)
@@ -558,9 +560,16 @@ def _resolve_stat_over_under(
 
 
 def _match_team_scores(match: MatchResult, team: str) -> tuple[int, int] | None:
-    """Goles (equipo, rival) si `team` se parece a alguno de los dos."""
-    home_similarity = _similar(team, match.home_team)
-    away_similarity = _similar(team, match.away_team)
+    """Goles (equipo, rival) si `team` se parece a alguno de los dos.
+
+    La selección llega en español pero los nombres del resultado pueden
+    venir en inglés (selecciones ESPN): se cruza también la traducción
+    y gana la mejor similitud, igual que `EspnProvider._score_hint`.
+    """
+    translated = _translate_countries(team)
+    candidates = {team, translated}
+    home_similarity = max(_similar(t, match.home_team) for t in candidates)
+    away_similarity = max(_similar(t, match.away_team) for t in candidates)
     if max(home_similarity, away_similarity) < _MIN_TEAM_SIMILARITY:
         return None
     if home_similarity >= away_similarity:

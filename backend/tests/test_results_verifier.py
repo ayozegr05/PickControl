@@ -35,9 +35,12 @@ from app.services.results.verifier import (
     _detect_player_market,
     _extract_handicap_team,
     _extract_predicted_team,
+    _match_team_scores,
     _providers_for_sport,
     _resolve_asian_handicap,
+    _resolve_double_chance,
     _resolve_over_under,
+    _resolve_team_over_under,
     _resolve_winner,
     _should_attempt_verification,
     _tennis_lookup_hint,
@@ -2928,3 +2931,47 @@ class TestPataFueraDeVentana:
         assert parent.acierto is True
         # el pick simple viejo, sin padre pendiente, ni se intentó
         assert simple_viejo.acierto is None
+
+
+class TestMatchTeamScoresTraduccion:
+    """Selección en español contra resultado con nombres ESPN en inglés
+    (selecciones nacionales): el cruce prueba también la traducción."""
+
+    def test_doble_oportunidad_seleccion_espanola(self):
+        match = MatchResult(
+            home_team="England",
+            away_team="Spain",
+            home_score=3,
+            away_score=0,
+        )
+        assert _resolve_double_chance(match, "Inglaterra o Empate") == (True, False)
+
+    def test_doble_oportunidad_seleccion_espanola_visitante(self):
+        match = MatchResult(
+            home_team="Norway",
+            away_team="Portugal",
+            home_score=1,
+            away_score=2,
+        )
+        assert _resolve_double_chance(match, "Portugal o Empate") == (True, False)
+
+    def test_match_team_scores_traducido(self):
+        match = MatchResult(
+            home_team="Germany",
+            away_team="Greece",
+            home_score=2,
+            away_score=1,
+        )
+        assert _match_team_scores(match, "Alemania") == (2, 1)
+
+    def test_over_under_por_equipo_en_espanol(self):
+        match = MatchResult(
+            home_team="France",
+            away_team="Belgium",
+            home_score=2,
+            away_score=0,
+        )
+        assert _resolve_team_over_under(match, "Francia", "over", 1.5) == (
+            True,
+            False,
+        )
