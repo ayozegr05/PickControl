@@ -431,14 +431,20 @@ class GeminiResearchProvider:
         El día exacto en la query empobrece los resultados de DDG (las
         páginas no indexan la fecha como texto), así que se prueba
         primero solo hint+deporte y luego con mes/año; la fecha queda
-        en el prompt para que el modelo filtre por relevancia."""
+        en el prompt para que el modelo filtre por relevancia.
+
+        Los conectores ("X vs Y", "X - Y") también degradan a DDG:
+        "Glostrup v Ballerup" no devuelve nada y "Glostrup Ballerup"
+        sí. La query usa el hint sin conectores; el original queda en
+        el prompt como contexto del partido."""
+        q_hint = re.sub(r"\s+(?:vs\.?|v)\s+|\s+[-—–]\s+", " ", hint).strip()
         queries = [
-            f"{hint} {self._sport_es()}",
-            f"{hint} {self._sport_es()} {date.strftime('%B %Y')}",
+            f"{q_hint} {self._sport_es()}",
+            f"{q_hint} {self._sport_es()} {date.strftime('%B %Y')}",
             # Con "stats" en la query DDG saca los agregadores de nicho
             # (totalcorner, footystats...) que con el nombre solo no
             # aparecen — clave para mercados de estadística.
-            f"{hint} {self._sport_es()} stats",
+            f"{q_hint} {self._sport_es()} stats",
         ]
         urls: list[str] = []
         seen: set[str] = set()
