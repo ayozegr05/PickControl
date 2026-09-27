@@ -327,9 +327,11 @@ class TestTennisMarkets:
 
     async def test_over_juegos_set_notacion_mas(self):
         # bet365 "+7,5 juegos en el 1° set" = over 7.5 del set 1:
-        # set1 7-6 = 13 juegos -> acierto.
+        # set1 7-6 = 13 juegos -> acierto. La línea viene ya en el pick;
+        # lo que falta es la dirección ("over/under" no dice lado).
         provider = _StubTennisProvider(2, 0, sets=[(7, 6), (6, 4)])
         pick = _pick_tenis("+7,5 juegos en el 1° set", "over/under juegos")
+        pick.linea = 7.5
         acierto, _ = await verify_pick(pick, [provider])
         assert acierto is True
 
@@ -337,8 +339,25 @@ class TestTennisMarkets:
         # set1 6-1 = 7 juegos < 7.5 -> fallo.
         provider = _StubTennisProvider(2, 0, sets=[(6, 1), (6, 4)])
         pick = _pick_tenis("+7,5 juegos en el 1° set", "over/under juegos")
+        pick.linea = 7.5
         acierto, _ = await verify_pick(pick, [provider])
         assert acierto is False
+
+    async def test_mas_juegos_sin_linea_extraida(self):
+        # Sin `pick.linea` la notación "+9,5" también da la línea: over 9.5.
+        provider = _StubTennisProvider(2, 0, sets=[(7, 6), (6, 4)])
+        pick = _pick_tenis("+9,5 juegos en el 1° set", "over/under juegos")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_mas_handicap_no_es_over(self):
+        # "Alcaraz +3,5 juegos" con mercado hándicap: el "+" es el lado
+        # del hándicap, no un over — no debe resolver como total.
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])
+        pick = _pick_tenis("Alcaraz +3,5 juegos", "hándicap juegos")
+        pick.linea = 3.5
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True  # 12 juegos - 8 = +4 > +3.5
 
     async def test_ganara_el_encuentro_primer_lado(self):
         # Slip bet365: la selección es el nombre del mercado y el lado
