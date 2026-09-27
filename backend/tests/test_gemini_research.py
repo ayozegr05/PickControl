@@ -73,26 +73,36 @@ def provider():
 
 
 class TestSearchUrls:
-    """Salto 1: Bing parseado por nosotros, filtro allowlist."""
+    """Salto 1: el modelo lee DDG vía url_context, filtro allowlist."""
 
     async def test_urls_no_fiables_se_filtran(self, provider, monkeypatch):
-        import base64
-
-        sofa_b64 = base64.urlsafe_b64encode(_SOFA_URL.encode()).decode().rstrip("=")
-        html = (
-            f'<a href="{_TENNIS_URL}">r</a>'
-            f'<a href="https://www.bing.com/ck/a?u=a1{sofa_b64}">r</a>'
-            '<a href="https://blog-random.io/pick">r</a>'
-            '<a href="https://www.bing.com/search?q=x">self</a>'
-            "javascript:void(0)"
+        text = json.dumps(
+            {
+                "urls": [
+                    _TENNIS_URL,
+                    "https://blog-random.io/pick",
+                    "javascript:alert(1)",
+                ]
+            }
         )
-        monkeypatch.setattr(provider, "_fetch_html", _stub(html))
+        monkeypatch.setattr(provider, "_ask", _stub(_payload(text)))
         urls = await provider._search_urls(_DATE, "Kestelboim/Romboli")
-        assert urls == [_TENNIS_URL, _SOFA_URL]
+        assert urls == [_TENNIS_URL]
 
-    async def test_error_fetch_devuelve_vacio(self, provider, monkeypatch):
-        monkeypatch.setattr(provider, "_fetch_html", _stub(None))
+    async def test_error_api_devuelve_vacio(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_ask", _stub(None))
         assert await provider._search_urls(_DATE, "x") == []
+
+    async def test_busqueda_usa_url_context(self, provider, monkeypatch):
+        calls = []
+
+        async def spy(prompt, use_tool=False):
+            calls.append(use_tool)
+            return None
+
+        monkeypatch.setattr(provider, "_ask", spy)
+        await provider._search_urls(_DATE, "x")
+        assert calls == [True]
 
 
 class TestFindPostponedMatch:
