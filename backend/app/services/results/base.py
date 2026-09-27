@@ -432,6 +432,42 @@ def mark_rate_limited(
     )
 
 
+def mark_rate_limited_escalating(
+    provider_name: str, base_hours: int = 24, max_hours: int = 168
+) -> None:
+    """Bloqueo con backoff progresivo para baneos de reputación.
+
+    A diferencia de `mark_rate_limited` (fin de cuota: se aparca el
+    día), un baneo de Cloudflare por IP empeora si se insiste a diario
+    — el toque periódico renueva la señal de bot ante el edge. Cada
+    bloqueo consecutivo multiplica x3 el descanso (24h -> 72h -> 7d
+    máx.); la racha vive en `rl_streak` y la resetea
+    `clear_rate_limit_streak` tras la primera respuesta buena.
+    """
+    state = _load_state()
+    streaks = state.setdefault("rl_streak", {})
+    streak = int(streaks.get(provider_name, "0")) + 1
+    streaks[provider_name] = str(streak)
+    hours = min(base_hours * 3 ** (streak - 1), max_hours)
+    until = utc_now() + timedelta(hours=hours)
+    state["rate_limited"][provider_name] = until.isoformat()
+    _save_state()
+    logger.info(
+        "[QUOTA] %s: baneo #%d — descanso de %dh hasta %s UTC",
+        provider_name,
+        streak,
+        hours,
+        until.strftime("%Y-%m-%d %H:%M"),
+    )
+
+
+def clear_rate_limit_streak(provider_name: str) -> None:
+    """Resetea la racha de backoff tras una respuesta buena."""
+    state = _load_state()
+    if state.get("rl_streak", {}).pop(provider_name, None) is not None:
+        _save_state()
+
+
 def _notify_rate_limited(provider_name: str) -> None:
     """Programa el push "cuota agotada" si hay un loop async corriendo.
 
