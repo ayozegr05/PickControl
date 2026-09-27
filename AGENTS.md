@@ -23,7 +23,12 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     (NBA/WNBA/NBL/FIBA; sin ACB ni Euroliga). Después: fútbol
     (football-data.org → API-Football → footapi7/Sofascore vía
     RapidAPI, sin ventana de fechas), tenis (TheSportsDB →
-    RapidAPI ATP-WTA-ITF → tennisapi1). Rescate manual de stats:
+    RapidAPI ATP-WTA-ITF → tennisapi1). Al final de la cascada,
+    `gemini_research.py` (Gemini + `url_context`, free tier): salto 1
+    lee DDG Lite y filtra URLs por allowlist de dominios de resultados,
+    salto 2 lee solo esas páginas — SOLO devuelve estados no jugados
+    (cancelled/postponed/walkover) con cita obligatoria; `find_match`
+    siempre None. Config: `GOOGLE_API_KEY`. Rescate manual de stats:
     `scripts/backfill_stats_csv.py` (CSVs football-data.co.uk, dry-run por
     defecto). Mercados de 1ª parte/descanso: `MatchResult.ht_*` +
     `_ht_view()` en el verifier (stats 1H vía `find_match_stats_1h` de
