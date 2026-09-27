@@ -47,10 +47,45 @@ def _arg(name: str) -> list[int]:
 
 def _player_of(pick: ParsedPick) -> str | None:
     m = _PLAYER_PATTERN.search(pick.seleccion or "")
-    return m.group(1) if m else None
+    if not m:
+        return None
+    # "GANA DE JONG Y +7,5...": la conjunción final no es parte del nombre.
+    return re.sub(r"\s+[YE]$", "", m.group(1).strip())
+
+
+# Evento corrupto tipo "Jue - sep": el extractor guardó el fragmento de
+# fecha como si fuera el cruce. No vale ni como pista de torneo.
+_DATE_FRAGMENT = re.compile(
+    r"^(?:lun|mar|mi[ée]|jue|vie|s[áa]b|dom|"
+    r"ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic|"
+    r"\d{1,2}|\d{4})[\s\-/:]*(?:\w*)$",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_cross(evento: str | None) -> bool:
+    """El evento guardado parece un cruce real ("A vs B"), no un torneo
+    ni un fragmento de fecha."""
+    if not evento:
+        return False
+    if _DATE_FRAGMENT.match(evento.strip()):
+        return False
+    return bool(re.search(r"\bvs\b| - ", evento, re.IGNORECASE))
+
+
+def _torneo_of(raw_text: str) -> str | None:
+    """Línea de competición del mensaje ("CHALL SAINT TROPEZ DOBLES") —
+    pista para find_fixture cuando el evento guardado es basura."""
+    m = re.search(
+        r"(?im)^[^\n]*\b(?:chall(?:enger)?|atp|wta|itf|copa|open)\b[^\n]*$",
+        raw_text,
+    )
+    return m.group(0).strip().strip("*_# 🏆🎾") if m else None
 
 
 async def fix_fixtures(pick_ids: list[int], apply: bool) -> None:
+    from app.models.telegram_raw_message import TelegramRawMessage
+
     settings = get_settings()
     provider = GeminiResearchProvider("tenis", settings.google_api_key)
     async with AsyncSessionLocal() as session:
@@ -59,18 +94,29 @@ async def fix_fixtures(pick_ids: list[int], apply: bool) -> None:
             if pick is None:
                 print(f"#{pid}: no existe")
                 continue
-            if re.search(r"\bvs\b| - ", pick.evento or "", re.IGNORECASE):
+            if _looks_like_cross(pick.evento):
                 print(f"#{pid}: evento ya tiene cruce ({pick.evento!r})")
                 continue
             player = _player_of(pick)
             if not player:
                 print(f"#{pid}: sin jugador en selección {pick.seleccion!r}")
                 continue
-            fixture = await provider.find_fixture(
-                pick.fecha_evento, player, pick.evento
-            )
+            # Pista de torneo: el evento guardado si parece competición;
+            # si es basura ("Jue - sep"), la línea del torneo del raw.
+            torneo = pick.evento
+            if (
+                torneo is None
+                or _looks_like_cross(torneo)
+                or _DATE_FRAGMENT.match(torneo.strip())
+            ):
+                torneo = None
+            if torneo is None and pick.raw_message_id:
+                raw = await session.get(TelegramRawMessage, pick.raw_message_id)
+                if raw:
+                    torneo = _torneo_of(raw.text or raw.extracted_text or "")
+            fixture = await provider.find_fixture(pick.fecha_evento, player, torneo)
             if not fixture:
-                print(f"#{pid}: Gemini no encontró fixture ({player} @ {pick.evento})")
+                print(f"#{pid}: Gemini no encontró fixture ({player} @ {torneo})")
                 continue
             print(f"#{pid}: {pick.evento!r} -> {fixture!r}")
             if apply:
@@ -84,7 +130,7 @@ async def fix_fixtures(pick_ids: list[int], apply: bool) -> None:
                     )
                 ).all()
                 for leg in legs:
-                    if not re.search(r"\bvs\b| - ", leg.evento or "", re.IGNORECASE):
+                    if not _looks_like_cross(leg.evento):
                         leg.evento = fixture
                         session.add(leg)
         if apply:

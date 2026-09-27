@@ -251,7 +251,7 @@ def _classify_leg_market(leg: str) -> Optional[str]:
     córners o al fallback de props de jugador).
     """
     low = leg.lower()
-    if re.search(r"h[aá]ndicap|handicap", low):
+    if re.search(r"h[aá]ndicap|handicap|goles?\s+de\s+ventaja", low):
         return "hándicap asiático"
     if re.search(r"doble\s+oportunidad|double\s*chance|\b1x\b|\bx2\b", low):
         return "doble oportunidad"
@@ -267,6 +267,9 @@ def _classify_leg_market(leg: str) -> Optional[str]:
         r"resultado\s+exacto|marcador\s+(?:exacto|correcto)|correct\s+score", low
     ):
         return "resultado exacto"
+    if re.search(r"\+?\d+(?:[.,]\d+)?\s*(?:juegos?|games?)\b", low):
+        # "+7.5 juegos en el 1 set": el "+N" ya implica "más de N".
+        return "over/under juegos"
     if re.search(r"\bover\b|\bunder\b|m[aá]s\s+de|menos\s+de|\d+\s*o\s+m[aá]s", low):
         return "over/under"
     if re.search(r"marca|asiste|tarjeta|goleador|scorer", low):
@@ -490,7 +493,7 @@ def _is_noise_pata(pata: ExtractedPick) -> bool:
 # solo corta si lo de detrás trae mercado/línea — "gana la 1ª parte y el
 # partido" (HT/FT) es un solo mercado y no debe partirse.
 _COMPOUND_WIN_AND = re.compile(
-    r"^(?P<win>.{2,80}?\bgana\w*\b[^+]*?)\s+y\s+(?P<rest>.+)$",
+    r"^(?P<win>.{0,80}?\bgana\w*\b[^+]*?)\s+y\s+(?P<rest>.+)$",
     re.IGNORECASE,
 )
 
@@ -539,6 +542,13 @@ def _ensure_combinada_shape(
     if not pick.es_apuesta:
         pick.patas = []
         return pick
+    if pick.seleccion and pick.cuota is not None:
+        # "Inglaterra o Empate 1.66": el LLM a veces pega la cuota al
+        # final de la selección; si coincide con `cuota` se quita (ya
+        # vive en su campo).
+        match = re.search(r"\s+(\d+[.,]\d+)$", pick.seleccion.strip())
+        if match and abs(float(match.group(1).replace(",", ".")) - pick.cuota) < 1e-9:
+            pick.seleccion = pick.seleccion.strip()[: match.start()].strip()
     if not pick.patas:
         pick.patas = _patas_from_joined(pick)
     if not pick.patas:
@@ -1317,6 +1327,10 @@ async def extract_pick(
         rule_result.fecha_evento = _sanitize_event_date(
             rule_result.fecha_evento, fecha_referencia
         )
+        # El path de reglas también puede traer una selección compuesta
+        # ("Sakkari gana y +7.5 juegos en el 1 set"): mismo shape que el
+        # LLM — si son dos selecciones se convierte en combinada.
+        rule_result = _ensure_combinada_shape(rule_result, fecha_referencia)
         return _normalize_pick(rule_result, text)
 
     llm_result = await _llm_extract(
