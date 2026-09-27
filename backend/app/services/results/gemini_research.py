@@ -84,6 +84,15 @@ _ALLOWED_DOMAINS = (
     "as.com",
     "sport.es",
     "mundodeportivo.com",
+    # Agregadores de resultados de segunda línea: menos fiables que los
+    # de arriba pero válidos cuando la doble lectura coincide.
+    "aiscore.com",
+    "tennisexplorer.com",
+    "tennis24.com",
+    "soccer24.com",
+    "basketball24.com",
+    "scores24.live",
+    "scorebar.com",
 )
 
 # Estados "no jugado" que el modelo puede devolver -> normalizado.
