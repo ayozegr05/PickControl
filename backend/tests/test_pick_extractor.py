@@ -1008,3 +1008,36 @@ class TestDobleOportunidad1X:
 
         assert _classify_leg_market("Inglaterra 1X") == "doble oportunidad"
         assert _classify_leg_market("X2 España") == "doble oportunidad"
+
+
+class TestCompoundSelection:
+    """ "X gana y +7,5 juegos" son DOS selecciones del mismo boleto."""
+
+    def test_gana_y_linea_se_parte(self):
+        from app.services.telegram.pick_extractor import _ensure_combinada_shape
+
+        pick = ExtractedPick(
+            es_apuesta=True,
+            deporte="tenis",
+            evento="Sakkari vs Fruhvirtova",
+            mercado="ganador",
+            seleccion="María Sakkari gana y +7.5 juegos en el 1 set",
+        )
+        result = _ensure_combinada_shape(pick)
+        assert len(result.patas) == 2
+        assert result.patas[0].seleccion == "María Sakkari gana"
+        assert result.patas[0].mercado == "ganador"
+        assert result.patas[1].linea == 7.5
+        assert result.mercado == "combinada"
+
+    def test_gana_1a_parte_y_el_partido_no_se_parte(self):
+        # HT/FT es un solo mercado: la "y" no encierra otra selección.
+        from app.services.telegram.pick_extractor import _ensure_combinada_shape
+
+        pick = ExtractedPick(
+            es_apuesta=True,
+            deporte="fútbol",
+            seleccion="Real Madrid gana la 1ª parte y el partido",
+        )
+        result = _ensure_combinada_shape(pick)
+        assert result.patas == []

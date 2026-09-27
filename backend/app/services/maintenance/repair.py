@@ -103,20 +103,24 @@ async def _source_text(
     parts = [t.strip() for t in (raw.text or "", raw.extracted_text or "") if t]
     if not raw.extracted_text:
         pair = (
-            await session.exec(
-                select(TelegramRawMessage)
-                .where(TelegramRawMessage.channel_id == raw.channel_id)
-                .where(TelegramRawMessage.id != raw.id)
-                .where(TelegramRawMessage.extracted_text.is_not(None))
-                .where(
-                    TelegramRawMessage.received_at.between(
-                        raw.received_at - _PAIR_WINDOW,
-                        raw.received_at + _PAIR_WINDOW,
+            (
+                await session.exec(
+                    select(TelegramRawMessage)
+                    .where(TelegramRawMessage.channel_id == raw.channel_id)
+                    .where(TelegramRawMessage.id != raw.id)
+                    .where(TelegramRawMessage.extracted_text.is_not(None))
+                    .where(
+                        TelegramRawMessage.received_at.between(
+                            raw.received_at - _PAIR_WINDOW,
+                            raw.received_at + _PAIR_WINDOW,
+                        )
                     )
+                    .order_by(TelegramRawMessage.received_at)
                 )
-                .order_by(TelegramRawMessage.received_at)
             )
-        ).first()
+            .scalars()
+            .first()
+        )
         if pair and pair.extracted_text:
             parts.append(pair.extracted_text.strip())
     return "\n\n".join(p for p in parts if p), raw
@@ -144,12 +148,19 @@ def _apply_fields(pick: ParsedPick, new: ExtractedPick) -> None:
     casa/explicacion/fecha solo se pisan cuando trae valor (no se borra
     un dato válido porque el segundo parseo no lo repita)."""
     pick.es_apuesta = new.es_apuesta
-    pick.seleccion = new.seleccion
-    pick.apuesta = new.seleccion or pick.apuesta
-    pick.evento = new.evento
-    pick.deporte = new.deporte
-    pick.mercado = new.mercado
-    pick.linea = new.linea
+    if new.seleccion:
+        pick.seleccion = new.seleccion
+        pick.apuesta = new.seleccion
+    # Solo se pisa con dato nuevo: que la re-extracción no encuentre el
+    # cruce/mercado/deporte no borra el que ya había.
+    if new.evento:
+        pick.evento = new.evento
+    if new.deporte:
+        pick.deporte = new.deporte
+    if new.mercado:
+        pick.mercado = new.mercado
+    if new.linea is not None:
+        pick.linea = new.linea
     if new.cuota is not None:
         pick.cuota = new.cuota
     if new.stake is not None:
