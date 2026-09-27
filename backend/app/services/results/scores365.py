@@ -2,24 +2,30 @@
 
 `webws.365scores.com` es el backend JSON que consume su propia web:
 responde con `httpx` plano, sin API key ni Cloudflare — verificado en
-vivo (2026-09-23). Patrón por FECHA, no por jugador: una sola llamada
-devuelve todos los partidos del día de un deporte (~80 tenis, ~70
-fútbol, ~100 basket), así que verificar N picks del mismo día cuesta
-1 llamada en lugar de ~3 por jugador como en los mirrors Sofascore.
+vivo (2026-09-23). El endpoint por fecha dejó de honrar
+`startDate`/`endDate` (~2026-09-26): siempre devuelve solo los últimos
+~2 días. El histórico se recorre por la paginación por cursor que el
+propio feed expone (`paging.previousPage` -> `aftergame=<id>
+&direction=-1`, ~1 día por página). Las páginas son historia
+inmutable: cada día visto se persiste en `provider_cache.json` por DÍA
+real del partido, así que una búsqueda que retrocede N días pavimenta
+la caché de todos los días intermedios y las siguientes verificaciones
+de esos días no gastan llamadas.
 
-    /web/games/results/?sports={id}&startDate=D&endDate=D  -> jugados
-    /web/games/current/?sports={id}&startDate=D&endDate=D  -> incluye
-        Scheduled / live / Cancelled (para `find_postponed_match`)
+El feed paginado trae TODOS los estados del día: `Ended`/`Final`/
+`Just Ended`/`After Penalties` (marcador reglamentario — correcto para
+1X2), `WalkOver` -> anulada por convención del verificador,
+`Cancelled`/`Postponed` -> `find_postponed_match`, y programados/en
+vivo (no resuelven pero impiden marcar el día como miss).
 
 Cobertura verificada: ATP/WTA + Challenger + ITF + dobles (Buenos
-Aires, Tolentino, Porto...), ligas de fútbol menores y basket.
+Aires, Tolentino, Porto, Szczecin...), ligas de fútbol menores y
+basket.
 
 Formato de partido: `homeCompetitor`/`awayCompetitor` con `name`
 ("Arias B./Huertas Del Pino Cordova A." en dobles) y `score` (sets en
 tenis, goles en fútbol, puntos en basket); `stages[]` trae el desglose
-set a set solo en tenis. Estados: `Ended`/`Final`/`Just Ended`/
-`After Penalties` (marcador reglamentario — correcto para 1X2) y
-`WalkOver` -> anulada por convención del verificador.
+set a set solo en tenis.
 
 Sin cuota documentada: se usa con el mismo semáforo por proveedor que
 el resto y marca 403/429 igual — si algún día ponen límite, el
@@ -31,7 +37,8 @@ Una instancia por deporte (mismo motivo que `SofascoreBasketballProvider`:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date as date_type
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -58,15 +65,17 @@ logger = get_logger("app.results.scores365")
 
 _PROVIDER_NAME = "scores365"
 _BASE = "https://webws.365scores.com/web"
+_HOST = "https://webws.365scores.com"
 _PARAMS = "appTypeId=5&langId=1&timezoneName=Europe/Madrid&userCountryId=1"
-# `games/results` solo trae terminados; `games/current` mezcla
-# programados/en vivo/cancelados del día — sirve para aplazados.
+# Primera página del feed (últimos ~2 días); el histórico se alcanza
+# siguiendo `paging.previousPage` hacia atrás.
 _RESULTS = f"{_BASE}/games/results/?{_PARAMS}"
-_CURRENT = f"{_BASE}/games/current/?{_PARAMS}"
 # Deporte canónico -> sportId de 365scores (verificado en vivo).
 _SPORT_IDS = {"futbol": 1, "baloncesto": 2, "tenis": 3}
 # El pick puede llevar la fecha de publicación, no la del partido.
 _DATE_TOLERANCE = timedelta(days=1)
+# Tope de páginas hacia atrás por búsqueda (~días de antigüedad).
+_MAX_PAGES = 45
 # Umbral de similitud equipo (fútbol/basket); tenis usa el de players.
 _MIN_TEAM_SCORE = 0.6
 # Estados del feed que significan "partido terminado".
@@ -81,6 +90,32 @@ _FINISHED_STATUSES = {
 }
 # `statusText` -> status de MatchState (aplazado/cancelado).
 _STATE_MAP = {"cancelled": "cancelled", "postponed": "postponed"}
+
+
+def _game_day(game: dict) -> Optional[date_type]:
+    """Día de inicio del partido (`startTime` ISO); None si no trae."""
+    raw = game.get("startTime") or ""
+    try:
+        return datetime.fromisoformat(raw).date()
+    except ValueError:
+        return None
+
+
+def _day_boundary(day: date_type) -> datetime:
+    """Instante en que el día queda definitivo (fin del día +4h)."""
+    return datetime(day.year, day.month, day.day, tzinfo=timezone.utc) + timedelta(
+        days=1, hours=4
+    )
+
+
+def _absolutize(path: Optional[str], sport_id: int) -> Optional[str]:
+    """`paging.previousPage` viene sin host y puede perder `sports`."""
+    if not path:
+        return None
+    url = path if path.startswith("http") else f"{_HOST}{path}"
+    if f"sports={sport_id}" not in url:
+        url += f"&sports={sport_id}"
+    return url
 
 
 def _competitor(game: dict, key: str) -> tuple[str, Optional[float], bool]:
@@ -156,8 +191,9 @@ class Scores365Provider:
         self.SUPPORTED_SPORTS = frozenset({sport})
         self._sport = sport
         self._sport_id = _SPORT_IDS[sport]
-        # (start_iso, end_iso) -> lista de partidos o None (error).
-        self._feed_cache: dict[tuple[str, str], Optional[list]] = {}
+        # Día real del partido -> partidos (memoria de la pasada:
+        # picks del mismo día comparten las páginas ya caminadas).
+        self._day_cache: dict[date_type, list] = {}
 
     async def _get_json(self, client: httpx.AsyncClient, url: str) -> Optional[dict]:
         try:
@@ -174,55 +210,69 @@ class Scores365Provider:
                 logger.warning("[365SCORES] Error de API: %s", exc)
             return None
 
-    async def _games(
-        self,
-        client: httpx.AsyncClient,
-        endpoint: str,
-        date: datetime,
-        cacheable: bool,
-    ) -> Optional[list]:
-        """Partidos del día `date` ±1 (una llamada cubre la tolerancia).
-
-        `cacheable=True` (feed de resultados, inmutable una vez pasado
-        el día) persiste en provider_cache.json para no repetir la
-        llamada entre pasadas del verificador.
-        """
-        start = (date - _DATE_TOLERANCE).strftime("%Y-%m-%d")
-        end = (date + _DATE_TOLERANCE).strftime("%Y-%m-%d")
-        key = (start, end, endpoint)
-        if key in self._feed_cache:
-            return self._feed_cache[key]
-        cache_key = f"{_PROVIDER_NAME}|{self._sport}|{start}|{end}"
-        if cacheable:
-            cached = get_event_list(cache_key)
-            # El feed solo es definitivo si se capturó tras el fin del
-            # rango: una captura a media jornada no trae los partidos
-            # que acabaron después y el miss quedaría congelado.
-            boundary = datetime.fromisoformat(f"{end}T23:59:59+00:00") + timedelta(
-                hours=4
-            )
-            if cached is not None:
-                captured_raw = cached.get("captured_at") or ""
-                try:
-                    captured = datetime.fromisoformat(captured_raw)
-                except ValueError:
-                    captured = None
-                if captured is not None and captured > boundary:
-                    games = cached["events"]
-                    self._feed_cache[key] = games
-                    return games
-        data = await self._get_json(
-            client,
-            f"{endpoint}&sports={self._sport_id}&startDate={start}&endDate={end}",
-        )
-        if data is None:
-            self._feed_cache[key] = None
+    def _cached_day(self, day: date_type) -> Optional[list]:
+        """Partidos del día desde la caché persistente, si cerró."""
+        cached = get_event_list(f"{_PROVIDER_NAME}|{self._sport}|day|{day.isoformat()}")
+        if cached is None:
             return None
-        games = data.get("games") or []
-        self._feed_cache[key] = games
-        if cacheable and games:
-            set_event_list(cache_key, games)
-        return games
+        try:
+            captured = datetime.fromisoformat(cached.get("captured_at") or "")
+        except ValueError:
+            return None
+        # El día solo es definitivo si se capturó ya cerrado: una
+        # captura a media jornada no trae lo que acabó después.
+        if captured <= _day_boundary(day):
+            return None
+        return cached["events"]
+
+    def _store_day(self, day: date_type, games: list) -> None:
+        """Persiste el día en provider_cache.json si ya es historia."""
+        if datetime.now(timezone.utc) > _day_boundary(day):
+            set_event_list(
+                f"{_PROVIDER_NAME}|{self._sport}|day|{day.isoformat()}",
+                games,
+            )
+
+    async def _games(self, client: httpx.AsyncClient, date: datetime) -> Optional[list]:
+        """Partidos del día `date` ±1 paginando `results` hacia atrás.
+
+        Las fechas en la query no se honran: la primera página trae los
+        últimos ~2 días y `paging.previousPage` retrocede ~1 día por
+        página. El paseo para al cubrir el primer día buscado; cada día
+        visto se guarda en memoria y en disco (si el día ya cerró).
+        """
+        start = (date - _DATE_TOLERANCE).date()
+        wanted = [start + timedelta(days=i) for i in range(3)]
+        for day in wanted:
+            if day not in self._day_cache:
+                cached = self._cached_day(day)
+                if cached is not None:
+                    self._day_cache[day] = cached
+        if all(day in self._day_cache for day in wanted):
+            return [g for day in wanted for g in self._day_cache[day]]
+
+        url: Optional[str] = f"{_RESULTS}&sports={self._sport_id}"
+        for _ in range(_MAX_PAGES):
+            if url is None:
+                break
+            data = await self._get_json(client, url)
+            if data is None:
+                return None  # error transitorio: no se marca missed
+            by_day: dict[date_type, list] = {}
+            for game in data.get("games") or []:
+                day = _game_day(game)
+                if day is not None:
+                    by_day.setdefault(day, []).append(game)
+            for day, games in by_day.items():
+                self._day_cache.setdefault(day, games)
+                self._store_day(day, games)
+            oldest = min(by_day) if by_day else None
+            if oldest is not None and oldest <= start:
+                break
+            url = _absolutize(
+                (data.get("paging") or {}).get("previousPage"), self._sport_id
+            )
+        return [g for day in wanted for g in self._day_cache.get(day, [])]
 
     async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:
         """Mejor partido terminado del día (±1) que casa con el hint."""
@@ -245,7 +295,7 @@ class Scores365Provider:
         best_score = 0.0
         saw_unfinished = False
         async with httpx.AsyncClient() as client:
-            games = await self._games(client, _RESULTS, date, cacheable=True)
+            games = await self._games(client, date)
         if games is None:
             return None  # error transitorio: no se marca missed
         for game in games:
@@ -270,10 +320,11 @@ class Scores365Provider:
     async def find_postponed_match(
         self, date: datetime, team_hint: str
     ) -> Optional[MatchState]:
-        """Partido cancelado/aplazado del día en el feed `current`.
+        """Partido cancelado/aplazado del día en el feed paginado.
 
-        `games/results` excluye los no disputados; `games/current` sí
-        los lista con `statusText` Cancelled/Postponed.
+        `results` lista también los `Cancelled`/`Postponed` del día:
+        el mismo histórico de `find_match`, sin coste extra — así un
+        cancelado de hace días se detecta igual que uno de hoy.
         """
         if is_rate_limited(_PROVIDER_NAME):
             return None
@@ -281,7 +332,7 @@ class Scores365Provider:
         if not hint:
             return None
         async with httpx.AsyncClient() as client:
-            games = await self._games(client, _CURRENT, date, cacheable=False)
+            games = await self._games(client, date)
         if not games:
             return None
         for game in games:

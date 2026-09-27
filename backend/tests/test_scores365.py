@@ -202,6 +202,95 @@ class TestFindMatchOtrosDeportes:
         assert (match.home_score, match.away_score) == (68, 91)
 
 
+class TestPaginacionHistorica:
+    """`games/results` ignora fechas: el histórico se recorre por
+    `paging.previousPage` (~1 día por página)."""
+
+    async def test_partido_en_pagina_profunda(self, tennis_provider, monkeypatch):
+        calls = []
+
+        async def fake_get(client, url):
+            calls.append(url)
+            if "aftergame" in url:
+                # Página profunda: el día del pick.
+                return _feed(_GAME_TENNIS, _GAME_CANCELLED)
+            # Primera página: solo hoy + cursor hacia atrás.
+            today = dict(_GAME_BASKET, startTime="2026-09-27T19:00:00+02:00")
+            return {
+                "games": [today],
+                "paging": {"previousPage": "/web/games/?aftergame=11&direction=-1"},
+            }
+
+        monkeypatch.setattr(tennis_provider, "_get_json", fake_get)
+        match = await tennis_provider.find_match(
+            datetime(2026, 9, 20, 12, 0), "Neumayer vs Manzano"
+        )
+        assert match is not None
+        assert match.home_team == "Lukas Neumayer"
+        assert len(calls) == 2  # primera página + una hacia atrás
+
+    async def test_sin_mas_paginas_se_detiene(self, tennis_provider, monkeypatch):
+        """Sin `previousPage` el paseo para aunque no cubra el día."""
+        calls = []
+
+        async def fake_get(client, url):
+            calls.append(url)
+            return _feed(_GAME_TENNIS)
+
+        monkeypatch.setattr(tennis_provider, "_get_json", fake_get)
+        # wanted 19-21, juegos el 20: sin cursor, para tras 1 página.
+        match = await tennis_provider.find_match(
+            datetime(2026, 9, 20, 12, 0), "Neumayer vs Manzano"
+        )
+        assert match is not None
+        assert len(calls) == 1
+
+    async def test_cancelado_en_pagina_profunda_es_anulable(
+        self, tennis_provider, monkeypatch
+    ):
+        async def fake_get(client, url):
+            if "aftergame" in url:
+                return _feed(_GAME_CANCELLED, _GAME_TENNIS)
+            today = dict(_GAME_BASKET, startTime="2026-09-27T19:00:00+02:00")
+            return {
+                "games": [today],
+                "paging": {"previousPage": "/web/games/?aftergame=11&direction=-1"},
+            }
+
+        monkeypatch.setattr(tennis_provider, "_get_json", fake_get)
+        state = await tennis_provider.find_postponed_match(
+            datetime(2026, 9, 20, 12, 0), "Garin vs Merida"
+        )
+        assert state is not None
+        assert state.status == "cancelled"
+
+    async def test_cada_dia_cacheado_no_repide_llamadas(
+        self, tennis_provider, monkeypatch
+    ):
+        """Días ya en la caché persistente no gastan ni una llamada."""
+        games = [_GAME_TENNIS]
+        monkeypatch.setattr(
+            scores365,
+            "get_event_list",
+            lambda key: {
+                "captured_at": "2026-09-24T12:00:00+00:00",
+                "events": games,
+            },
+        )
+        calls = []
+
+        async def fake_get(client, url):
+            calls.append(url)
+            return _feed()
+
+        monkeypatch.setattr(tennis_provider, "_get_json", fake_get)
+        match = await tennis_provider.find_match(
+            datetime(2026, 9, 20, 12, 0), "Neumayer vs Manzano"
+        )
+        assert match is not None
+        assert calls == []
+
+
 class TestFindPostponed:
     async def test_cancelado_en_feed_current(self, tennis_provider, monkeypatch):
         async def fake_get(client, url):

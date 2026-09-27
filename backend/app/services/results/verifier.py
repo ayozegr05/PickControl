@@ -1354,16 +1354,17 @@ async def _get_providers() -> list[ResultsProvider]:
     # stats (córners, tarjetas, tiros, faltas) en la misma respuesta.
     # Descarga a football-data (10 req/min) y a los providers de cuota.
     providers.append(EspnProvider())
+    # 365scores: webservice público sin key ni cuota documentada — una
+    # llamada por página de día (paginada) trae TODOS los partidos.
+    # Va justo tras ESPN: cubre ligas menores que ESPN no lista y
+    # descarga a los providers de cuota que van después.
+    providers.append(Scores365Provider("futbol"))
     if settings.football_data_api_key:
         providers.append(FootballDataProvider(settings.football_data_api_key))
     if settings.api_football_key:
         providers.append(
             ApiFootballProvider(settings.api_football_key, settings.api_football_host)
         )
-    # 365scores: webservice público sin key ni cuota documentada — una
-    # llamada trae TODOS los partidos del día del deporte. Va antes de
-    # los mirrors RapidAPI para ahorrarles la cuota diaria.
-    providers.append(Scores365Provider("futbol"))
     # footapi7 (Sofascore vía RapidAPI): sin ventana de fechas ni plan que
     # la limite. Rescata marcadores de ligas menores y stats (córners,
     # tarjetas, tiros) que API-Football ya no puede consultar fuera de su
@@ -1381,12 +1382,12 @@ async def _get_providers() -> list[ResultsProvider]:
     # ESPN tenis primero del deporte: gratis, sin cuota, marcador por
     # sets en ATP/WTA (individuales y dobles).
     providers.append(EspnTennisProvider())
-    if settings.api_tennis_key:
-        providers.append(ApiTennisProvider(settings.api_tennis_key))
-    # 365scores para tenis: cubre ATP/WTA/Challenger/ITF/dobles en una
-    # llamada por fecha — absorbe el grueso de los misses de los
+    # 365scores para tenis: cubre ATP/WTA/Challenger/ITF/dobles
+    # paginando por día — absorbe el grueso de los misses de los
     # mirrors RapidAPI que van después.
     providers.append(Scores365Provider("tenis"))
+    if settings.api_tennis_key:
+        providers.append(ApiTennisProvider(settings.api_tennis_key))
     if settings.rapidapi_tennis_key:
         providers.append(
             RapidApiTennisProvider(
@@ -1415,6 +1416,9 @@ async def _get_providers() -> list[ResultsProvider]:
     # FIBA (sin ACB ni Euroliga: ESPN no las publica; esas siguen en
     # API-Basketball y los mirrors).
     providers.append(EspnBasketballProvider())
+    # 365scores para basket: mismo feed por día, sin cuota — antes de
+    # API-Basketball (cuota propia) y los mirrors.
+    providers.append(Scores365Provider("baloncesto"))
     # API-Basketball (api-sports, cuota propia de 100/día — no toca
     # footapi7): rescata las ligas europeas que ESPN no cubre.
     if settings.api_basketball_key:
@@ -1428,8 +1432,6 @@ async def _get_providers() -> list[ResultsProvider]:
     # API-Basketball. Comparte la cuota diaria de allsportsapi2 con
     # tenis/odds (misma suscripción), pero los picks de basket son tan
     # raros que el gasto real es despreciable.
-    # 365scores para basket: mismo feed por fecha, sin cuota.
-    providers.append(Scores365Provider("baloncesto"))
     if settings.rapidapi_tennis_key:
         providers.append(
             SofascoreBasketballProvider(
@@ -1726,8 +1728,16 @@ async def verify_pick(
         # partido consta aplazado/cancelado: la apuesta se devuelve,
         # sea cual sea el mercado. Si se jugó, esto no encuentra nada
         # y la verificación sigue su curso normal.
+        # En tenis `evento` puede ser solo el torneo ("CHALLENGER X
+        # DOBLES") — mismo hint que el camino de resultados: el jugador
+        # o pareja extraído de la selección.
+        state_hint: Optional[str] = pick.evento
+        if sport == "tenis":
+            state_hint = _tennis_lookup_hint(
+                pick, _extract_tennis_player_name(pick.seleccion or "")
+            )
         state = await _find_postponed_across_providers(
-            pick.fecha_evento, pick.evento, providers_for_sport, pick.id
+            pick.fecha_evento, state_hint or "", providers_for_sport, pick.id
         )
         if state:
             logger.info(
