@@ -281,6 +281,13 @@ async def repair_pick(session, pick: ParsedPick, *, apply: bool) -> RepairReport
                 retry = await _extract(stripped)
                 if retry is not None and retry.es_apuesta:
                     new = retry
+            else:
+                # Sin publi que quitar solo hubo UNA lectura: el LLM es
+                # no determinista (mismo texto, veredictos distintos), así
+                # que el rechazo exige una segunda confirmación.
+                retry = await _extract(source)
+                if retry is not None and retry.es_apuesta:
+                    new = retry
             if not new.es_apuesta:
                 # Ni limpio lo reconoce: si el texto tiene una línea de
                 # apuesta inequívoca se reconstruye por reglas (verbatim,
@@ -362,4 +369,120 @@ async def repair_picks(
         if apply:
             await session.commit()
             logger.info("[REPAIR] %s picks reprocesados y aplicados", len(pick_ids))
+    return reports
+
+
+# --- Ciclo periódico de autorregulación -------------------------------------
+#
+# Detecta filas pendientes con el mismo diagnóstico que el "cubo 1"
+# original y las re-extrae solas: combinadas con patas de ruido, eventos
+# que son el torneo en vez del cruce, "1X" clasificado como hándicap.
+
+# Palabra de competición sin cruce ("CHALLENGER BIELLA", "WTA
+# GUADALAJARA"): el extractor guardó el torneo como si fuera el evento.
+_COMPETITION_WORD = re.compile(
+    r"\b(?:chall(?:enger)?|atp|wta|itf|copa|liga|league|champions|"
+    r"euroleague|nba|torneo|open|masters|premier|bundesliga|"
+    r"eredivisie|serie\s+a|ligue|mls|europa\s+league)\b",
+    re.IGNORECASE,
+)
+_CROSS = re.compile(r"\bvs\.?\b|\s-\s", re.IGNORECASE)
+# Selección "1X"/"X2" guardada como hándicap: es doble oportunidad.
+_DC_IN_HANDICAP = re.compile(r"\b(?:1x|x2)\b", re.IGNORECASE)
+
+
+def _tournament_only(evento: Optional[str]) -> bool:
+    return bool(
+        evento and _COMPETITION_WORD.search(evento) and not _CROSS.search(evento)
+    )
+
+
+def _pick_needs_repair(pick: ParsedPick, active_legs: list[ParsedPick]) -> bool:
+    """Señales conservadoras de extracción rota en una fila pendiente.
+
+    Solo disparan cuando el dato guardado es claramente defectuoso —
+    una pata con `evento` a NULL no dispara (puede heredar del padre);
+    el objetivo es NO re-extraer picks sanos (cada re-extracción cuesta
+    una llamada LLM y puede degradar un dato bueno).
+    """
+    if pick.es_combinada:
+        # Combinada degenerada: menos de 2 patas activas (ruido o
+        # extracción a medias del boleto).
+        if len(active_legs) < 2:
+            return True
+        if _tournament_only(pick.evento):
+            return True
+        # Pata cuyo "evento" es el torneo — el cruce se perdió.
+        if any(_tournament_only(leg.evento) for leg in active_legs):
+            return True
+    else:
+        if _tournament_only(pick.evento):
+            return True
+        if (
+            pick.mercado
+            and "hándicap" in pick.mercado.lower()
+            and _DC_IN_HANDICAP.search(pick.seleccion or "")
+        ):
+            return True
+    return False
+
+
+async def find_repair_candidates(session, limit: int = 10) -> list[int]:
+    """Ids de picks pendientes (padres o simples, nunca patas) que
+    pintan a extracción rota. Acotado por `limit`: el LLM no es gratis
+    y una pasada no tiene por qué drenar toda la cola."""
+    pending = (
+        (
+            await session.exec(
+                select(ParsedPick)
+                .where(ParsedPick.es_apuesta == True)  # noqa: E712
+                .where(ParsedPick.acierto.is_(None))  # noqa: E711
+                .where(ParsedPick.anulada == False)  # noqa: E712
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # Padres pendientes (las patas nunca se reparan sueltas).
+    parents = [p for p in pending if p.combinada_id is None]
+    # Las patas se consultan TODAS, no solo pendientes: si el padre está
+    # pendiente pero sus patas ya resueltas, no es una combinada
+    # degenerada — solo le falta el settle.
+    combinada_parents = [p.id for p in parents if p.es_combinada]
+    legs_by_parent: dict[int, list[ParsedPick]] = {}
+    if combinada_parents:
+        all_legs = (
+            (
+                await session.exec(
+                    select(ParsedPick).where(
+                        ParsedPick.combinada_id.in_(combinada_parents)
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for leg in all_legs:
+            if leg.es_apuesta and not leg.anulada and leg.combinada_id:
+                legs_by_parent.setdefault(leg.combinada_id, []).append(leg)
+    candidates = [
+        p.id
+        for p in parents
+        if p.id is not None and _pick_needs_repair(p, legs_by_parent.get(p.id, []))
+    ]
+    return candidates[:limit]
+
+
+async def run_repair_cycle(limit: int = 10) -> list[RepairReport]:
+    """Pasada periódica de autorregulación: busca filas sospechosas y
+    las re-extrae desde su raw guardado. Corre desde el loop de rescue
+    (mismo intervalo); sin candidatos no gasta ni una llamada LLM."""
+    async with AsyncSessionLocal() as session:
+        ids = await find_repair_candidates(session, limit)
+    if not ids:
+        return []
+    logger.info("[REPAIR] Ciclo: %s picks sospechosos — re-extrayendo", len(ids))
+    reports = await repair_picks(ids, apply=True)
+    for r in reports:
+        logger.info("[REPAIR] #%s [%s] %s", r.pick_id, r.action, r.detail)
     return reports

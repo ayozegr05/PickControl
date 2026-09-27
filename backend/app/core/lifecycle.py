@@ -84,11 +84,14 @@ async def _run_odds_snapshotter_loop() -> None:
 
 
 async def _run_rescue_loop() -> None:
-    """Rescate periódico: OCR de fotos pendientes + reproceso de raws.
+    """Rescate periódico: OCR de fotos pendientes + reproceso de raws
+    + reparación de extracciones rotas (autorregulación).
 
     Solo consume OpenAI cuando hay trabajo pendiente; en reposo son
-    dos consultas a la BD y nada más.
+    unas consultas a la BD y nada más.
     """
+    from app.services.maintenance.repair import run_repair_cycle
+
     settings = get_settings()
     interval_seconds = settings.rescue_interval_hours * 3600
 
@@ -96,6 +99,10 @@ async def _run_rescue_loop() -> None:
         try:
             if loop_due("rescue", interval_seconds):
                 await run_rescue_cycle()
+                # Tras el rescue: re-extrae las filas pendientes con
+                # diagnóstico de extracción rota (combinadas con patas
+                # de ruido, evento = torneo, 1X como hándicap...).
+                await run_repair_cycle()
                 mark_loop_ran("rescue")
         except Exception as exc:  # noqa: BLE001
             logger.error("[RESCUE] Error en el ciclo de rescate: %s", exc)
