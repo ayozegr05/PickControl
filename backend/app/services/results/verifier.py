@@ -296,6 +296,24 @@ def _clean_team_name(raw: str) -> str:
     return cleaned.strip(" -:¡!.")
 
 
+# Restos de una selección "Gana X" que en realidad son el nombre del
+# mercado, no un equipo: "Ganará el encuentro" -> "el encuentro".
+_GENERIC_WIN_SUBJECT = re.compile(
+    r"(?:(?:el|la|los|las|su|tu|este|ese)\s+)?"
+    r"(?:encuentro|partido|combate|pelea|evento|choque|juego)\s*",
+    re.IGNORECASE,
+)
+
+
+def _is_market_name(team: str) -> bool:
+    """El "equipo" extraído es el propio nombre del mercado ("Ganará el
+    encuentro", "el encuentro"): la selección no dice quién gana."""
+    low = team.lower().strip(" .")
+    if _GENERIC_WIN_SUBJECT.fullmatch(low):
+        return True
+    return bool(re.match(rf"(?:{'|'.join(map(re.escape, _WIN_KEYWORDS))})\b", low))
+
+
 def _extract_predicted_team(
     seleccion: str, mercado: Optional[str] = None
 ) -> Optional[str]:
@@ -306,7 +324,8 @@ def _extract_predicted_team(
     directo (p. ej. "resultado sin empate", "ganador"), también se
     acepta. Devuelve None para mercados que no se pueden resolver así
     (hándicap, over/under...), que se manejan con sus propios
-    extractores.
+    extractores, y cuando el texto extraído es solo el nombre del
+    mercado ("Ganará el encuentro" en slips bet365).
     """
     low = seleccion.lower()
 
@@ -315,24 +334,55 @@ def _extract_predicted_team(
         idx = low.find(keyword)
         if idx > 0:
             team = _clean_team_name(seleccion[:idx])
-            if team:
+            if team and not _is_market_name(team):
                 return team
 
-    # Patrón "Gana Equipo" (la palabra clave aparece al principio).
+    # Patrón "Gana Equipo" (la palabra clave aparece al principio, con
+    # borde de palabra: "gana" no debe comerse el "rá" de "ganará").
     for keyword in _WIN_KEYWORDS:
-        if low.startswith(keyword):
-            team = _clean_team_name(seleccion[len(keyword) :])
-            if team:
+        kw = re.match(rf"{re.escape(keyword)}\b", low)
+        if kw:
+            team = _clean_team_name(seleccion[kw.end() :])
+            if team and not _is_market_name(team):
                 return team
 
     # Selección = solo el nombre del equipo, pero el mercado ya implica
     # "gana" (p. ej. "resultado sin empate").
     if mercado and any(m in mercado.lower() for m in _NO_VERB_WIN_MARKETS):
         team = _clean_team_name(seleccion)
-        if team:
+        if team and not _is_market_name(team):
             return team
 
     return None
+
+
+# Selección que solo nombra el mercado: "Ganará el encuentro".
+_GENERIC_WIN_PHRASE = re.compile(
+    r"\bgan\w*\s+(?:el|la|su|este|ese)\s+" r"(?:encuentro|partido|combate|pelea)\b",
+    re.IGNORECASE,
+)
+
+
+def _winner_fallback_team(pick: "ParsedPick") -> Optional[str]:
+    """Lado apostado cuando la selección solo trae el nombre del mercado
+    ("Ganará el encuentro" en slips bet365): el extractor pone al lado
+    apostado primero en `evento` ("A vs B" / "A - B"). None si no aplica
+    o el evento no trae enfrentamiento."""
+    sel = pick.seleccion or ""
+    if (
+        not _GENERIC_WIN_PHRASE.search(sel)
+        and "ganador" not in (pick.mercado or "").lower()
+    ):
+        return None
+    parts = re.split(
+        r"\s+vs\.?\s+|\s+-\s+",
+        (pick.evento or "").strip(),
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )
+    if len(parts) != 2:
+        return None
+    return _clean_team_name(parts[0]) or None
 
 
 def _extract_handicap_team(seleccion: str) -> Optional[str]:
@@ -1195,6 +1245,19 @@ async def _verify_tennis_pick(
                 direction = direction or "over"
                 break
     if linea is None:
+        # Notación bet365 "+7,5 juegos": el mercado es over N (la línea
+        # es N, no N-0.5). Solo si el mercado declara un total — un
+        # "+1,5" de hándicap no debe leerse como over.
+        m_low = (pick.mercado or "").lower()
+        if (
+            any(w in m_low for w in ("over", "under", "total", "juegos"))
+            and "dicap" not in m_low
+        ):
+            m = re.search(r"\+(\d+(?:[.,]\d+)?)", seleccion)
+            if m:
+                linea = float(m.group(1).replace(",", "."))
+                direction = direction or "over"
+    if linea is None:
         return None
 
     if direction:
@@ -1994,6 +2057,10 @@ async def verify_pick(
     # Mercado "ganador" simple (o "resultado sin empate" con selección =
     # solo el nombre del equipo).
     predicted_team = _extract_predicted_team(pick.seleccion, pick.mercado)
+    if not predicted_team:
+        # Selección = solo nombre del mercado ("Ganará el encuentro"):
+        # el lado apostado es el primero del evento.
+        predicted_team = _winner_fallback_team(pick)
     if not predicted_team:
         # Mercado no soportado todavía: manual.
         return None, False
