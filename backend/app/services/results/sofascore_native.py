@@ -57,12 +57,14 @@ from app.services.results.base import (
     SOFASCORE_VOIDED_STATUSES,
     MatchResult,
     MatchState,
+    clear_rate_limit_streak,
     count_provider_call,
     is_missed,
     is_rate_limited,
     log_remaining_quota,
     mark_missed,
     mark_rate_limited,
+    mark_rate_limited_escalating,
     match_score,
     miss_is_provisional,
     rate_limit_from,
@@ -122,7 +124,8 @@ class _DirectTransport:
       son lo que marca el fingerprint de bot.
     - Un 200 con HTML (página de desafío, no JSON) marca rate-limited:
       seguir llamando a través de un challenge es la forma rápida de
-      caer en la lista negra. Se reintenta mañana.
+      caer en la lista negra. El descanso escala (24h -> 72h -> 7d)
+      mientras el baneo persista y vuelve a 24h tras el primer 200.
     """
 
     name = "sofascore_direct"
@@ -188,10 +191,13 @@ class _DirectTransport:
         if response.status_code == 404:
             return {}  # página vacía (p. ej. events/next sin próximos)
         if response.status_code in (401, 403, 429):
-            mark_rate_limited(self.name, response)
+            # Baneo de IP de Cloudflare: backoff progresivo — insistir
+            # a diario renueva el flag de bot, así que el descanso
+            # crece (24h -> 72h -> 7d) mientras el baneo persista.
+            mark_rate_limited_escalating(self.name)
             logger.warning(
                 "[SOFASCORE-DIRECT] Bloqueado por Cloudflare (%s); "
-                "se omite hasta mañana",
+                "descanso escalonado",
                 response.status_code,
             )
             return None
@@ -203,14 +209,17 @@ class _DirectTransport:
         try:
             data = response.json()
         except ValueError:
-            # 200 pero HTML: página de desafío de Cloudflare. No
-            # insistir — marca sin cuota hasta mañana igual que un 403.
-            mark_rate_limited(self.name, response)
+            # 200 pero HTML: página de desafío de Cloudflare. Mismo
+            # baneo de IP que un 403 — backoff progresivo.
+            mark_rate_limited_escalating(self.name)
             logger.warning(
                 "[SOFASCORE-DIRECT] Respuesta no-JSON (desafío "
-                "Cloudflare); se omite hasta mañana"
+                "Cloudflare); descanso escalonado"
             )
             return None
+        # Respuesta buena: la IP vuelve a pasar — se resetea la racha
+        # de backoff para que el próximo baneo vuelva a 24h.
+        clear_rate_limit_streak(self.name)
         return data if isinstance(data, dict) else None
 
 

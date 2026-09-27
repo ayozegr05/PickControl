@@ -224,8 +224,8 @@ class TestDirectTransport:
         marked = []
         monkeypatch.setattr(
             native,
-            "mark_rate_limited",
-            lambda name, response=None: marked.append(name),
+            "mark_rate_limited_escalating",
+            lambda name: marked.append(name),
         )
         self._mock_session(monkeypatch, _FakeResponse(403))
         transport = _DirectTransport()
@@ -238,8 +238,8 @@ class TestDirectTransport:
         marked = []
         monkeypatch.setattr(
             native,
-            "mark_rate_limited",
-            lambda name, response=None: marked.append(name),
+            "mark_rate_limited_escalating",
+            lambda name: marked.append(name),
         )
 
         class _HtmlResponse(_FakeResponse):
@@ -250,6 +250,24 @@ class TestDirectTransport:
         transport = _DirectTransport()
         assert await transport.get_json("/api/v1/search/all?q=x") is None
         assert marked == ["sofascore_direct"]
+
+    def test_backoff_escalonado_crece_y_se_resetea(self):
+        """Cada baneo consecutivo alarga el descanso (24h -> 72h) y la
+        primera respuesta buena devuelve la racha a 24h."""
+        from app.services.results import base as results_base
+
+        results_base.mark_rate_limited_escalating("prov_x")
+        assert results_base.is_rate_limited("prov_x")
+        until1 = results_base._load_state()["rate_limited"]["prov_x"]
+
+        results_base.mark_rate_limited_escalating("prov_x")
+        until2 = results_base._load_state()["rate_limited"]["prov_x"]
+        assert until2 > until1
+
+        results_base.clear_rate_limit_streak("prov_x")
+        results_base.mark_rate_limited_escalating("prov_x")
+        until3 = results_base._load_state()["rate_limited"]["prov_x"]
+        assert until3 < until2
 
     async def test_llamadas_concurrentes_identicas_se_deduplican(self, monkeypatch):
         """Dos picks pidiendo la misma ruta a la vez comparten UNA
