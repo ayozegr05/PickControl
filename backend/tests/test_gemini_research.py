@@ -55,7 +55,7 @@ def _stub(payload):
 
 
 def _stub_search(urls: list[str]):
-    async def fake(date, hint):
+    async def fake(date, hint, priority_terms=None):
         return urls
 
     return fake
