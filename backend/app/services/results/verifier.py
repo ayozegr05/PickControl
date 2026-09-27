@@ -893,6 +893,25 @@ _TENNIS_SETS_AFTER_VERB = re.compile(
 # Tenis: sujeto del mercado de totales/hándicap — "juegos" o "sets".
 _TENNIS_SETS_SUBJECT = re.compile(r"\bsets?\b", re.IGNORECASE)
 _TENNIS_GAMES_SUBJECT = re.compile(r"juego\w*|\bgames?\b", re.IGNORECASE)
+# Tenis: mercados de estadística del partido (aces, dobles faltas) —
+# no salen del marcador, viven en las tablas de stats de las webs.
+_TENNIS_STAT_SUBJECTS: tuple[tuple[re.Pattern, tuple[str, ...]], ...] = (
+    (re.compile(r"\baces?\b", re.IGNORECASE), ("Aces",)),
+    (
+        re.compile(r"dobles?\s*faltas?|double\s*fault", re.IGNORECASE),
+        ("Double Faults",),
+    ),
+)
+
+
+def _tennis_stat_keys(text: str) -> Optional[tuple[str, ...]]:
+    """Claves de MatchStats para el sujeto-stat del mercado de tenis."""
+    for pattern, keys in _TENNIS_STAT_SUBJECTS:
+        if pattern.search(text):
+            return keys
+    return None
+
+
 # Ruido a quitar de la selección para quedarnos con el jugador.
 _TENNIS_PLAYER_NOISE = re.compile(
     r"h[aá]ndicap\w*|asi[aá]tic\w*|juego\w*|\bgames?\b|\bsets?\b"
@@ -1273,6 +1292,20 @@ async def _verify_tennis_pick(
         return None
 
     if direction:
+        # Mercados de estadística del partido ("25+ aces", "dobles
+        # faltas"): no salen del marcador — se consultan las tablas de
+        # stats vía providers con `find_match_stats` (Gemini-research).
+        stat_keys = _tennis_stat_keys(text)
+        if stat_keys:
+            team_hint = _tennis_lookup_hint(pick, None)
+            if not team_hint:
+                return None, False
+            stats = await _find_stats_across_providers(
+                pick.fecha_evento, team_hint, providers, pick.id
+            )
+            if not stats:
+                return None, False
+            return _resolve_stat_over_under(stats, stat_keys, None, direction, linea)
         # Sin sujeto explícito la línea desambigua: los juegos totales
         # nunca bajan de ~12, las líneas de sets son <= 4.5.
         subject = _tennis_subject(text) or ("games" if linea >= 6 else "sets")
@@ -1559,7 +1592,7 @@ async def _get_providers() -> list[ResultsProvider]:
     # fuente fiable — `find_match` devuelve None, así que su posición
     # en la cascada de resultados es inofensiva y solo trabaja en el
     # camino de aplazados/anuladas cuando todo lo determinista falló.
-    if settings.google_api_key:
+    if getattr(settings, "google_api_key", None):
         for sport in ("futbol", "tenis", "baloncesto"):
             providers.append(GeminiResearchProvider(sport, settings.google_api_key))
     return providers

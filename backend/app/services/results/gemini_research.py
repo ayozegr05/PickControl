@@ -32,6 +32,7 @@ from app.core.logging import get_logger
 from app.services.results.base import (
     MatchResult,
     MatchState,
+    MatchStats,
     is_rate_limited,
     mark_rate_limited,
     rate_limit_from,
@@ -120,6 +121,73 @@ _SPORT_ES = {
     "tenis": "tenis",
     "baloncesto": "baloncesto",
 }
+
+_STATS_PROMPT = """Del siguiente texto extraído de una página de
+resultados deportivos, extrae las estadísticas del partido {hint}
+({sport}, {date}).
+
+TEXTO:
+\"\"\"
+{text}
+\"\"\"
+
+Devuelve SOLO JSON válido, sin markdown:
+{{"team1": "<nombre tal como aparece primero en la tabla>",
+ "team2": "<el otro>",
+ "stats": {{"<nombre de la estadística>": [<valor_eq1>, <valor_eq2>]}}}}
+
+Reglas:
+- Solo estadísticas VISIBLES en el texto con un número por equipo.
+- Los valores se copian EXACTOS, en el orden en que aparecen los
+  equipos en la tabla. Si solo hay un total sin desglose, no lo
+  incluyas.
+- Si el texto no contiene estadísticas del partido, {{"stats": {{}}}}."""
+
+# Estadística canónica (la clave que espera el verificador en
+# MatchStats.values) -> regex de cómo se llama en las webs (ES/EN).
+_STAT_KEYWORDS: tuple[tuple[str, re.Pattern], ...] = (
+    ("Aces", re.compile(r"\baces?\b", re.I)),
+    (
+        "Double Faults",
+        re.compile(r"double\s*fault|doble\s*falta", re.I),
+    ),
+    ("Corner Kicks", re.compile(r"corner|c[oó]rner|esquina", re.I)),
+    (
+        "Yellow Cards",
+        re.compile(r"yellow\s*card|tarjeta\s*amarilla|amarilla", re.I),
+    ),
+    (
+        "Red Cards",
+        re.compile(r"red\s*card|tarjeta\s*roja|roja", re.I),
+    ),
+    (
+        "Shots on Goal",
+        re.compile(
+            r"shots?\s*on\s*(?:goal|target)|tiros?\s*a\s*puerta|"
+            r"remates?\s*a\s*puerta",
+            re.I,
+        ),
+    ),
+    (
+        "Total Shots",
+        re.compile(r"total\s*shots|tiros?\s*totales|remates?", re.I),
+    ),
+    ("Fouls", re.compile(r"fouls?|faltas", re.I)),
+    (
+        "Offsides",
+        re.compile(r"offsides?|fuera\s*de\s*juego|fueras?\s*de\s*juego", re.I),
+    ),
+)
+
+_FETCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
+}
+_MAX_PAGE_CHARS = 30000
+_STATS_VALIDATION_WINDOW = 160
 
 _SEARCH_PROMPT = """Lee esta página de resultados de búsqueda: {search_url}
 
@@ -457,3 +525,133 @@ class GeminiResearchProvider:
             away_score=score[1],
             sets=sets,
         )
+
+    async def _fetch_page_text(self, url: str) -> Optional[str]:
+        """Descarga la página y devuelve su texto visible truncado.
+
+        La validación anti-alucinación del salto de stats exige que
+        cada número reportado exista literalmente en este texto, así
+        que la fuente tiene que ser lo que nosotros descargamos — no
+        lo que el modelo "recuerda" de la URL.
+        """
+        try:
+            async with httpx.AsyncClient(
+                timeout=_TIMEOUT,
+                headers=_FETCH_HEADERS,
+                follow_redirects=True,
+            ) as client:
+                resp = await client.get(url)
+            if resp.status_code != 200:
+                return None
+        except httpx.HTTPError as exc:
+            logger.info("[GEMINI] Fetch %s falló: %r", url, exc)
+            return None
+        html = resp.text
+        # Scripts/estilos fuera; tags fuera; espacios colapsados.
+        html = re.sub(
+            r"<(script|style|noscript)\b[^>]*>.*?</\1>",
+            " ",
+            html,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        text = re.sub(r"<[^>]+>", " ", html)
+        text = re.sub(r"&nbsp;?", " ", text)
+        text = re.sub(r"&amp;", "&", text)
+        text = re.sub(r"&#\d+;|&\w+;", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:_MAX_PAGE_CHARS] or None
+
+    def _stats_from_text(self, text: str, data: dict[str, Any]) -> Optional[MatchStats]:
+        """Stats normalizadas y VERIFICADAS contra el texto de la página.
+
+        Cada par de valores reportado por el modelo tiene que aparecer
+        literalmente cerca del nombre de la estadística en el HTML —
+        así un número alucinado nunca pasa a MatchStats.
+        """
+        raw_stats = data.get("stats")
+        if not isinstance(raw_stats, dict):
+            return None
+        values: dict[str, tuple[int, int]] = {}
+        for reported_name, pair in raw_stats.items():
+            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                continue
+            try:
+                v1, v2 = int(pair[0]), int(pair[1])
+            except (TypeError, ValueError):
+                continue
+            name = str(reported_name)
+            canonical = next(
+                (key for key, pattern in _STAT_KEYWORDS if pattern.search(name)),
+                None,
+            )
+            if canonical is None or canonical in values:
+                continue
+            if not self._values_in_text(text, canonical, v1, v2):
+                continue
+            values[canonical] = (v1, v2)
+        if not values:
+            return None
+        return MatchStats(
+            home_team=str(data.get("team1") or ""),
+            away_team=str(data.get("team2") or ""),
+            values=values,
+        )
+
+    @staticmethod
+    def _values_in_text(text: str, canonical: str, v1: int, v2: int) -> bool:
+        """Los dos valores aparecen en el texto junto al nombre de la
+        estadística (en ese orden, dentro de una ventana corta)."""
+        pattern = next(p for k, p in _STAT_KEYWORDS if k == canonical)
+        for m in pattern.finditer(text):
+            window = text[m.start() : m.start() + _STATS_VALIDATION_WINDOW]
+            i1 = re.search(rf"(?<!\d){re.escape(str(v1))}(?!\d)", window)
+            if not i1:
+                continue
+            i2 = re.search(rf"(?<!\d){re.escape(str(v2))}(?!\d)", window[i1.end() :])
+            if i2:
+                return True
+        return False
+
+    async def find_match_stats(
+        self, date: datetime, team_hint: str
+    ) -> Optional[MatchStats]:
+        """Fase 3: estadísticas del partido leyendo la página citada.
+
+        url_context no renderiza el JS donde viven las tablas de
+        stats, así que la página se descarga nosotros mismos y el
+        modelo solo la interpreta; cada valor se verifica contra el
+        texto real antes de aceptarse.
+        """
+        if is_rate_limited(_PROVIDER_NAME):
+            return None
+        hint = (team_hint or "").strip()
+        if not hint:
+            return None
+        urls = await self._search_urls(date, hint)
+        for url in urls:
+            text = await self._fetch_page_text(url)
+            if not text:
+                continue
+            payload = await self._ask(
+                _STATS_PROMPT.format(
+                    text=text,
+                    sport=self._sport_es(),
+                    hint=hint,
+                    date=date.strftime("%d de %B de %Y"),
+                )
+            )
+            if payload is None:
+                continue
+            data = _extract_json(self._payload_text(payload))
+            if not data:
+                continue
+            stats = self._stats_from_text(text, data)
+            if stats:
+                logger.info(
+                    "[GEMINI] '%s': stats %s verificadas en %s",
+                    hint,
+                    list(stats.values),
+                    url,
+                )
+                return stats
+        return None
