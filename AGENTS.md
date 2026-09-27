@@ -24,11 +24,18 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     (football-data.org → API-Football → footapi7/Sofascore vía
     RapidAPI, sin ventana de fechas), tenis (TheSportsDB →
     RapidAPI ATP-WTA-ITF → tennisapi1). Al final de la cascada,
-    `gemini_research.py` (Gemini + `url_context`, free tier): salto 1
-    lee DDG Lite y filtra URLs por allowlist de dominios de resultados,
-    salto 2 lee solo esas páginas — SOLO devuelve estados no jugados
+    `gemini_research.py` (Gemini, free tier): salto 1 = `url_context`
+    lee DDG Lite (los buscadores bloquean la IP de la VM) y filtra URLs
+    por allowlist de dominios de resultados; los saltos 2/3 descargan
+    esas páginas nosotros y el modelo extrae JSON sobre su texto — así
+    la cuota mínima del tool solo se gasta en la búsqueda. Fases:
+    `find_postponed_match` devuelve SOLO estados no jugados
     (cancelled/postponed/walkover) con cita obligatoria; `find_match`
-    siempre None. Config: `GOOGLE_API_KEY`. Rescate manual de stats:
+    liquida marcadores solo con fuente leída + doble lectura que debe
+    coincidir; `find_match_stats` extrae aces/córners/etc. validando
+    que cada número aparece literalmente junto al nombre de la
+    estadística en la página. Queries de búsqueda sin día exacto
+    (DDG no indexa fechas). Config: `GOOGLE_API_KEY`. Rescate manual de stats:
     `scripts/backfill_stats_csv.py` (CSVs football-data.co.uk, dry-run por
     defecto). Mercados de 1ª parte/descanso: `MatchResult.ht_*` +
     `_ht_view()` en el verifier (stats 1H vía `find_match_stats_1h` de
