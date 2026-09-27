@@ -134,6 +134,11 @@ _ALLOWED_DOMAINS = (
     "coretennis.net",
     "scorebing.com",
     "azscore.com",
+    # Nicho: ligas menores/reservas — oddspedia trae tabla de stats
+    # ("Corners 3 3"), betsapi eventos ordinales, bsportsfan resultados.
+    "oddspedia.com",
+    "betsapi.com",
+    "bsportsfan.com",
 )
 
 # Estados "no jugado" que el modelo puede devolver -> normalizado.
@@ -224,6 +229,12 @@ _STAT_KEYWORDS: tuple[tuple[str, re.Pattern], ...] = (
 # conteo se hace aquí de forma DETERMINISTA y se añade como resumen al
 # texto: la validación literal ve los números y el modelo no cuenta.
 _TICKER_CORNER = re.compile(r"corner\s*,\s*([^.]{3,60}?)\.", re.IGNORECASE)
+# Formato betsapi: "19' - 2nd Corner - Sonderjyske Reserves" — el
+# equipo termina donde arranca el siguiente evento (minuto NN' o fin).
+_TICKER_CORNER_ORDINAL = re.compile(
+    r"\d+\s*(?:st|nd|rd|th)\s+corner\s*-\s*([^.]*?)(?=\s*\d+'|\s*\.|$)",
+    re.IGNORECASE,
+)
 
 
 def _ticker_corner_summary(text: str) -> str:
@@ -235,10 +246,13 @@ def _ticker_corner_summary(text: str) -> str:
     reportado por el modelo, que no sabemos de antemano.
     """
     counts: dict[str, int] = {}
-    for m in _TICKER_CORNER.finditer(text):
-        team = m.group(1).strip()
-        if team:
-            counts[team] = counts.get(team, 0) + 1
+    for pattern in (_TICKER_CORNER, _TICKER_CORNER_ORDINAL):
+        for m in pattern.finditer(text):
+            team = m.group(1).strip().rstrip(".").strip("()").strip()
+            if team:
+                counts[team] = counts.get(team, 0) + 1
+        if len(counts) >= 2:
+            break
     if len(counts) < 2:
         return ""
     (t1, c1), (t2, c2) = sorted(counts.items(), key=lambda kv: -kv[1])[:2]
