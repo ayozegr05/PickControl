@@ -435,6 +435,10 @@ class GeminiResearchProvider:
         queries = [
             f"{hint} {self._sport_es()}",
             f"{hint} {self._sport_es()} {date.strftime('%B %Y')}",
+            # Con "stats" en la query DDG saca los agregadores de nicho
+            # (totalcorner, footystats...) que con el nombre solo no
+            # aparecen — clave para mercados de estadística.
+            f"{hint} {self._sport_es()} stats",
         ]
         urls: list[str] = []
         seen: set[str] = set()
