@@ -165,6 +165,94 @@ def _pick_tenis(seleccion: str, mercado: str | None = "ganador") -> ParsedPick:
     )
 
 
+class _StubTennisRearranged(_StubTennisProvider):
+    """Tenis: además del partido jugado expone la fila Cancelled del
+    fixture original (reordenación de cuadro, caso Szczecin #1715)."""
+
+    def __init__(self, cancelled: "MatchState | None", **kw):
+        super().__init__(**kw)
+        self._cancelled = cancelled
+
+    async def find_postponed_match(self, date, team_hint):
+        from app.services.results.api_tennis import _pair_similar
+
+        if self._cancelled is None:
+            return None
+        score = max(
+            _pair_similar(team_hint, self._cancelled.home_team),
+            _pair_similar(team_hint, self._cancelled.away_team),
+        )
+        return self._cancelled if score >= 0.6 else None
+
+
+class TestTennisRearrangedFixture:
+    """El fixture apostado se canceló y el cuadro se rehízo con otro
+    rival: la casa anula. Una doble jornada real tendría ambos Ended —
+    un Cancelled + un Ended de la misma pareja es reordenación."""
+
+    def _cancelled(self, home: str, away: str) -> MatchState:
+        return MatchState(home_team=home, away_team=away, status="cancelled")
+
+    def _pick(self, seleccion: str) -> ParsedPick:
+        # Fecha reciente: ejercita el check del camino de mercado, no la
+        # regla de aplazados >72 h (que anula por su cuenta).
+        pick = _pick_tenis(seleccion)
+        pick.fecha_evento = datetime.now() - timedelta(hours=5)
+        return pick
+
+    async def test_fixture_reordenado_es_anulada(self):
+        # Kestelboim/Romboli: apostado vs Taverna/Vega (cancelled),
+        # jugado vs Barton/Sanchez (ended) -> anulada.
+        provider = _StubTennisRearranged(
+            cancelled=self._cancelled(
+                "Kestelboim M./Romboli F.",
+                "Rodriguez Taverna S./Vega Hernandez D.",
+            ),
+            home_sets=2,
+            away_sets=1,
+            sets=[(4, 6), (7, 6), (10, 8)],
+            home="Kestelboim M./Romboli F.",
+            away="Barton H./Sanchez Izquierdo I.",
+        )
+        pick = self._pick("Kestelboim/Romboli gana")
+        pick.evento = "CHALLENGER SZCZECIN DOBLES"
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, True)
+
+    async def test_mismo_fixture_cancelado_resuelve_normal(self):
+        # La fila cancelada es del MISMO cruce que se jugó (feed
+        # duplicado) -> no es reordenación, resuelve normal.
+        provider = _StubTennisRearranged(
+            cancelled=self._cancelled("Carlos Alcaraz", "Jannik Sinner"),
+            home_sets=2,
+            away_sets=0,
+            sets=[(6, 4), (6, 4)],
+        )
+        pick = self._pick("Alcaraz gana")
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (True, False)
+
+    async def test_sin_cancelado_resuelve_normal(self):
+        provider = _StubTennisRearranged(
+            cancelled=None, home_sets=2, away_sets=0, sets=[(6, 4), (6, 4)]
+        )
+        pick = self._pick("Alcaraz gana")
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (True, False)
+
+    async def test_cancelado_de_otra_pareja_no_dispara(self):
+        # El cancelado no involucra a la pareja apostada.
+        provider = _StubTennisRearranged(
+            cancelled=self._cancelled("Novak Djokovic", "Daniil Medvedev"),
+            home_sets=2,
+            away_sets=0,
+            sets=[(6, 4), (6, 4)],
+        )
+        pick = self._pick("Alcaraz gana")
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (True, False)
+
+
 class TestTennisMarkets:
     """Tenis: sets exactos ("gana 2-0"), over/under y hándicap de juegos
     (con el desglose por sets del proveedor) o de sets."""
