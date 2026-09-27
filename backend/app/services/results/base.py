@@ -11,7 +11,6 @@ import json
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import date as date_type
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -331,8 +330,8 @@ def _load_state() -> dict[str, dict[str, str]]:
 
 
 def _save_state() -> None:
-    today = date_type.today().isoformat()
-    cutoff = (date_type.today() - _MISSED_TTL).isoformat()
+    today = utc_now().date().isoformat()
+    cutoff = (utc_now().date() - _MISSED_TTL).isoformat()
     state = _load_state()
     # Podar entradas viejas para que el archivo no crezca sin límite.
     state["rate_limited"] = {
@@ -340,7 +339,7 @@ def _save_state() -> None:
     }
     state["missed"] = {k: v for k, v in state["missed"].items() if v >= cutoff}
     # Contadores de llamadas: retener solo la última semana.
-    calls_cutoff = (date_type.today() - timedelta(days=7)).isoformat()
+    calls_cutoff = (utc_now().date() - timedelta(days=7)).isoformat()
     state["calls"] = {k: v for k, v in state["calls"].items() if k >= calls_cutoff}
     try:
         _STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
@@ -356,7 +355,7 @@ def count_provider_call(provider_name: str) -> None:
     vigilar el volumen ante Cloudflare (sofascore_direct) y el
     consumo real de cada suscripción.
     """
-    today = date_type.today().isoformat()
+    today = utc_now().date().isoformat()
     calls = _load_state()["calls"].setdefault(today, {})
     calls[provider_name] = int(calls.get(provider_name, 0)) + 1
     _save_state()
@@ -412,7 +411,7 @@ def mark_rate_limited(
     primera marca de día completo dispara push a admins — un cooldown
     no notifica: en una ráfaga sería spam.
     """
-    today = date_type.today().isoformat()
+    today = utc_now().date().isoformat()
     state = _load_state()["rate_limited"]
     if state.get(provider_name) == today:
         return  # aparcado el día entero: no degradar a cooldown
@@ -515,7 +514,10 @@ def providers_snapshot() -> dict:
         if provider == "empty":
             provider = "eventos-sin-mercados"
         missed_by_provider[provider] = missed_by_provider.get(provider, 0) + 1
-    today = date_type.today().isoformat()
+    # El state guarda fechas UTC (utc_now); filtrar con la fecha local
+    # vacía la vista durante las ~2h tras medianoche local en las que
+    # aún no cambió el día UTC.
+    today = utc_now().date().isoformat()
     calls = state.get("calls", {})
     now = utc_now()
     # Solo bloqueos activos: un cooldown ya expirado (timestamp pasado)
@@ -545,7 +547,7 @@ def is_rate_limited(provider_name: str) -> bool:
     if not raw:
         return False
     if "T" not in raw:
-        return raw == date_type.today().isoformat()
+        return raw == utc_now().date().isoformat()
     try:
         return datetime.fromisoformat(raw) > utc_now()
     except ValueError:
@@ -602,7 +604,7 @@ def is_missed(key: str, ttl: Optional[timedelta] = None) -> bool:
     if checked_on is None:
         return False
     if ttl is None:
-        return checked_on >= (date_type.today() - _MISSED_TTL).isoformat()
+        return checked_on >= (utc_now().date() - _MISSED_TTL).isoformat()
     return checked_on >= (utc_now() - ttl).isoformat()
 
 

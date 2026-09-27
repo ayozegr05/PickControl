@@ -3009,3 +3009,54 @@ class TestHandicapLineaEnSeleccion:
         pick = _pick("Levante", "hándicap asiático", linea=None)
         acierto, _ = await verify_pick(pick, [provider])
         assert acierto is None
+
+
+class TestBttsFuturo:
+    """'Ambos equipos anotarán' (futuro) — caso #2499: el patrón solo
+    aceptaba 'marcan/anotan' en presente."""
+
+    async def test_ambos_anotaran_acierto(self):
+        provider = _StubProvider(_match(5, 2))
+        pick = _pick("Ambos equipos anotarán", "ambos equipos anotarán")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_ambos_anotaran_fallo(self):
+        provider = _StubProvider(_match(3, 0))
+        pick = _pick("Ambos equipos anotarán", "ambos equipos anotarán")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+
+class TestAmbiguousHighLineCorners:
+    """'Más de 8.0' sin sujeto (OCR de slip): la línea alta ambigua se
+    resuelve contra córners cuando hay proveedor de stats — el dato
+    decide, no el marcador (caso #762)."""
+
+    def _stats(self, corners: tuple[int, int]) -> MatchStats:
+        return MatchStats(
+            home_team="Levante",
+            away_team="Real Betis",
+            values={"Corner Kicks": corners},
+        )
+
+    async def test_over_alto_con_stats_corners_acierto(self):
+        provider = _StubStatsProvider(self._stats((7, 2)))  # 9 córners
+        pick = _pick("Más de 8.0", "over/under", linea=8.0)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert acierto is True
+        assert anulada is False
+
+    async def test_over_alto_con_stats_corners_fallo(self):
+        provider = _StubStatsProvider(self._stats((3, 2)))  # 5 córners
+        pick = _pick("Más de 8.0", "over/under", linea=8.0)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_over_alto_sin_stats_sigue_pendiente(self):
+        # Sin proveedor de stats no se resuelve contra el marcador
+        # aunque el partido exista (nunca se falsea con goles).
+        provider = _StubProvider(_match(0, 0))
+        pick = _pick("Más de 8.0", "over/under", linea=8.0)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is None
