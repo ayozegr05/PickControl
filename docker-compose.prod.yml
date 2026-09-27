@@ -52,6 +52,9 @@ services:
       # checkcoast_default el alias `db` resuelve al Postgres de checkcoast.
       DATABASE_URL: postgresql+asyncpg://postgres:${DB_PASSWORD}@controlpick-db:5432/controlpick
       NODE_ENV: production
+      # Chromium anti-Cloudflare interno (servicio `flaresolverr` de
+      # abajo): fallback de fetch del investigador Gemini.
+      FLARESOLVERR_URL: http://flaresolverr:8191
     ports:
       - "8000:8000"
     networks:
@@ -75,6 +78,25 @@ services:
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
     # --workers 1: los loops (verifier/snapshotter/Telethon) viven en
     # proceso; con más workers arrancarían duplicados.
+
+  flaresolverr:
+    image: flaresolverr/flaresolverr:latest
+    container_name: controlpick-flaresolverr
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Sin `ports:` — solo alcanza el backend por la red interna. Nunca
+    # se expone a internet: es un proxy de renderizado abierto.
+    environment:
+      LOG_LEVEL: info
+      # El HTML de respuesta puede ser grande; sin límite.
+      MAX_TIMEOUT_MS: "60000"
+    # Límite duro: un Chromium resolviendo un challenge nunca puede
+    # ahogar a los otros 5 contenedores (la VM tiene ~5.8 GB).
+    mem_limit: 1300m
 
 volumes:
   db_data:

@@ -122,6 +122,11 @@ class Settings(BaseSettings):
     # fixtures cancelados/aplazados/walkover citando fuentes fiables
     # cuando la cascada entera falla. Sin key no se registra.
     google_api_key: str | None = None
+    # FlareSolverr (contenedor propio en la VM): Chromium headless que
+    # resuelve challenges de Cloudflare y devuelve el HTML renderizado.
+    # Fallback de los fetches del investigador cuando el fetch directo
+    # recibe 403/challenge (totalcorner, sofascore...). Vacío = off.
+    flaresolverr_url: str | None = None
     # Notificaciones push vía Expo Push API (gratis, sin Firebase para
     # el caso básico). `push_notifications_enabled` apaga el envío sin
     # tocar código (dev/tests); `expo_access_token` solo hace falta para
