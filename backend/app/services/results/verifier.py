@@ -190,7 +190,10 @@ _MARKDOWN_NOISE = re.compile(r"[*_~`]+")
 # Se conserva "/": en tenis separa a los miembros de una pareja de
 # dobles ("Alcaraz / Munar") y el matching por parejas lo necesita.
 _NON_TEAM_CHARS = re.compile(r"[^\w\sÁÉÍÓÚÑáéíóúñ.'/-]", re.UNICODE)
-_HANDICAP_KEYWORDS = re.compile(r"h[aá]nd(?:icap)?\.?\s*asi[aá]tico", re.IGNORECASE)
+_HANDICAP_KEYWORDS = re.compile(
+    r"h[aá]nd(?:icap)?\.?\s*asi[aá]tico|goles?\s+de\s+ventaja",
+    re.IGNORECASE,
+)
 _LINEA_PATTERN = re.compile(r"[+-]\s?\d+(?:[.,]\d+)?")
 
 # Sujeto de una línea over/under que NO se puede resolver con el
@@ -2019,7 +2022,20 @@ async def verify_pick(
                 match.home_score == pred_home and match.away_score == pred_away
             ), False
 
-    if es_handicap and pick.linea is not None:
+    if es_handicap:
+        # La línea puede venir solo dentro de la selección ("Barcelona
+        # -2 goles de ventaja"): el extractor OCR a veces no la separa
+        # al campo `linea`. Se intenta recuperar del texto.
+        linea_h = pick.linea
+        if linea_h is None and pick.seleccion:
+            m_line = _LINEA_PATTERN.search(pick.seleccion)
+            if m_line:
+                try:
+                    linea_h = float(m_line.group(0).replace(" ", "").replace(",", "."))
+                except ValueError:
+                    linea_h = None
+        if linea_h is None:
+            return None, False
         team_hint = _extract_handicap_team(pick.seleccion)
         if not team_hint:
             return None, False
@@ -2032,7 +2048,7 @@ async def verify_pick(
             match = _ht_view(match)
             if not match:
                 return None, False
-        return _resolve_asian_handicap(match, team_hint, pick.linea)
+        return _resolve_asian_handicap(match, team_hint, linea_h)
 
     if es_over_under and pick.linea is not None:
         ou_text = f"{pick.seleccion or ''} {pick.mercado or ''}"

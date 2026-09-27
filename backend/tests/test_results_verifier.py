@@ -2975,3 +2975,37 @@ class TestMatchTeamScoresTraduccion:
             True,
             False,
         )
+
+
+class TestHandicapLineaEnSeleccion:
+    """La línea del hándicap puede quedarse dentro de la selección OCR
+    ("Barcelona -2 goles de ventaja") con `linea` a NULL — debe
+    extraerse del texto (caso pata #4018)."""
+
+    async def test_linea_embebida_resuelve(self):
+        provider = _StubProvider(_match(5, 2))  # Barcelona 5-2
+        pick = _pick(
+            "Levante -2 goles de ventaja",
+            "hándicap asiático",
+            linea=None,
+        )
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert acierto is True
+        assert anulada is False
+
+    async def test_linea_embebida_push(self):
+        provider = _StubProvider(_match(3, 1))  # margen exacto 2 -> push
+        pick = _pick(
+            "Levante -2 goles de ventaja",
+            "hándicap asiático",
+            linea=None,
+        )
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert acierto is None
+        assert anulada is True
+
+    async def test_sin_linea_sigue_pendiente(self):
+        provider = _StubProvider(_match(3, 0))
+        pick = _pick("Levante", "hándicap asiático", linea=None)
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is None
