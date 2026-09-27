@@ -432,6 +432,18 @@ def mark_rate_limited(
     )
 
 
+def mark_cooldown(provider_name: str, until: datetime) -> None:
+    """Registra un cooldown ya calculado por el provider para la vista
+    de sistema (p. ej. el de 20 min de Gemini por RPM del free tier).
+
+    A diferencia de `mark_rate_limited` no decide nada — el provider ya
+    se pausó solo; esto solo lo hace visible en `providers_snapshot`
+    como bloqueo activo hasta `until`. Nunca notifica ni aparca el día.
+    """
+    _load_state()["rate_limited"][provider_name] = until.isoformat()
+    _save_state()
+
+
 def mark_rate_limited_escalating(
     provider_name: str, base_hours: int = 24, max_hours: int = 168
 ) -> None:
