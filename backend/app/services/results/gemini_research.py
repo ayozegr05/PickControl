@@ -139,6 +139,7 @@ _ALLOWED_DOMAINS = (
     "oddspedia.com",
     "betsapi.com",
     "bsportsfan.com",
+    "ceroacero.es",
 )
 
 # Estados "no jugado" que el modelo puede devolver -> normalizado.
@@ -485,7 +486,12 @@ class GeminiResearchProvider:
     def _sport_es(self) -> str:
         return _SPORT_ES.get(self._sport, self._sport)
 
-    async def _search_urls(self, date: datetime, hint: str) -> list[str]:
+    async def _search_urls(
+        self,
+        date: datetime,
+        hint: str,
+        priority_terms: Optional[list[str]] = None,
+    ) -> list[str]:
         """Salto 1: búsqueda -> URLs fiables del partido.
 
         Los buscadores bloquean la IP del servidor (DDG 403, Bing
@@ -504,7 +510,11 @@ class GeminiResearchProvider:
         sí. La query usa el hint sin conectores; el original queda en
         el prompt como contexto del partido."""
         q_hint = re.sub(r"\s+(?:vs\.?|v)\s+|\s+[-—–]\s+", " ", hint).strip()
-        queries = [
+        # Queries dirigidas a dominios de nicho (totalcorner, oddspedia):
+        # en la rama de stats van PRIMERO — una página genérica sin tabla
+        # de córners no sirve aunque esté indexada antes.
+        queries = [f"{q_hint} {t}" for t in (priority_terms or [])]
+        queries += [
             f"{q_hint} {self._sport_es()}",
             f"{q_hint} {self._sport_es()} {date.strftime('%B %Y')}",
             # Con "stats" en la query DDG saca los agregadores de nicho
@@ -901,7 +911,19 @@ class GeminiResearchProvider:
         hint = (team_hint or "").strip()
         if not hint:
             return None
-        urls = await self._search_urls(date, hint)
+        # Queries dirigidas a los agregadores de nicho que SÍ publican
+        # tabla de stats (córners incluidos) — una crónica sin tabla no
+        # resuelve mercados de estadística.
+        priority = (
+            [
+                "totalcorner corners",
+                "oddspedia statistics corners",
+                "footystats corners",
+            ]
+            if self._sport == "fútbol"
+            else None
+        )
+        urls = await self._search_urls(date, hint, priority_terms=priority)
         for url in urls:
             text = await self._fetch_page_text(url)
             if not text:
