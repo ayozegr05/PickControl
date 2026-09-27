@@ -128,7 +128,7 @@ con las URLs de resultados de búsqueda que hablen de ESE partido (máx.
 _VERIFY_PROMPT = """Lee estas páginas de resultados deportivos:
 {urls}
 
-Comprueba si este partido se disputó:
+Comprueba el estado y marcador de este partido:
 - Deporte: {sport}
 - Partido/pista: {hint}
 - Fecha: {date}
@@ -136,12 +136,18 @@ Comprueba si este partido se disputó:
 Responde SOLO con JSON válido, sin markdown:
 {{"status": "played|cancelled|postponed|walkover|unknown",
  "home_team": "<equipo/jugador 1>", "away_team": "<equipo/jugador 2>",
+ "home_score": <entero o null>, "away_score": <entero o null>,
+ "sets": [[<juegos_home>,<juegos_away>], ...] o null,
  "sources": ["<url1>"]}}
 
 Reglas:
-- "cancelled"/"postponed"/"walkover" SOLO si alguna de las páginas lo
-  muestra explícitamente (Canc., PPD, Walkover, Retired...).
-- "played" si se disputó con marcador conocido.
+- "played" SOLO si alguna página muestra el partido terminado con
+  marcador: copia el marcador EXACTO tal como aparece (en tenis
+  home_score/away_score son sets ganados y "sets" los juegos de cada
+  set; en fútbol/baloncesto son goles/puntos finales). null si la
+  página no muestra el número — nunca inventes un marcador.
+- "cancelled"/"postponed"/"walkover" SOLO si alguna página lo muestra
+  explícitamente (Canc., PPD, Walkover, Retired...).
 - "unknown" si las páginas no hablan del partido o no son claras.
 - "sources" lista SOLO las URLs de las páginas anteriores que lo
   confirman (nunca inventes URLs)."""
@@ -295,10 +301,11 @@ class GeminiResearchProvider:
         urls = [str(u) for u in (data.get("urls") or []) if u]
         return _filter_trusted_urls(urls)[:_MAX_VERIFIED_URLS]
 
-    async def _verify_on_urls(
+    async def _verify_data(
         self, date: datetime, hint: str, urls: list[str]
-    ) -> Optional[MatchState]:
-        """Salto 2: el modelo lee SOLO las URLs fiables y reporta estado."""
+    ) -> Optional[dict[str, Any]]:
+        """Salto 2: el modelo lee SOLO las URLs fiables y reporta
+        estado + marcador. None si no hay cita de una página leída."""
         payload = await self._ask(
             _VERIFY_PROMPT.format(
                 urls="\n".join(f"- {u}" for u in urls),
@@ -312,9 +319,6 @@ class GeminiResearchProvider:
         data = _extract_json(self._payload_text(payload))
         if not data:
             return None
-        status = _VOID_ALIASES.get(str(data.get("status") or "").lower().strip())
-        if status is None:
-            return None
         # Anti-alucinación: la cita debe ser una de las páginas fiables
         # que le dimos (o que url_context confirma haber leído).
         read_urls = set(urls) | set(self._payload_urls(payload))
@@ -327,17 +331,35 @@ class GeminiResearchProvider:
                 (data.get("sources") or [])[:3],
             )
             return None
-        logger.info(
-            "[GEMINI] '%s': fixture %s confirmado por %s",
-            hint,
-            status,
-            sources[:3],
-        )
-        return MatchState(
-            home_team=str(data.get("home_team") or hint),
-            away_team=str(data.get("away_team") or ""),
-            status=status,
-        )
+        data["sources"] = sources
+        return data
+
+    @staticmethod
+    def _score_pair(data: dict[str, Any]) -> Optional[tuple[int, int]]:
+        """Marcador validado: dos enteros >= 0 o None."""
+        try:
+            home = int(data["home_score"])
+            away = int(data["away_score"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        return (home, away) if home >= 0 and away >= 0 else None
+
+    @staticmethod
+    def _sets_pair(data: dict[str, Any]) -> Optional[list[tuple[int, int]]]:
+        """Sets (juegos por set) validados o None."""
+        raw = data.get("sets")
+        if not isinstance(raw, list) or not raw:
+            return None
+        sets: list[tuple[int, int]] = []
+        for item in raw:
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                return None
+            try:
+                h, a = int(item[0]), int(item[1])
+            except (TypeError, ValueError):
+                return None
+            sets.append((h, a))
+        return sets
 
     async def find_postponed_match(
         self, date: datetime, team_hint: str
@@ -357,8 +379,72 @@ class GeminiResearchProvider:
         if not urls:
             logger.info("[GEMINI] '%s': búsqueda sin URLs fiables", hint)
             return None
-        return await self._verify_on_urls(date, hint, urls)
+        data = await self._verify_data(date, hint, urls)
+        if not data:
+            return None
+        status = _VOID_ALIASES.get(str(data.get("status") or "").lower().strip())
+        if status is None:
+            return None
+        logger.info(
+            "[GEMINI] '%s': fixture %s confirmado por %s",
+            hint,
+            status,
+            data["sources"][:3],
+        )
+        return MatchState(
+            home_team=str(data.get("home_team") or hint),
+            away_team=str(data.get("away_team") or ""),
+            status=status,
+        )
 
     async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:
-        """Fase 1: nunca liquida resultados — solo estados no jugados."""
-        return None
+        """Fase 2: liquida "played" con marcador citado + doble lectura.
+
+        Dos verificaciones independientes sobre las mismas URLs deben
+        coincidir en marcador (y sets si los da) — si difieren, la
+        respuesta se descarta y el pick sigue pendiente. Es el último
+        recurso de la cascada: solo ve los fixtures que ningún
+        proveedor determinista encontró.
+        """
+        if is_rate_limited(_PROVIDER_NAME):
+            return None
+        hint = (team_hint or "").strip()
+        if not hint:
+            return None
+        urls = await self._search_urls(date, hint)
+        if not urls:
+            return None
+        first = await self._verify_data(date, hint, urls)
+        if not first or str(first.get("status")).lower().strip() != "played":
+            return None
+        score = self._score_pair(first)
+        if score is None:
+            return None
+        second = await self._verify_data(date, hint, urls)
+        if not second or str(second.get("status")).lower().strip() != "played":
+            logger.info("[GEMINI] '%s': doble lectura no confirma played", hint)
+            return None
+        score2 = self._score_pair(second)
+        sets = self._sets_pair(first)
+        if score2 != score or (sets is not None and self._sets_pair(second) != sets):
+            logger.warning(
+                "[GEMINI] '%s': lecturas discrepan %s vs %s — descartado",
+                hint,
+                score,
+                score2,
+            )
+            return None
+        logger.info(
+            "[GEMINI] '%s': played %s-%s confirmado x2 por %s",
+            hint,
+            score[0],
+            score[1],
+            first["sources"][:3],
+        )
+        return MatchResult(
+            home_team=str(first.get("home_team") or hint),
+            away_team=str(first.get("away_team") or ""),
+            home_score=score[0],
+            away_score=score[1],
+            sets=sets,
+        )

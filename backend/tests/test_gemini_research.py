@@ -172,6 +172,99 @@ class TestFindPostponedMatch:
         state = await provider.find_postponed_match(_DATE, "Kestelboim/Romboli")
         assert state is None
 
-    async def test_find_match_nunca_liquida(self, provider):
-        # Fase 1: sin resolución de marcadores, siempre None.
+
+def _stub_seq(payloads: list):
+    queue = list(payloads)
+
+    async def fake(*a, **k):
+        return queue.pop(0) if queue else None
+
+    return fake
+
+
+def _played_answer(home: int, away: int, sets=None) -> str:
+    return json.dumps(
+        {
+            "status": "played",
+            "home_team": "Kestelboim M./Romboli F.",
+            "away_team": "Barton H./Sanchez Izquierdo N.",
+            "home_score": home,
+            "away_score": away,
+            "sets": sets,
+            "sources": [_SOFA_URL],
+        }
+    )
+
+
+class TestFindMatch:
+    async def test_played_con_doble_lectura_liquida(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_SOFA_URL]))
+        payload = _payload(_played_answer(2, 1, sets=[[6, 4], [3, 6], [7, 5]]))
+        monkeypatch.setattr(provider, "_ask", _stub(payload))
+        result = await provider.find_match(_DATE, "Kestelboim/Romboli")
+        assert result is not None
+        assert (result.home_score, result.away_score) == (2, 1)
+        assert result.sets == [(6, 4), (3, 6), (7, 5)]
+
+    async def test_lecturas_discrepantes_descartan(self, provider, monkeypatch):
+        # Anti-alucinación Fase 2: dos lecturas que no coinciden -> None.
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_SOFA_URL]))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub_seq(
+                [
+                    _payload(_played_answer(2, 1)),
+                    _payload(_played_answer(1, 2)),
+                ]
+            ),
+        )
+        assert await provider.find_match(_DATE, "Kestelboim/Romboli") is None
+
+    async def test_played_sin_marcador_no_liquida(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_SOFA_URL]))
+        text = json.dumps(
+            {
+                "status": "played",
+                "home_team": "A",
+                "away_team": "B",
+                "home_score": None,
+                "away_score": None,
+                "sources": [_SOFA_URL],
+            }
+        )
+        monkeypatch.setattr(provider, "_ask", _stub(_payload(text)))
+        assert await provider.find_match(_DATE, "x") is None
+
+    async def test_played_sin_fuente_leida_no_liquida(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_SOFA_URL]))
+        text = json.dumps(
+            {
+                "status": "played",
+                "home_team": "A",
+                "away_team": "B",
+                "home_score": 3,
+                "away_score": 1,
+                "sources": ["https://blog-inventado.io/x"],
+            }
+        )
+        monkeypatch.setattr(provider, "_ask", _stub(_payload(text)))
+        assert await provider.find_match(_DATE, "x") is None
+
+    async def test_unknown_no_liquida(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_SOFA_URL]))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(_payload(_answer("unknown", [_SOFA_URL]))),
+        )
+        assert await provider.find_match(_DATE, "x") is None
+
+    async def test_sin_urls_no_consulta(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([]))
+
+        async def no_debe_llamarse(*a, **k):
+            raise AssertionError("_ask no debería llamarse sin URLs")
+
+        monkeypatch.setattr(provider, "_ask", no_debe_llamarse)
         assert await provider.find_match(_DATE, "x") is None
