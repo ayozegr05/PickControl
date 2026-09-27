@@ -90,7 +90,10 @@ _ALLOWED_DOMAINS = (
     "sport.es",
     "mundodeportivo.com",
     # Agregadores de resultados de segunda línea: menos fiables que los
-    # de arriba pero válidos cuando la doble lectura coincide.
+    # de arriba pero válidos cuando la doble lectura coincide. Los de
+    # nicho (stats de córners, fútbol femenino, Challenger) son los que
+    # dan cobertura donde los grandes no llegan — la validación literal
+    # del dato contra el HTML hace irrelevante su menor reputación.
     "aiscore.com",
     "tennisexplorer.com",
     "tennis24.com",
@@ -98,6 +101,27 @@ _ALLOWED_DOMAINS = (
     "basketball24.com",
     "scores24.live",
     "scorebar.com",
+    "fotmob.com",
+    "globalsportsarchive.com",
+    "soccerdonna.de",
+    "worldfootball.net",
+    "betexplorer.com",
+    "oddsportal.com",
+    "footystats.org",
+    "soccerstats.com",
+    "totalcorner.com",
+    "corner-stats.com",
+    "fctables.com",
+    "footballant.com",
+    "777score.com",
+    "xscores.com",
+    "diretta.it",
+    "livesport.com",
+    "matchstat.com",
+    "live-tennis.eu",
+    "coretennis.net",
+    "scorebing.com",
+    "azscore.com",
 )
 
 # Estados "no jugado" que el modelo puede devolver -> normalizado.
