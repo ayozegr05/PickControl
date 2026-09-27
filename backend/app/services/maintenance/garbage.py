@@ -182,7 +182,7 @@ _CUOTA_WORD_RE = re.compile(r"cuota", re.IGNORECASE)
 # Los canales pegan el link de afiliado en el footer de CADA pick
 # ("Apuesta con responsabilidad...") — el discriminador entre pick
 # real y post promocional es que el pick declara STAKE.
-_STAKE_WORD_RE = re.compile(r"stake", re.IGNORECASE)
+_STAKE_WORD_RE = re.compile(r"\bstak\w*", re.IGNORECASE)
 
 _TEASER_CTA_RE = re.compile(r"crear?\s+apuesta", re.IGNORECASE)
 # Si el texto trae vocabulario de mercado no es un teaser vacío.

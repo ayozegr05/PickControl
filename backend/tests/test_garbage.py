@@ -249,17 +249,21 @@ class TestSlipLiquidadoYTeaser:
         # Los canales pegan "REGÍSTRATE...DESDE AQUÍ (bdeal.io)" al pie
         # de CADA pick. Con STAKE declarado el link es footer, no promo
         # (caso real: msgs 78737/13328 — picks legítimos flaggeados).
-        raw = _raw(
-            datetime(2026, 9, 12, 8, 10),
-            text="🔘 STAKE 3 ⚽ PREMIER LEAGUE\n"
-            "🍀 ASTON VILLA RESULTADO SIN EMPATE\n"
-            "🔞 Apuesta con responsabilidad "
-            "[REGÍSTRATE, JUEGA 30€ Y GANA 200€ DESDE AQUÍ]"
-            "(https://bdeal.io/10128/ALLSPORTS)",
-        )
-        assert all(
-            a.reason != "promo_afiliado" for a in garbage._analyze_raw(raw, [_pick()])
-        )
+        # Incluye los typos del tipster: STAKAZO/STAKAZE cuentan como
+        # stake declarado (msgs 13192/13657 reales).
+        for stake in ("STAKE 3", "STAKAZO 20", "STAKAZE 4"):
+            raw = _raw(
+                datetime(2026, 9, 12, 8, 10),
+                text=f"🔘 {stake} ⚽ PREMIER LEAGUE\n"
+                "🍀 ASTON VILLA RESULTADO SIN EMPATE\n"
+                "🔞 Apuesta con responsabilidad "
+                "[REGÍSTRATE, JUEGA 30€ Y GANA 200€ DESDE AQUÍ]"
+                "(https://bdeal.io/10128/ALLSPORTS)",
+            )
+            assert all(
+                a.reason != "promo_afiliado"
+                for a in garbage._analyze_raw(raw, [_pick()])
+            )
 
     def test_teaser_con_slip_adjunto_no_flag(self):
         # Foto + texto "crear apuesta": el OCR del slip lista las patas
