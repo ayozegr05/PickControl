@@ -302,6 +302,19 @@ class TestTennisStatMarkets:
         acierto, anulada = await verify_pick(pick, [_StubTennisStatsProvider(stats)])
         assert (acierto, anulada) == (True, False)  # 14 < 25.5
 
+    async def test_aces_over_con_linea_precargada(self):
+        # Regresión #3629: linea ya guardada (24.5) + mercado
+        # "over/under" ambiguo — el "25+" de la selección marca over.
+        stats = MatchStats(
+            home_team="V. Vacherot",
+            away_team="L. Harris",
+            values={"Aces": (4, 16)},
+        )
+        pick = self._pick("25+ aces en el partido")
+        pick.linea = 24.5
+        acierto, anulada = await verify_pick(pick, [_StubTennisStatsProvider(stats)])
+        assert (acierto, anulada) == (False, False)  # 20 <= 24.5
+
     async def test_aces_sin_stats_queda_pendiente(self):
         acierto, anulada = await verify_pick(
             self._pick("25+ aces en el partido"),
