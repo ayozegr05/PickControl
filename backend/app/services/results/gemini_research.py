@@ -140,6 +140,9 @@ _ALLOWED_DOMAINS = (
     "betsapi.com",
     "bsportsfan.com",
     "ceroacero.es",
+    # FotMob sirve directo (sin Cloudflare) y embebe __NEXT_DATA__ con
+    # marcador, estado y eventos — cubre ligas que ningún provider toca.
+    "fotmob.com",
 )
 
 # Estados "no jugado" que el modelo puede devolver -> normalizado.
