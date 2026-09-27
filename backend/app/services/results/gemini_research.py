@@ -35,6 +35,7 @@ from app.services.results.base import (
     MatchResult,
     MatchState,
     MatchStats,
+    fold_name,
     is_rate_limited,
     rate_limit_from,
 )
@@ -264,6 +265,21 @@ Reglas:
 - "unknown" si las páginas no hablan del partido o no son claras.
 - "sources" lista SOLO las URLs de las páginas anteriores que lo
   confirman (nunca inventes URLs)."""
+
+_FIXTURE_PROMPT = """Texto extraído de una página de resultados de {sport}:
+
+{text}
+
+Localiza el partido que jugó {player} en "{hint}" (fecha: {date}).
+
+Responde SOLO con JSON válido, sin markdown:
+{{"fixture": "<participante A> vs <participante B>" o null}}
+
+Reglas:
+- "fixture" son los DOS participantes del partido de {player}; en
+  dobles, las dos parejas ("A / B vs C / D"). Usa los nombres tal como
+  aparecen en la página.
+- null si la página no muestra ese partido — nunca inventes el cruce."""
 
 
 def _domains_of(urls: list[str]) -> set[str]:
@@ -763,6 +779,61 @@ class GeminiResearchProvider:
             ):
                 return True
         return False
+
+    async def find_fixture(
+        self, date: datetime, player_hint: str, tournament: Optional[str] = None
+    ) -> Optional[str]:
+        """Reconstruye el evento de un pick que solo guardó el torneo.
+
+        Patas tipo "CHALLENGER BIELLA" sin rival: el tipster no escribió
+        el cruce, pero jugador+torneo+fecha suelen bastar para ubicarlo
+        en un agregador. La respuesta se valida exigiendo que el fixture
+        contenga el apellido del jugador — un cruce alucinado no pasa.
+
+        Devuelve "A vs B" (o "A / B vs C / D" en dobles) o None.
+        """
+        if self._in_cooldown():
+            return None
+        player = (player_hint or "").strip()
+        hint = f"{player} {tournament or ''}".strip()
+        if not hint or not player:
+            return None
+        urls = await self._search_urls(date, hint)
+        for url in urls:
+            text = await self._fetch_page_text(url)
+            if not text:
+                continue
+            payload = await self._ask(
+                _FIXTURE_PROMPT.format(
+                    text=text[:_PAGE_CHARS_PER_URL],
+                    sport=self._sport_es(),
+                    player=player,
+                    hint=hint,
+                    date=date.strftime("%d de %B de %Y"),
+                )
+            )
+            if payload is None:
+                continue
+            data = _extract_json(self._payload_text(payload))
+            if not data:
+                continue
+            fixture = str(data.get("fixture") or "").strip()
+            if not fixture:
+                continue
+            # Anti-alucinación: el cruce debe contener algún token del
+            # jugador ("De Jong" basta con "jong"; "Brunold" entero).
+            fixture_fold = fold_name(fixture)
+            tokens = [t for t in fold_name(player).split() if len(t) >= 4]
+            if not any(t in fixture_fold for t in tokens):
+                continue
+            logger.info(
+                "[GEMINI] fixture de '%s' reconstruido: %s (%s)",
+                hint,
+                fixture,
+                url,
+            )
+            return fixture
+        return None
 
     async def find_match_stats(
         self, date: datetime, team_hint: str

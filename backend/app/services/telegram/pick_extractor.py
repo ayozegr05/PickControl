@@ -253,7 +253,7 @@ def _classify_leg_market(leg: str) -> Optional[str]:
     low = leg.lower()
     if re.search(r"h[aá]ndicap|handicap", low):
         return "hándicap asiático"
-    if re.search(r"doble\s+oportunidad|double\s*chance", low):
+    if re.search(r"doble\s+oportunidad|double\s*chance|\b1x\b|\bx2\b", low):
         return "doble oportunidad"
     if re.search(
         r"empate\s+no\s+v[aá]lido|resultado\s+sin\s+empate|draw\s+no\s+bet", low
@@ -281,7 +281,7 @@ def _classify_leg_market(leg: str) -> Optional[str]:
 # cabecera del torneo. Un cruce real nombra dos participantes, no
 # vocabulario de competición.
 _COMPETITION_WORD = re.compile(
-    r"\b(?:copa|liga|league|divisi[oó]n|challenger|atp|wta|itf|"
+    r"\b(?:copa|liga|league|divisi[oó]n|challenger|chall\.?|atp|wta|itf|"
     r"champions|euroleague|euroliga|nba|torneo|premier|bundesliga|"
     r"eredivisie|serie\s+a|ligue|mls|europa\s+league|segunda|primera)\b",
     re.IGNORECASE,
@@ -444,6 +444,47 @@ def _patas_from_joined(pick: ExtractedPick) -> list[ExtractedPick]:
     return patas
 
 
+# El extractor solía colar como patas las cabeceras de torneo
+# ("CHALL MOUILLERON", "WTA GUADALAJARA") y los eslóganes del pie del
+# mensaje ("Siempre con cabeza", "Apuesta con responsabilidad").
+_PATA_FOOTER_NOISE = re.compile(
+    r"siempre\s+con\s+cabeza|juega\s+con\s+cabeza|"
+    r"con\s+responsabilidad|juega\s+seguro|juego\s+responsable",
+    re.IGNORECASE,
+)
+
+
+# Un nombre propio suelto ("Juventus", "Nagal") sí puede ser una pata
+# real: "ganador" implícito en acumuladores de texto plano.
+_BARE_NAME = re.compile(
+    r"[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.'-]*" r"(?:\s+[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.'-]*)*"
+)
+
+
+def _is_noise_pata(pata: ExtractedPick) -> bool:
+    """True si la "pata" no es una selección real del boleto.
+
+    Una selección siempre trae un mercado/línea ("Neumayer gana",
+    "Más de 2 goles", "Barcelona -2") o al menos la etiqueta de mercado
+    que le asignó el LLM. Las cabeceras de torneo ("CHALL MOUILLERON"),
+    eslóganes del pie ("Siempre con cabeza") y fragmentos sueltos sin
+    señal no son patas: el extractor los colaba y el boleto quedaba
+    bloqueado en pendiente para siempre.
+    """
+    sel = (pata.seleccion or "").strip()
+    if not sel or _PATA_FOOTER_NOISE.search(sel):
+        return True
+    if _LEG_MARKET_WORD.search(sel):
+        return False
+    if pata.linea is not None or _extract_linea(sel) is not None:
+        return False
+    if _COMPETITION_WORD.search(sel):
+        return True
+    # Sin mercado ni línea: solo sobrevive un nombre propio (ganador
+    # implícito) o lo que el LLM etiquetó como selección con mercado.
+    return not pata.mercado and not _BARE_NAME.fullmatch(sel)
+
+
 def _ensure_combinada_shape(
     pick: ExtractedPick, fecha_referencia: Optional[datetime] = None
 ) -> ExtractedPick:
@@ -451,6 +492,8 @@ def _ensure_combinada_shape(
 
     - Rellena `patas` desde el "A + B" de `seleccion` si el LLM no las
       devolvió.
+    - Descarta las "patas" que no son selecciones (cabeceras de torneo,
+      eslóganes del pie) antes de contar.
     - Las patas heredan del padre lo que no tengan (deporte, evento,
       fecha, mercado clasificado, línea).
     - La `fecha_evento` del padre pasa a ser la de la ÚLTIMA pata: la
@@ -463,7 +506,18 @@ def _ensure_combinada_shape(
         return pick
     if not pick.patas:
         pick.patas = _patas_from_joined(pick)
+    pick.patas = [p for p in pick.patas if not _is_noise_pata(p)]
     if len(pick.patas) < 2:
+        if pick.patas:
+            # La "combinada" era una selección simple con ruido alrededor
+            # (cabecera de torneo + selección + eslogan): la pata que
+            # sobrevive ES el pick.
+            pata = pick.patas[0]
+            pick.seleccion = pata.seleccion or pick.seleccion
+            pick.evento = pata.evento or pick.evento
+            pick.mercado = pata.mercado or pick.mercado
+            pick.deporte = pata.deporte or pick.deporte
+            pick.linea = pata.linea if pata.linea is not None else pick.linea
         pick.patas = []
         if pick.mercado and "combinada" in pick.mercado.lower():
             pick.mercado = None
@@ -943,8 +997,11 @@ Reglas:
   Una apuesta abierta real es una recomendación de algo que AÚN no se ha jugado.
 - "seleccion" es SOLO la etiqueta corta del pick (máx ~10 palabras, ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5", "Menos de 3,5 goles"): nunca la frase del análisis ni la justificación — eso va en "explicacion". En mercados de ganador la selección DEBE nombrar al equipo/jugador apostado ("Leyre Romero gana"): nunca frases genéricas sin sujeto como "ganará el encuentro" o "gana el partido" — el nombre apostado suele estar destacado en el texto (negritas, línea propia, ➡️). Si es una combinada/"crear apuesta" (varias selecciones en un mismo boleto), únelas con " + " (ej. "Más de 1 gol + Más de 2 tarjetas").
 - "patas": SOLO si es una combinada/"crear apuesta"/acumulador (varias selecciones en un mismo boleto): un array con UN objeto por selección del boleto, cada uno con la misma estructura {"seleccion", "evento", "mercado", "linea", "deporte", "fecha_evento", "cuota"} y las mismas reglas de formato ("cuota" por pata solo si aparece explícita; si no, null). En una combinada cada pata puede ser de un partido distinto (rellena su "evento" propio) o del mismo partido (bet-builder: repite el mismo "evento" en todas). Si NO es combinada, "patas" = null. Si solo puedes identificar UNA selección, NO es combinada: "patas" = null y trátala como pick simple.
+- Cada pata debe ser una selección REAL con su mercado. NUNCA son patas: cabeceras de torneo o competición ("CHALL MOUILLERON", "WTA GUADALAJARA", "LA LIGA"), eslóganes del mensaje ("Siempre con cabeza", "Apuesta con responsabilidad", "Juega seguro") ni texto de interfaz del boleto ("Cerrar apuesta", "Imp:", "Ganancias", "Sencillas").
+- Si una selección une varias apuestas con "y" o "+" ("Gana Brunold y +7,5 juegos en el 1° set"), sepáralas en patas distintas de una combinada.
+- En hándicap la selección DEBE incluir el equipo/jugador al que aplica la línea ("Barcelona -2"), nunca "Hándicap Asiático -2" a secas: el equipo suele estar en el titular del mercado o entre los participantes del boleto.
 - "evento" es el enfrentamiento concreto (ej. "Sevilla - Barcelona", "Zizou Bergs vs Jurij Rodionov"). Si el texto muestra "EquipoA - EquipoB" o "EquipoA vs EquipoB", usa ese formato completo con ambos — nunca solo uno. Si los dos participantes aparecen sueltos en el texto sin "vs" (p. ej. el rival solo se menciona en el análisis), forma el evento con ambos nombres ("Bergs vs Rodionov"). Si SOLO aparece la competición ("Copa Davis", "LaLiga") sin los dos participantes, usa la competición tal cual (sirve de pista al verificador en tenis). OJO con el OCR de boletos EN VIVO (bet365): el cruce aparece en su propia línea como "EquipoA v EquipoB" o "EquipoA 0 0 EquipoB" (el "0 0" es el marcador en directo, no parte del nombre) — usa ese cruce como "evento", NUNCA la cabecera de liga de arriba ("Italia - Serie A" no es un partido).
-- "mercado" es el tipo de apuesta: usa siempre una de estas etiquetas si aplica: "ganador", "hándicap asiático", "over/under" (o "over/under goles", "over/under juegos" según el deporte). Si es una combinada/"crear apuesta" con varias selecciones, usa "combinada". Si no encaja en ninguna, describe brevemente el mercado.
+- "mercado" es el tipo de apuesta: usa siempre una de estas etiquetas si aplica: "ganador", "hándicap asiático", "over/under" (o "over/under goles", "over/under juegos" según el deporte), "doble oportunidad". OJO: "1X"/"X2"/"12" son doble oportunidad, NO hándicap. Si es una combinada/"crear apuesta" con varias selecciones, usa "combinada". Si no encaja en ninguna, describe brevemente el mercado.
 - "deporte" debe ser una palabra normalizada y simple: "fútbol", "tenis", "baloncesto", etc.
 - "linea" es el valor numérico de la línea cuando el mercado es hándicap asiático u over/under (ej. 1.5, -1.5, 2.5). Con signo si es hándicap (+1.5 a favor del equipo de "seleccion", -1.5 en contra). Sin signo si es over/under. Si el mercado no tiene línea (p. ej. "ganador"), déjalo null.
 - Extrae "cuota" solo si aparece un número claramente asociado a la cuota/odds de la selección.

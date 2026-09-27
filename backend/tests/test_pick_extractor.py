@@ -930,3 +930,81 @@ class TestPatasFromJoined:
         patas = _patas_from_joined(pick)
         assert patas[0].evento == "Juventus vs NEC"
         assert patas[1].evento == "Celtic vs Ferencvarosi TC"
+
+
+class TestNoisePatas:
+    """Las cabeceras de torneo y eslóganes colados como pata bloqueaban
+    combinadas enteras en pendiente (casos #2985, #3887)."""
+
+    def _pata(self, seleccion, mercado=None, linea=None):
+        return ExtractedPick(
+            es_apuesta=True, seleccion=seleccion, mercado=mercado, linea=linea
+        )
+
+    def test_cabecera_torneo_es_ruido(self):
+        from app.services.telegram.pick_extractor import _is_noise_pata
+
+        assert _is_noise_pata(self._pata("CHALL MOUILLERON"))
+        assert _is_noise_pata(self._pata("WTA GUADALAJARA"))
+        assert _is_noise_pata(self._pata("CHALL GÉNOVA"))
+
+    def test_eslogan_es_ruido(self):
+        from app.services.telegram.pick_extractor import _is_noise_pata
+
+        assert _is_noise_pata(self._pata("Siempre con cabeza"))
+        assert _is_noise_pata(self._pata("Apuesta con responsabilidad"))
+
+    def test_pata_real_no_es_ruido(self):
+        from app.services.telegram.pick_extractor import _is_noise_pata
+
+        assert not _is_noise_pata(self._pata("Durand gana"))
+        assert not _is_noise_pata(self._pata("Barcelona -2", linea=-2.0))
+        assert not _is_noise_pata(self._pata("Más de 2 goles"))
+
+    def test_nombre_pelado_es_ganador_implicito(self):
+        from app.services.telegram.pick_extractor import _is_noise_pata
+
+        assert not _is_noise_pata(self._pata("Juventus"))
+
+
+class TestCombinadaConRuido:
+    """Una selección simple troceada (torneo + pick + eslogan) degrada
+    a pick simple adoptando la única pata real."""
+
+    def test_ruido_alrededor_degrada_a_simple(self):
+        from app.services.telegram.pick_extractor import _ensure_combinada_shape
+
+        pick = ExtractedPick(
+            es_apuesta=True,
+            deporte="tenis",
+            evento="Neumayer vs Manzano",
+            mercado="combinada",
+            seleccion="CHALL GÉNOVA + Neumayer gana + Siempre con cabeza",
+        )
+        result = _ensure_combinada_shape(pick)
+        assert result.patas == []
+        assert result.seleccion == "Neumayer gana"
+        assert result.mercado == "ganador"
+
+    def test_dos_patas_reales_siguen_combinada(self):
+        from app.services.telegram.pick_extractor import _ensure_combinada_shape
+
+        pick = ExtractedPick(
+            es_apuesta=True,
+            deporte="tenis",
+            mercado="combinada",
+            seleccion="Brunold gana + +7,5 juegos en el 1° set",
+        )
+        result = _ensure_combinada_shape(pick)
+        assert len(result.patas) == 2
+        assert result.mercado == "combinada"
+
+
+class TestDobleOportunidad1X:
+    """ "Inglaterra 1X" no es hándicap: es doble oportunidad (#3612)."""
+
+    def test_1x_clasifica_doble_oportunidad(self):
+        from app.services.telegram.pick_extractor import _classify_leg_market
+
+        assert _classify_leg_market("Inglaterra 1X") == "doble oportunidad"
+        assert _classify_leg_market("X2 España") == "doble oportunidad"
