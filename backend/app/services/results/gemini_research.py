@@ -35,8 +35,10 @@ from app.services.results.base import (
     MatchResult,
     MatchState,
     MatchStats,
+    count_provider_call,
     fold_name,
     is_rate_limited,
+    mark_cooldown,
     rate_limit_from,
 )
 
@@ -403,6 +405,7 @@ class GeminiResearchProvider:
                     json=body,
                     headers={"x-goog-api-key": self._api_key},
                 )
+            count_provider_call(_PROVIDER_NAME)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
             if rate_limit_from(exc):
@@ -435,6 +438,9 @@ class GeminiResearchProvider:
                 return payload
         if quota_hits:
             self._cooldown_until = utc_now() + _429_COOLDOWN
+            # Visible en /providers como bloqueo activo (timestamp, no
+            # aparcado de día: el cooldown propio de 20 min ya manda).
+            mark_cooldown(_PROVIDER_NAME, self._cooldown_until)
             logger.warning(
                 "[GEMINI] 429 en %d modelos — cooldown %s min",
                 quota_hits,
