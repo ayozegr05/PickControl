@@ -24,7 +24,7 @@ import json
 import re
 from datetime import datetime, timedelta
 from typing import Any, Optional
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus, unquote, urlparse
 
 import httpx
 
@@ -191,23 +191,13 @@ _FETCH_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
 }
 _MAX_PAGE_CHARS = 30000
+_PAGE_CHARS_PER_URL = 15000
 _STATS_VALIDATION_WINDOW = 160
 
-_SEARCH_PROMPT = """Lee esta página de resultados de búsqueda: {search_url}
+_VERIFY_PROMPT = """Textos extraídos de páginas de resultados
+deportivos (cada bloque empieza por la URL de la página):
 
-Busco información sobre este partido concreto:
-- Deporte: {sport}
-- Partido: {hint}
-- Fecha: {date}
-
-Devuelve SOLO JSON válido, sin markdown:
-{{"urls": ["<url1>", "<url2>"]}}
-
-con las URLs de resultados de búsqueda que hablen de ESE partido (máx.
-5), o una lista vacía si ninguno trata de ese partido."""
-
-_VERIFY_PROMPT = """Lee estas páginas de resultados deportivos:
-{urls}
+{pages}
 
 Comprueba el estado y marcador de este partido:
 - Deporte: {sport}
@@ -265,6 +255,30 @@ def _filter_trusted_urls(urls: list[str]) -> list[str]:
     ]
 
 
+def _ddg_result_urls(html: str) -> list[str]:
+    """URLs de resultados de una página DDG Lite.
+
+    Los enlaces salientes van como `uddg=<url-enc>` en los href de
+    redirección; también aceptamos hrefs http(s) directos que no sean
+    del propio buscador. Orden de aparición = orden del resultado.
+    """
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def _add(u: str) -> None:
+        if u.startswith("http") and u not in seen:
+            seen.add(u)
+            urls.append(u)
+
+    for m in re.finditer(r"uddg=([^&\"'<>\s]+)", html):
+        _add(unquote(m.group(1)))
+    for m in re.finditer(r'href="(https?://[^"]+)"', html):
+        host = urlparse(m.group(1)).hostname or ""
+        if "duckduckgo" not in host:
+            _add(m.group(1))
+    return urls
+
+
 def _extract_json(text: str) -> Optional[dict[str, Any]]:
     """Primer objeto JSON del texto (tolera code fences)."""
     m = re.search(r"\{.*\}", text, re.DOTALL)
@@ -305,7 +319,6 @@ class GeminiResearchProvider:
         """Una llamada a generateContent; (payload, resp_429|None)."""
         body = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "tools": [{"url_context": {}}],
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "temperature": 0,
@@ -335,7 +348,7 @@ class GeminiResearchProvider:
         return resp.json(), None
 
     async def _ask(self, prompt: str) -> Optional[dict[str, Any]]:
-        """generateContent con url_context, con fallback de modelos."""
+        """generateContent de texto plano, con fallback de modelos."""
         for model in _MODELS:
             payload, quota_resp = await self._call_model(model, prompt)
             if quota_resp is not None:
@@ -372,33 +385,36 @@ class GeminiResearchProvider:
         return _SPORT_ES.get(self._sport, self._sport)
 
     async def _search_urls(self, date: datetime, hint: str) -> list[str]:
-        """Salto 1: DDG Lite vía url_context -> URLs fiables del partido."""
+        """Salto 1: DDG Lite descargado por nosotros -> URLs fiables.
+
+        La página es HTML estático parseable — no hace falta IA ni el
+        tool url_context (que tiene cuota propia en el free tier)."""
         query = f"{hint} {self._sport_es()} {date.strftime('%d %B %Y')}"
         search_url = f"https://lite.duckduckgo.com/lite/?q={quote_plus(query)}"
-        payload = await self._ask(
-            _SEARCH_PROMPT.format(
-                search_url=search_url,
-                sport=self._sport_es(),
-                hint=hint,
-                date=date.strftime("%d de %B de %Y"),
-            )
-        )
-        if payload is None:
+        html = await self._fetch_html(search_url)
+        if not html:
             return []
-        data = _extract_json(self._payload_text(payload))
-        if not data:
-            return []
-        urls = [str(u) for u in (data.get("urls") or []) if u]
-        return _filter_trusted_urls(urls)[:_MAX_VERIFIED_URLS]
+        return _filter_trusted_urls(_ddg_result_urls(html))[:_MAX_VERIFIED_URLS]
 
     async def _verify_data(
         self, date: datetime, hint: str, urls: list[str]
     ) -> Optional[dict[str, Any]]:
-        """Salto 2: el modelo lee SOLO las URLs fiables y reporta
-        estado + marcador. None si no hay cita de una página leída."""
+        """Salto 2: descargamos las páginas y el modelo reporta
+        estado + marcador SOLO sobre su texto. None si no hay cita
+        de una página realmente leída."""
+        pages: list[str] = []
+        fetched: list[str] = []
+        for url in urls:
+            text = await self._fetch_page_text(url)
+            if not text:
+                continue
+            fetched.append(url)
+            pages.append(f"PÁGINA: {url}\n{text[:_PAGE_CHARS_PER_URL]}")
+        if not fetched:
+            return None
         payload = await self._ask(
             _VERIFY_PROMPT.format(
-                urls="\n".join(f"- {u}" for u in urls),
+                pages="\n\n".join(pages),
                 sport=self._sport_es(),
                 hint=hint,
                 date=date.strftime("%d de %B de %Y"),
@@ -409,9 +425,9 @@ class GeminiResearchProvider:
         data = _extract_json(self._payload_text(payload))
         if not data:
             return None
-        # Anti-alucinación: la cita debe ser una de las páginas fiables
-        # que le dimos (o que url_context confirma haber leído).
-        read_urls = set(urls) | set(self._payload_urls(payload))
+        # Anti-alucinación: la cita debe ser una de las páginas que
+        # descargamos (o que el modelo confirma haber leído).
+        read_urls = set(fetched) | set(self._payload_urls(payload))
         sources = [str(s) for s in (data.get("sources") or []) if str(s) in read_urls]
         if not sources or not _trusted_domains(_domains_of(sources)):
             logger.info(
@@ -539,14 +555,8 @@ class GeminiResearchProvider:
             sets=sets,
         )
 
-    async def _fetch_page_text(self, url: str) -> Optional[str]:
-        """Descarga la página y devuelve su texto visible truncado.
-
-        La validación anti-alucinación del salto de stats exige que
-        cada número reportado exista literalmente en este texto, así
-        que la fuente tiene que ser lo que nosotros descargamos — no
-        lo que el modelo "recuerda" de la URL.
-        """
+    async def _fetch_html(self, url: str) -> Optional[str]:
+        """HTML crudo de una página (búsqueda DDG o web de resultados)."""
         try:
             async with httpx.AsyncClient(
                 timeout=_TIMEOUT,
@@ -559,7 +569,19 @@ class GeminiResearchProvider:
         except httpx.HTTPError as exc:
             logger.info("[GEMINI] Fetch %s falló: %r", url, exc)
             return None
-        html = resp.text
+        return resp.text
+
+    async def _fetch_page_text(self, url: str) -> Optional[str]:
+        """Descarga la página y devuelve su texto visible truncado.
+
+        La validación anti-alucinación del salto de stats exige que
+        cada número reportado exista literalmente en este texto, así
+        que la fuente tiene que ser lo que nosotros descargamos — no
+        lo que el modelo "recuerda" de la URL.
+        """
+        html = await self._fetch_html(url)
+        if not html:
+            return None
         # Scripts/estilos fuera; tags fuera; espacios colapsados.
         html = re.sub(
             r"<(script|style|noscript)\b[^>]*>.*?</\1>",
