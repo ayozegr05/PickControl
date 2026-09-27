@@ -20,6 +20,7 @@ aplazados/anuladas.
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from datetime import datetime, timedelta
@@ -255,27 +256,51 @@ def _filter_trusted_urls(urls: list[str]) -> list[str]:
     ]
 
 
-def _ddg_result_urls(html: str) -> list[str]:
-    """URLs de resultados de una página DDG Lite.
+# Dominios propios del buscador: no son resultados.
+_BING_INTERNAL = (
+    "bing.com",
+    "microsoft.com",
+    "msn.com",
+    "live.com",
+    "windows.net",
+    "microsoftonline.com",
+)
+_BING_HREF = re.compile(r'href="(https?://[^"]+)"')
+_BING_CKA = re.compile(r"[?&]u=a1([A-Za-z0-9_\-]+)")
 
-    Los enlaces salientes van como `uddg=<url-enc>` en los href de
-    redirección; también aceptamos hrefs http(s) directos que no sean
-    del propio buscador. Orden de aparición = orden del resultado.
+
+def _search_result_urls(html: str) -> list[str]:
+    """URLs de resultados de una página de Bing.
+
+    Los resultados salen como href directo o envueltos en el redirect
+    `/ck/a?...&u=a1<base64url>`; se decodifican ambos en orden de
+    aparición (= orden del ranking).
     """
     urls: list[str] = []
     seen: set[str] = set()
 
     def _add(u: str) -> None:
-        if u.startswith("http") and u not in seen:
+        host = urlparse(u).hostname or ""
+        if (
+            u.startswith("http")
+            and not any(host == d or host.endswith("." + d) for d in _BING_INTERNAL)
+            and u not in seen
+        ):
             seen.add(u)
             urls.append(u)
 
-    for m in re.finditer(r"uddg=([^&\"'<>\s]+)", html):
-        _add(unquote(m.group(1)))
-    for m in re.finditer(r'href="(https?://[^"]+)"', html):
-        host = urlparse(m.group(1)).hostname or ""
-        if "duckduckgo" not in host:
-            _add(m.group(1))
+    for m in _BING_HREF.finditer(html):
+        url = m.group(1)
+        redirect = _BING_CKA.search(url)
+        if redirect:
+            raw = redirect.group(1)
+            try:
+                pad = "=" * (-len(raw) % 4)
+                _add(base64.urlsafe_b64decode(raw + pad).decode("utf-8", "ignore"))
+            except ValueError:
+                continue
+        else:
+            _add(unquote(url))
     return urls
 
 
@@ -392,16 +417,17 @@ class GeminiResearchProvider:
         return _SPORT_ES.get(self._sport, self._sport)
 
     async def _search_urls(self, date: datetime, hint: str) -> list[str]:
-        """Salto 1: DDG Lite descargado por nosotros -> URLs fiables.
+        """Salto 1: Bing descargado por nosotros -> URLs fiables.
 
-        La página es HTML estático parseable — no hace falta IA ni el
-        tool url_context (que tiene cuota propia en el free tier)."""
+        DDG bloquea IPs de datacenter; Bing responde con HTML estático
+        parseable — no hace falta IA ni el tool url_context (que tiene
+        cuota propia en el free tier)."""
         query = f"{hint} {self._sport_es()} {date.strftime('%d %B %Y')}"
-        search_url = f"https://lite.duckduckgo.com/lite/?q={quote_plus(query)}"
+        search_url = f"https://www.bing.com/search?q={quote_plus(query)}"
         html = await self._fetch_html(search_url)
         if not html:
             return []
-        return _filter_trusted_urls(_ddg_result_urls(html))[:_MAX_VERIFIED_URLS]
+        return _filter_trusted_urls(_search_result_urls(html))[:_MAX_VERIFIED_URLS]
 
     async def _verify_data(
         self, date: datetime, hint: str, urls: list[str]
