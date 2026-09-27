@@ -561,3 +561,16 @@ class TestTickerCornerSummary:
         # Con un solo equipo no hay par home/away que validar.
         text = "10 Corner,Solo FC. 20 Corner,Solo FC."
         assert _ticker_corner_summary(text) == ""
+
+    def test_formato_ordinal_betsapi(self):
+        from app.services.results.gemini_research import _ticker_corner_summary
+
+        text = (
+            "1' - 1st Corner - (Silkeborg IF Reserves) "
+            "19' - 2nd Corner - (Sonderjyske Reserves) "
+            "40' - 3rd Corner - (Sonderjyske Reserves) "
+            "43' - 4th Corner - (Silkeborg IF Reserves)"
+        )
+        summary = _ticker_corner_summary(text)
+        assert "Silkeborg IF Reserves 2" in summary
+        assert "Sonderjyske Reserves 2" in summary
