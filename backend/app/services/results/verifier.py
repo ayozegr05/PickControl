@@ -1266,14 +1266,17 @@ async def _verify_tennis_pick(
     direction = _detect_over_under_direction(seleccion) or _detect_over_under_direction(
         pick.mercado or ""
     )
-    if linea is None:
-        plus = re.search(r"(\d+(?:[.,]\d+)?)\s*\+", seleccion)
-        o_mas = re.search(r"(\d+(?:[.,]\d+)?)\s+o\s+m[aá]s", seleccion, re.I)
-        for mm in (plus, o_mas):
-            if mm:
-                linea = float(mm.group(1).replace(",", ".")) - 0.5
-                direction = direction or "over"
-                break
+    # "25+" / "20 o más" siempre es over — también cuando la línea ya
+    # viene precargada (mercado "over/under" solo no desambigua lado).
+    plus = re.search(r"(\d+(?:[.,]\d+)?)\s*\+", seleccion)
+    o_mas = re.search(r"(\d+(?:[.,]\d+)?)\s+o\s+m[aá]s", seleccion, re.I)
+    if plus or o_mas:
+        direction = direction or "over"
+        if linea is None:
+            for mm in (plus, o_mas):
+                if mm:
+                    linea = float(mm.group(1).replace(",", ".")) - 0.5
+                    break
     # Notación bet365 "+7,5 juegos": el mercado es over N. Aplica tanto
     # si falta la línea (la línea es N, no N-0.5) como si falta la
     # dirección ("over/under juegos" no dice lado). Solo cuando el
