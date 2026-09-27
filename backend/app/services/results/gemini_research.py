@@ -349,16 +349,23 @@ class GeminiResearchProvider:
 
     async def _ask(self, prompt: str) -> Optional[dict[str, Any]]:
         """generateContent de texto plano, con fallback de modelos."""
+        quota_hits = 0
         for model in _MODELS:
             payload, quota_resp = await self._call_model(model, prompt)
             if quota_resp is not None:
-                self._cooldown_until = utc_now() + _429_COOLDOWN
-                logger.warning(
-                    "[GEMINI] 429 — cooldown %s min", _429_COOLDOWN.seconds // 60
-                )
-                return None
+                # La cuota del free tier es por modelo: un 429 no
+                # implica que los demás estén secos — se prueban.
+                quota_hits += 1
+                continue
             if payload is not None:
                 return payload
+        if quota_hits:
+            self._cooldown_until = utc_now() + _429_COOLDOWN
+            logger.warning(
+                "[GEMINI] 429 en %d modelos — cooldown %s min",
+                quota_hits,
+                _429_COOLDOWN.seconds // 60,
+            )
         return None
 
     def _payload_text(self, payload: dict[str, Any]) -> str:
