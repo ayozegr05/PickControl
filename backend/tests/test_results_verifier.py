@@ -237,6 +237,36 @@ class TestTennisMarkets:
         acierto, _ = await verify_pick(pick, [provider])
         assert acierto is False
 
+    async def test_over_juegos_set_notacion_mas(self):
+        # bet365 "+7,5 juegos en el 1° set" = over 7.5 del set 1:
+        # set1 7-6 = 13 juegos -> acierto.
+        provider = _StubTennisProvider(2, 0, sets=[(7, 6), (6, 4)])
+        pick = _pick_tenis("+7,5 juegos en el 1° set", "over/under juegos")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_over_juegos_set_notacion_mas_falla(self):
+        # set1 6-1 = 7 juegos < 7.5 -> fallo.
+        provider = _StubTennisProvider(2, 0, sets=[(6, 1), (6, 4)])
+        pick = _pick_tenis("+7,5 juegos en el 1° set", "over/under juegos")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_ganara_el_encuentro_primer_lado(self):
+        # Slip bet365: la selección es el nombre del mercado y el lado
+        # apostado va primero en `evento` (Alcaraz gana 2-0 -> acierto).
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])
+        pick = _pick_tenis("Ganará el encuentro", "ganador")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_ganara_el_encuentro_fallo(self):
+        # Mismo caso con Alcaraz perdiendo -> fallo.
+        provider = _StubTennisProvider(0, 2, sets=[(4, 6), (4, 6)])
+        pick = _pick_tenis("Ganará el encuentro", "ganador")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
     async def test_handicap_juegos(self):
         # Alcaraz 15 juegos vs Sinner 12: -2.5 -> 12.5 > 12 gana.
         provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
