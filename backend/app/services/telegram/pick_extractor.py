@@ -485,6 +485,41 @@ def _is_noise_pata(pata: ExtractedPick) -> bool:
     return not pata.mercado and not _BARE_NAME.fullmatch(sel)
 
 
+# "Gana Brunold y +7,5 juegos en el 1° set": una sola línea del tipster
+# que encierra DOS selecciones del mismo boleto (miniacumulada). La y
+# solo corta si lo de detrás trae mercado/línea — "gana la 1ª parte y el
+# partido" (HT/FT) es un solo mercado y no debe partirse.
+_COMPOUND_WIN_AND = re.compile(
+    r"^(?P<win>.{2,80}?\bgana\w*\b[^+]*?)\s+y\s+(?P<rest>.+)$",
+    re.IGNORECASE,
+)
+
+
+def _patas_from_compound(pick: ExtractedPick) -> list[ExtractedPick]:
+    """Parte la selección compuesta "X gana y <mercado>" en dos patas."""
+    sel = (pick.seleccion or "").strip()
+    match = _COMPOUND_WIN_AND.match(sel)
+    if not match:
+        return []
+    win, rest = match.group("win").strip(), match.group("rest").strip()
+    if not (_LEG_MARKET_WORD.search(rest) or _extract_linea(rest) is not None):
+        return []
+    return [
+        ExtractedPick(
+            es_apuesta=True,
+            seleccion=leg,
+            evento=pick.evento,
+            deporte=pick.deporte,
+            mercado=_classify_leg_market(leg),
+            linea=_extract_linea(leg),
+            fecha_evento=pick.fecha_evento,
+            metodo=pick.metodo,
+            confianza=pick.confianza,
+        )
+        for leg in (win, rest)
+    ]
+
+
 def _ensure_combinada_shape(
     pick: ExtractedPick, fecha_referencia: Optional[datetime] = None
 ) -> ExtractedPick:
@@ -506,6 +541,10 @@ def _ensure_combinada_shape(
         return pick
     if not pick.patas:
         pick.patas = _patas_from_joined(pick)
+    if not pick.patas:
+        # "Gana Brunold y +7,5 juegos en el 1° set" no lleva " + " pero
+        # encierra dos selecciones del mismo boleto.
+        pick.patas = _patas_from_compound(pick)
     pick.patas = [p for p in pick.patas if not _is_noise_pata(p)]
     if len(pick.patas) < 2:
         if pick.patas:
