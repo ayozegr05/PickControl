@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from app.core.config import get_settings
 from app.services.results.base import MatchState
 from app.services.results.gemini_research import GeminiResearchProvider
 
@@ -398,3 +399,91 @@ class TestFindMatchStats:
         stats = await provider.find_match_stats(_DATE, "x")
         assert stats is not None
         assert stats.values["Aces"] == (14, 12)
+
+
+class TestFlareSolverrFallback:
+    """Cuando el fetch directo choca con Cloudflare (403 o challenge
+    HTML) se reintenta vía el Chromium de la VM."""
+
+    async def test_fetch_directo_ok_no_llama_flaresolverr(self, provider, monkeypatch):
+        monkeypatch.setattr(
+            provider, "_fetch_via_flaresolverr", _stub("<html>flare</html>")
+        )
+
+        class _Resp:
+            status_code = 200
+            text = "<html>contenido real</html>"
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url):
+                return _Resp()
+
+        monkeypatch.setattr(
+            "app.services.results.gemini_research.httpx.AsyncClient",
+            lambda **k: _Client(),
+        )
+        assert (
+            await provider._fetch_html("https://x.com") == "<html>contenido real</html>"
+        )
+
+    async def test_403_cae_a_flaresolverr(self, provider, monkeypatch):
+        monkeypatch.setattr(get_settings(), "flaresolverr_url", "http://flare:8191")
+        monkeypatch.setattr(
+            provider, "_fetch_via_flaresolverr", _stub("<html>flare</html>")
+        )
+
+        class _Resp:
+            status_code = 403
+            text = "challenge"
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url):
+                return _Resp()
+
+        monkeypatch.setattr(
+            "app.services.results.gemini_research.httpx.AsyncClient",
+            lambda **k: _Client(),
+        )
+        assert await provider._fetch_html("https://x.com") == "<html>flare</html>"
+
+    async def test_challenge_en_200_cae_a_flaresolverr(self, provider, monkeypatch):
+        # Cloudflare a veces devuelve 200 con la página del challenge.
+        monkeypatch.setattr(
+            provider, "_fetch_via_flaresolverr", _stub("<html>flare</html>")
+        )
+
+        class _Resp:
+            status_code = 200
+            text = 'window._cf_chl_opt={};fa:"__cf_chl_f_tk=abc"'
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url):
+                return _Resp()
+
+        monkeypatch.setattr(
+            "app.services.results.gemini_research.httpx.AsyncClient",
+            lambda **k: _Client(),
+        )
+        assert await provider._fetch_html("https://x.com") == "<html>flare</html>"
+
+    async def test_sin_url_devuelve_none(self, provider, monkeypatch):
+        monkeypatch.setattr(get_settings(), "flaresolverr_url", None)
+        assert await provider._fetch_via_flaresolverr("https://x.com") is None

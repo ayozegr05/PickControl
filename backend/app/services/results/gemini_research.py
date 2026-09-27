@@ -28,6 +28,7 @@ from urllib.parse import quote_plus, urlparse
 
 import httpx
 
+from app.core.config import get_settings
 from app.core.dates import utc_now
 from app.core.logging import get_logger
 from app.services.results.base import (
@@ -53,6 +54,10 @@ _ENDPOINT = (
 )
 _TIMEOUT = 90.0
 _MAX_VERIFIED_URLS = 3
+# FlareSolverr: resolver un challenge de Cloudflare tarda 5-60 s; el
+# timeout del POST tiene que cubrir el maxTimeout que le pedimos.
+_FLARESOLVERR_MAX_MS = 60000
+_FLARESOLVERR_TIMEOUT = 75.0
 # Cooldown propio tras un 429: el free tier de Gemini limita por ritmo
 # (RPM), no por día — aparcar hasta mañana (comportamiento estándar de
 # `mark_rate_limited`) dejaría al investigador muerto por una ráfaga.
@@ -618,7 +623,8 @@ class GeminiResearchProvider:
         )
 
     async def _fetch_html(self, url: str) -> Optional[str]:
-        """HTML crudo de una página (búsqueda DDG o web de resultados)."""
+        """HTML crudo de una página; si el fetch directo choca contra
+        Cloudflare/403 se reintenta vía FlareSolverr (Chromium propio)."""
         try:
             async with httpx.AsyncClient(
                 timeout=_TIMEOUT,
@@ -626,12 +632,42 @@ class GeminiResearchProvider:
                 follow_redirects=True,
             ) as client:
                 resp = await client.get(url)
-            if resp.status_code != 200:
-                return None
+            if resp.status_code == 200 and "__cf_chl" not in resp.text:
+                return resp.text
         except httpx.HTTPError as exc:
             logger.info("[GEMINI] Fetch %s falló: %r", url, exc)
+        return await self._fetch_via_flaresolverr(url)
+
+    async def _fetch_via_flaresolverr(self, url: str) -> Optional[str]:
+        """HTML renderizado por el FlareSolverr de la VM.
+
+        POST /v1 {"cmd": "request.get", url} -> solution.response con la
+        página ya renderizada por un Chromium que resuelve el challenge
+        de Cloudflare. Solo se usa cuando el fetch directo falla: un
+        solve cuesta segundos de CPU del único núcleo de la VM."""
+        base = getattr(get_settings(), "flaresolverr_url", None)
+        if not base:
             return None
-        return resp.text
+        try:
+            async with httpx.AsyncClient(timeout=_FLARESOLVERR_TIMEOUT) as client:
+                resp = await client.post(
+                    f"{base.rstrip('/')}/v1",
+                    json={
+                        "cmd": "request.get",
+                        "url": url,
+                        "maxTimeout": _FLARESOLVERR_MAX_MS,
+                    },
+                )
+            data = resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.info("[GEMINI] FlareSolverr %s falló: %r", url, exc)
+            return None
+        solution = data.get("solution") or {}
+        status = solution.get("status") or 0
+        if data.get("status") != "ok" or not (200 <= status < 400):
+            logger.info("[GEMINI] FlareSolverr %s no resuelto (status=%s)", url, status)
+            return None
+        return solution.get("response") or None
 
     async def _fetch_page_text(self, url: str) -> Optional[str]:
         """Descarga la página y devuelve su texto visible truncado.
