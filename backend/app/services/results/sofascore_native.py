@@ -14,8 +14,11 @@ Dos transportes sobre las mismas rutas:
              banear la IP si el volumen levanta sospechas. Por eso va
              como ÚLTIMO recurso en resultados Y en odds: las cuotas
              renovables de RapidAPI se gastan primero y el directo
-             solo absorbe el desbordamiento. Ante un desafío no se
-             insiste: se marca sin cuota y se reintenta mañana.
+             solo absorbe el desbordamiento. Ante un desafío (403 o
+             HTML en vez de JSON) se intenta primero el rescate por
+             FlareSolverr — un Chromium real ejecuta el challenge y
+             trae el mismo JSON — y solo si también falla se marca sin
+             cuota y se reintenta mañana.
 - `rapidapi`: espejos que exponen las rutas nativas bajo RapidAPI
              (sportapi7). Misma key de cuenta; suscripción aparte de
              100/día que el usuario activa a mano. Si no está
@@ -41,14 +44,18 @@ partidos — se traduce a lista vacía, no a error.
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 import time
 from datetime import datetime, timedelta, timezone
+from html import unescape
 from typing import Optional, Protocol
 from urllib.parse import quote
 
 import httpx
 from curl_cffi import requests as cffi_requests
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.services.odds.base import EventRef, MarketChoice, odds_to_decimal
 from app.services.results.allsports_tennis import _hint_sides, _side_score
@@ -94,6 +101,44 @@ _MAX_PAGES = 2
 _CACHE_NS = "sofascore"
 # Timeout algo generoso: Cloudflare a veces desafía antes de servir.
 _TIMEOUT = 20
+# FlareSolverr (tercer escalón del transporte `direct`): cuando
+# Cloudflare sube de fingerprint TLS a challenge JS, curl_cffi ya no
+# puede ejecutarlo — el Chromium de la VM sí (mismo patrón que
+# transfermarkt/gemini_research). Solo se invoca TRAS ver un desafío:
+# un solve cuesta segundos de CPU del núcleo libre.
+_FLARESOLVERR_MAX_MS = 60000
+_FLARESOLVERR_TIMEOUT = 75.0
+
+
+async def _fetch_via_flaresolverr(url: str) -> Optional[str]:
+    """Cuerpo de la respuesta renderizado por el FlareSolverr de la VM."""
+    base = getattr(get_settings(), "flaresolverr_url", None)
+    if not base:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=_FLARESOLVERR_TIMEOUT) as client:
+            resp = await client.post(
+                f"{base.rstrip('/')}/v1",
+                json={
+                    "cmd": "request.get",
+                    "url": url,
+                    "maxTimeout": _FLARESOLVERR_MAX_MS,
+                },
+            )
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.info("[SOFASCORE-DIRECT] FlareSolverr %s falló: %r", url, exc)
+        return None
+    solution = data.get("solution") or {}
+    status = solution.get("status") or 0
+    if data.get("status") != "ok" or not (200 <= status < 400):
+        logger.info(
+            "[SOFASCORE-DIRECT] FlareSolverr %s no resuelto (status=%s)",
+            url,
+            status,
+        )
+        return None
+    return solution.get("response") or None
 
 
 # --- Transportes ----------------------------------------------------------
@@ -122,10 +167,13 @@ class _DirectTransport:
     - Paso de cortesía: mínimo `_MIN_INTERVAL` segundos entre llamadas
       — un navegador real no dispara peticiones a ráfaga; las ráfagas
       son lo que marca el fingerprint de bot.
-    - Un 200 con HTML (página de desafío, no JSON) marca rate-limited:
-      seguir llamando a través de un challenge es la forma rápida de
-      caer en la lista negra. El descanso escala (24h -> 72h -> 7d)
-      mientras el baneo persista y vuelve a 24h tras el primer 200.
+    - Un 200 con HTML (página de desafío, no JSON) o un 401/403/429
+      intenta primero el rescate por FlareSolverr — si el Chromium
+      ejecuta el challenge y trae el JSON, no hay baneo que declarar.
+      Si también falla, marca rate-limited: seguir llamando a través
+      de un challenge es la forma rápida de caer en la lista negra.
+      El descanso escala (24h -> 72h -> 7d) mientras el baneo persista
+      y vuelve a 24h tras el primer 200.
     """
 
     name = "sofascore_direct"
@@ -191,6 +239,11 @@ class _DirectTransport:
         if response.status_code == 404:
             return {}  # página vacía (p. ej. events/next sin próximos)
         if response.status_code in (401, 403, 429):
+            # Antes de declarar baneo se intenta el rescate por
+            # FlareSolverr: un Chromium real sí ejecuta el challenge.
+            data = await self._rescue_via_flaresolverr(path)
+            if data is not None:
+                return data
             # Baneo de IP de Cloudflare: backoff progresivo — insistir
             # a diario renueva el flag de bot, así que el descanso
             # crece (24h -> 72h -> 7d) mientras el baneo persista.
@@ -209,8 +262,13 @@ class _DirectTransport:
         try:
             data = response.json()
         except ValueError:
-            # 200 pero HTML: página de desafío de Cloudflare. Mismo
-            # baneo de IP que un 403 — backoff progresivo.
+            # 200 pero HTML: página de desafío de Cloudflare — un
+            # navegador real aún puede sacar el JSON antes de darse
+            # por baneado.
+            data = await self._rescue_via_flaresolverr(path)
+            if data is not None:
+                return data
+            # Mismo baneo de IP que un 403 — backoff progresivo.
             mark_rate_limited_escalating(self.name)
             logger.warning(
                 "[SOFASCORE-DIRECT] Respuesta no-JSON (desafío "
@@ -221,6 +279,34 @@ class _DirectTransport:
         # de backoff para que el próximo baneo vuelva a 24h.
         clear_rate_limit_streak(self.name)
         return data if isinstance(data, dict) else None
+
+    async def _rescue_via_flaresolverr(self, path: str) -> Optional[dict]:
+        """JSON de la misma ruta vía FlareSolverr cuando curl_cffi ya
+        recibió el challenge de Cloudflare.
+
+        Chrome envuelve las respuestas JSON en ``<pre>...</pre>`` al
+        navegar a un endpoint API — se extrae el cuerpo. Un rescate
+        bueno resetea la racha de backoff igual que un 200 directo:
+        la IP no está baneada, el fingerprint solo necesitaba un
+        navegador de verdad.
+        """
+        body = await _fetch_via_flaresolverr(f"{_BASE}{path}")
+        if not body:
+            return None
+        # Un solve exitoso sí es un hit al edge de Sofascore (vía
+        # Chromium) — la métrica lo cuenta igual que una llamada.
+        count_provider_call(self.name)
+        pre = re.search(r"<pre[^>]*>(.*?)</pre>", body, re.S)
+        text = unescape(pre.group(1)) if pre else body.strip()
+        try:
+            data = json.loads(text)
+        except ValueError:
+            logger.info("[SOFASCORE-DIRECT] FlareSolverr %s sin JSON usable", path)
+            return None
+        if not isinstance(data, dict):
+            return None
+        clear_rate_limit_streak(self.name)
+        return data
 
 
 class _RapidApiTransport:
