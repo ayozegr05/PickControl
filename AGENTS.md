@@ -31,7 +31,16 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     partido. Cubre la cola larga (reservas DK, AFC Cup, ligas
     menores); `_LEAGUE_PAGES` se extiende al aparecer ligas nuevas y
     `_CLUB_ALIASES` mapea renombrados (Lion City=Home United,
-    BG Pathum=Bangkok Glass). Al final de la cascada,
+    BG Pathum=Bangkok Glass). Cuando el listado ya no muestra el
+    fixture, `_probe_slug` prueba la URL determinista
+    `{DD-MM-YYYY}-{home}-vs-{away}.html` en cada liga configurada
+    (la página del partido sobrevive semanas; los soft-404 se
+    rechazan validando los nombres del marcador). Después va
+    `transfermarkt.py`: `/live/index?datum=` lista todos los
+    partidos del día (marcador inline + match_id) y
+    `/statistik/index/spielbericht/{id}` trae córners/disparos/
+    faltas/fueras de juego; fetch directo con fallback FlareSolverr
+    (TM usa Cloudflare). Al final de la cascada,
     `gemini_research.py` (Gemini, free tier): salto 1 = `url_context`
     lee DDG Lite (los buscadores bloquean la IP de la VM) y filtra URLs
     por allowlist de dominios de resultados; los saltos 2/3 descargan
