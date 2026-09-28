@@ -6,6 +6,8 @@ export interface ProvidersStatus {
   rate_limited: Record<string, string>;
   missed_by_provider: Record<string, number>;
   calls_today: Record<string, number>;
+  /** Liquidaciones auto atribuidas por provider (verificado_provider). */
+  resolved_by_provider?: Record<string, number>;
   calls_by_day: Record<string, Record<string, number>>;
   // Límite diario observado vía headers x-ratelimit (solo providers
   // que lo reportan).

@@ -263,6 +263,7 @@ export default function ParsedPicksScreen() {
       ...Object.keys(providersStatus.rate_limited),
       ...Object.keys(providersStatus.missed_by_provider),
       ...Object.keys(providersStatus.calls_today ?? {}),
+      ...Object.keys(providersStatus.resolved_by_provider ?? {}),
     ]);
     return [...names]
       .sort((a, b) => {
@@ -281,6 +282,7 @@ export default function ParsedPicksScreen() {
           misses: providersStatus.missed_by_provider[name] ?? 0,
           callsToday: providersStatus.calls_today?.[name] ?? 0,
           dailyLimit: providersStatus.daily_limits?.[name] ?? null,
+          resolved: providersStatus.resolved_by_provider?.[name] ?? 0,
         };
       });
   }, [providersStatus]);
@@ -478,10 +480,7 @@ export default function ParsedPicksScreen() {
                     : "Pendiente"}
             </Text>
             {pick.verificado_por && (
-              <Text style={styles.cardMeta}>
-                {" "}
-                ({pick.verificado_por === "auto" ? "auto" : "manual"})
-              </Text>
+              <Text style={styles.cardMeta}> ({pick.verificado_por})</Text>
             )}
           </Text>
           {pick.fuera_ventana && (
@@ -618,7 +617,7 @@ export default function ParsedPicksScreen() {
                       </Text>
                     </View>
                   </View>
-                  {(row.callsToday > 0 || row.misses > 0) && (
+                  {(row.callsToday > 0 || row.misses > 0 || row.resolved > 0) && (
                     <Text style={styles.providerMeta}>
                       {row.callsToday > 0
                         ? `${row.callsToday}${
@@ -630,6 +629,15 @@ export default function ParsedPicksScreen() {
                         ? `${row.misses} búsqueda${
                             row.misses !== 1 ? "s" : ""
                           } sin resultado en caché`
+                        : ""}
+                      {(row.callsToday > 0 || row.misses > 0) &&
+                      row.resolved > 0
+                        ? " · "
+                        : ""}
+                      {row.resolved > 0
+                        ? `${row.resolved} liquidada${
+                            row.resolved !== 1 ? "s" : ""
+                          }`
                         : ""}
                     </Text>
                   )}

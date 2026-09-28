@@ -82,6 +82,10 @@ class PickRead(SQLModel):
     es_combinada: bool = False
     cuota_efectiva: Optional[float] = None
     patas: Optional[list[CombinadaPata]] = None
+    # Solo picks de Telegram: apuesta anulada/devuelta (void). Sin este
+    # flag la anulada serializaba como Pending y la UI la mostraba con
+    # "❓" igual que una pendiente real.
+    anulada: bool = False
 
 
 class ParsedPickRead(ParsedPickBase):

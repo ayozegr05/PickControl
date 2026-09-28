@@ -71,8 +71,17 @@ class ParsedPickBase(SQLModel):
     # línea entera). No es lo mismo que "pendiente": aquí SÍ se verificó,
     # pero el resultado no cuenta como acierto ni como fallo.
     anulada: bool = Field(default=False)
-    # Quién verificó el resultado: "auto" (API de resultados) o "manual".
+    # Quién verificó el resultado: "auto" (cascada de providers),
+    # "manual" (corrección del usuario pick a pick) o "expired"
+    # (barrido de residuos: salió de la ventana de 14 días sin
+    # resolverse — anulada en bloque, no revisada una a una).
     verificado_por: Optional[str] = Field(default=None, max_length=20)
+    # Provider que aportó el dato decisivo cuando verificado_por="auto"
+    # ("espn", "footapi7", "football24h"...). En mercados de stats es el
+    # provider de estadísticas; en marcador/BTTS el del resultado.
+    # NULL en liquidaciones manuales/expired y en las históricas
+    # anteriores a la migración.
+    verificado_provider: Optional[str] = Field(default=None, max_length=40)
     # Cuándo se liquidó (auto o manual). NULL mientras siga pendiente;
     # si una corrección reabre el pick, vuelve a NULL.
     verificado_at: Optional[datetime] = None

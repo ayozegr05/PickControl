@@ -257,7 +257,12 @@ export default function InformantDetail() {
   };
 
   // Picks de Telegram: solo lectura, sin tocar el modal de edición.
-  const renderPronosticoTelegram = (acierto: Acierto) => {
+  // Anulada (void) es un estado cerrado distinto de pendiente: sin la
+  // flag la pintábamos con "❓" igual que una no verificada.
+  const renderPronosticoTelegram = (acierto: Acierto, anulada?: boolean) => {
+    if (anulada) {
+      return <Text style={[styles.icon, { color: "gray" }]}>↩️</Text>;
+    }
     if (acierto === "True") {
       return (
         <Text style={[styles.icon, { color: "green", fontSize: 18 }]}>✅</Text>
@@ -590,7 +595,11 @@ export default function InformantDetail() {
             <View style={styles.compareRow}>
               <Text style={styles.compareLabel}>Pendientes</Text>
               <Text style={styles.compareValue}>
-                {data.parsedPicks.filter((p) => p.acierto === "Pending").length}
+                {
+                  data.parsedPicks.filter(
+                    (p) => p.acierto === "Pending" && !p.anulada
+                  ).length
+                }
               </Text>
               <Text style={styles.compareValue}>
                 {apuestas.filter((a) => a.acierto === "Pending").length}
@@ -783,7 +792,10 @@ export default function InformantDetail() {
                         </View>
                         <View style={[styles.tableCell, styles.border]}>
                           <Text>
-                            {renderPronosticoTelegram(apuesta.acierto)}
+                            {renderPronosticoTelegram(
+                              apuesta.acierto,
+                              apuesta.anulada
+                            )}
                           </Text>
                         </View>
                         <View style={[styles.tableCell, styles.border]}>
@@ -864,7 +876,7 @@ export default function InformantDetail() {
                         {reto.cuota != null
                           ? Number(reto.cuota).toFixed(2)
                           : "—"}{" "}
-                        · {renderPronosticoTelegram(reto.acierto)}
+                        · {renderPronosticoTelegram(reto.acierto, reto.anulada)}
                       </Text>
                     </TouchableOpacity>
                   ))}
@@ -916,7 +928,10 @@ export default function InformantDetail() {
                                 : ""}
                               {" · "}
                               {numPatas} patas ·{" "}
-                              {renderPronosticoTelegram(comb.acierto)}
+                              {renderPronosticoTelegram(
+                                comb.acierto,
+                                comb.anulada
+                              )}
                             </Text>
                           </TouchableOpacity>
                           {numPatas > 0 && (
