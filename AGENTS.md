@@ -40,7 +40,14 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     partidos del día (marcador inline + match_id) y
     `/statistik/index/spielbericht/{id}` trae córners/disparos/
     faltas/fueras de juego; fetch directo con fallback FlareSolverr
-    (TM usa Cloudflare). Al final de la cascada,
+    (TM usa Cloudflare). En footapi7, los equipos femeninos/filiales
+    comparten nombre con el senior ("Real Madrid"): si `/api/search`
+    no devuelve entidad `team`, `_team_id_from_events` sigue los
+    resultados `event` → `/api/match/{id}` para sacar el team-id
+    real; `_TEAM_ALIASES` expande acrónimos del tipster
+    ("psg"→"paris saint germain") antes del match_score — cubre
+    UWCL y similares (caso: pick 2951, evento 17018497). Al final
+    de la cascada,
     `gemini_research.py` (Gemini, free tier): salto 1 = `url_context`
     lee DDG Lite (los buscadores bloquean la IP de la VM) y filtra URLs
     por allowlist de dominios de resultados; los saltos 2/3 descargan
