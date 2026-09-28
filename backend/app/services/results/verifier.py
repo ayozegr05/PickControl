@@ -65,6 +65,7 @@ from app.services.results.espn import (
     EspnTennisProvider,
     _translate_countries,
 )
+from app.services.results.espn_f1 import EspnF1Provider
 from app.services.results.footapi_stats import FootApiStatsProvider
 from app.services.results.football24h import Football24hProvider
 from app.services.results.football_data import FootballDataProvider
@@ -123,6 +124,14 @@ _SPORT_ALIASES = {
     "acb": "baloncesto",
     "euroliga": "baloncesto",
     "euroleague": "baloncesto",
+    "automovilismo": "automovilismo",
+    "automovilismo f1": "automovilismo",
+    "formula 1": "automovilismo",
+    "fórmula 1": "automovilismo",
+    "formula1": "automovilismo",
+    "fórmula1": "automovilismo",
+    "formula uno": "automovilismo",
+    "f1": "automovilismo",
 }
 
 # Edad máxima del evento para seguir intentando la verificación
@@ -236,6 +245,13 @@ _STAT_SUBJECTS: tuple[tuple[re.Pattern, tuple[str, ...]], ...] = (
     (re.compile(r"tiro|shot|disparo", re.IGNORECASE), ("Total Shots",)),
     (re.compile(r"falta|foul", re.IGNORECASE), ("Fouls",)),
     (re.compile(r"fuera\s+de\s+juego|offside", re.IGNORECASE), ("Offsides",)),
+    # F1: "menos de 19.5 coches" = pilotos que acaban la carrera
+    # (clasificados). Ningún provider de fútbol devuelve la clave —
+    # solo EspnF1Provider.
+    (
+        re.compile(r"coches?|cars?|clasificados", re.IGNORECASE),
+        ("Classified Cars",),
+    ),
 )
 
 
@@ -1557,6 +1573,9 @@ async def _get_providers() -> list[ResultsProvider]:
     # FIBA (sin ACB ni Euroliga: ESPN no las publica; esas siguen en
     # API-Basketball y los mirrors).
     providers.append(EspnBasketballProvider())
+    # F1: mismo feed gratis de ESPN (`racing/f1`). Los picks de coches
+    # son raros pero existen ("menos de X coches" = clasificados).
+    providers.append(EspnF1Provider())
     # 365scores para basket: mismo feed por día, sin cuota — antes de
     # API-Basketball (cuota propia) y los mirrors.
     providers.append(Scores365Provider("baloncesto"))
@@ -1665,6 +1684,24 @@ def _void(reason: str) -> tuple[None, bool]:
 
 def _provider_label(provider: ResultsProvider) -> str:
     return getattr(provider, "NAME", None) or type(provider).__name__
+
+
+def _is_research_provider(provider: ResultsProvider) -> bool:
+    """Provider de investigación web (Gemini): cada consulta le cuesta
+    una búsqueda real de cuota muy limitada — va ÚLTIMO incluso dentro
+    de la fase de aplazados, solo cuando los deterministas ya fallaron."""
+    return getattr(provider, "NAME", "").startswith("gemini")
+
+
+def _postponed_state_hint(pick: ParsedPick, sport: Optional[str]) -> str:
+    """Pista para el chequeo de aplazados (en tenis el `evento` puede
+    ser solo el torneo: se completa con el jugador de la selección)."""
+    if sport == "tenis":
+        return (
+            _tennis_lookup_hint(pick, _extract_tennis_player_name(pick.seleccion or ""))
+            or ""
+        )
+    return pick.evento or ""
 
 
 def _provider_sem(provider: ResultsProvider) -> asyncio.Semaphore:
@@ -1885,8 +1922,13 @@ async def _rearranged_fixture_void(
     """
     if not hint:
         return False
+    # La reordenación la delatan los feeds estructurados (filas
+    # Cancelled); la investigación web se reserva para el último
+    # recurso — preguntarla por cada partido de tenis resuelto
+    # quemaría búsquedas en vano.
+    deterministic = [p for p in providers if not _is_research_provider(p)]
     state = await _find_postponed_across_providers(
-        pick.fecha_evento, hint, providers, pick.id
+        pick.fecha_evento, hint, deterministic, pick.id
     )
     if state is None:
         return False
@@ -1931,6 +1973,32 @@ async def verify_pick(
     token_reason = _LAST_VOID_REASON.set(None)
     try:
         acierto, anulada = await _verify_pick_result(pick, providers)
+        if (
+            acierto is None
+            and not anulada
+            and pick.evento
+            and pick.fecha_evento is not None
+            and pick.fecha_evento < utc_now() - _POSTPONED_VOID_AFTER
+        ):
+            # Nada resolvió el pick viejo: última pregunta posible —
+            # ¿consta aplazado en la web? Solo la investigación (Gemini)
+            # puede encontrarlo fuera de las APIs estructuradas; si la
+            # carrera normal hubiera resuelto, esta llamada no existiría.
+            sport = _normalize_sport(pick.deporte)
+            research = [
+                p
+                for p in _providers_for_sport(pick.deporte, providers)
+                if _is_research_provider(p)
+            ]
+            if research:
+                state = await _find_postponed_across_providers(
+                    pick.fecha_evento,
+                    _postponed_state_hint(pick, sport),
+                    research,
+                    pick.id,
+                )
+                if state is not None:
+                    acierto, anulada = _void("aplazado")
         if acierto is not None or anulada:
             pick.verificado_provider = _LAST_PROVIDER_HIT.get()
             pick.motivo_anulada = _LAST_VOID_REASON.get() if anulada else None
@@ -1985,13 +2053,13 @@ async def _verify_pick_result(
         # En tenis `evento` puede ser solo el torneo ("CHALLENGER X
         # DOBLES") — mismo hint que el camino de resultados: el jugador
         # o pareja extraído de la selección.
-        state_hint: Optional[str] = pick.evento
-        if sport == "tenis":
-            state_hint = _tennis_lookup_hint(
-                pick, _extract_tennis_player_name(pick.seleccion or "")
-            )
+        state_hint = _postponed_state_hint(pick, sport)
+        # Solo deterministas aquí: el investigador web (Gemini) cuesta
+        # una búsqueda real por pick viejo — se reserva para cuando
+        # toda la resolución normal ya falló (ver verify_pick).
+        deterministic = [p for p in providers_for_sport if not _is_research_provider(p)]
         state = await _find_postponed_across_providers(
-            pick.fecha_evento, state_hint or "", providers_for_sport, pick.id
+            pick.fecha_evento, state_hint, deterministic, pick.id
         )
         if state:
             logger.info(
