@@ -48,14 +48,16 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     ("psg"→"paris saint germain") antes del match_score — cubre
     UWCL y similares (caso: pick 2951, evento 17018497).
   - `app/services/results/espn_f1.py` — Fórmula 1 (deporte
-    `automovilismo`): scoreboard `racing/f1` (un evento por GP,
-    competición `Race`), matching por tokens de localización
-    (`_GP_LOCATION_ALIASES`: "GP ITALIA"→"Italian Grand Prix").
-    "Menos de X coches" = `Classified Cars`: el scoreboard ordena
-    también a los retirados, así que el estado de cada piloto se lee
-    de `competitors[].status.$ref` en la core API (STATUS_CLASSIFIED
-    vs STATUS_RETIRED — ~22 llamadas en paralelo, solo para picks F1).
-    Ganador del GP modelado como local 1-0. Al final de la cascada,
+    `automovilismo`): matching de GPs por tokens de localización
+    (`_GP_LOCATION_ALIASES`: "GP ITALIA"→"Italian Grand Prix") sobre
+    hooks `_fetch_races`/`_race_*` que implementa cada provider.
+    "Menos de X coches" = `Classified Cars`; ganador del GP modelado
+    como local 1-0. PRIMERO va `jolpica_f1.py` (Ergast: calendario
+    `/f1/{año}/races` + resultados oficiales FIA por `positionText`
+    numérico — R/W/D/N/E no clasifican). ESPN (`racing/f1`) es
+    respaldo: su conteo por `competitors[].status.$ref` puede
+    desviarse del oficial (Baku 2025: 15 ESPN vs 19 FIA). Al final de
+    la cascada,
     `gemini_research.py` (Gemini, free tier): salto 1 = `url_context`
     lee DDG Lite (los buscadores bloquean la IP de la VM) y filtra URLs
     por allowlist de dominios de resultados; los saltos 2/3 descargan
