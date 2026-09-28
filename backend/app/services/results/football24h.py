@@ -35,10 +35,12 @@ from app.services.results.base import (
     MatchResult,
     MatchStats,
     count_provider_call,
+    fold_name,
     is_missed,
     mark_missed,
     match_score,
     miss_is_provisional,
+    split_team_hint,
 )
 
 logger = get_logger("app.results.football24h")
@@ -83,6 +85,18 @@ _CLUB_ALIASES = {
     "bg pathum": "bangkok glass",
     "pathum united": "bangkok glass",
 }
+
+_SLUG_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+# Letras latinas que NFD no descompone (`fold_name` las conserva y el
+# regex las comería como separador): ø→o, æ→ae, ð→d, þ→th, ß→ss, ł→l...
+_SLUG_CHARS = str.maketrans(
+    {"ø": "o", "æ": "ae", "ð": "d", "þ": "th", "ß": "ss", "ł": "l", "đ": "d"}
+)
+
+
+def _slugify(name: str) -> str:
+    return _SLUG_NON_ALNUM.sub("-", fold_name(name).translate(_SLUG_CHARS)).strip("-")
+
 
 _MATCH_LINK = re.compile(
     r'href="(/[a-z-]+/[a-z0-9-]+/(\d{2})-(\d{2})-(\d{4})'
@@ -208,8 +222,51 @@ class Football24hProvider:
                     best_score = score
                     best = (path, home, away)
         if best is None or best_score < _MIN_TEAM_SIMILARITY:
-            return None
+            return await self._probe_slug(date, candidates)
         return best
+
+    async def _probe_slug(
+        self, date: datetime, candidates: set[str]
+    ) -> Optional[tuple[str, str, str]]:
+        """URL directa del partido cuando los listados ya no lo muestran.
+
+        El slug es determinista (`{DD-MM-YYYY}-{home}-vs-{away}.html`)
+        y la página del partido sobrevive semanas aunque el fixture
+        rote fuera del listado de liga — el router resuelve por slug
+        ignorando el prefijo de liga. Los soft-404 (la web devuelve
+        200 con otra página) se rechazan validando los nombres del
+        marcador contra el hint."""
+        # El hint puede venir traducido por alias: probar todas las
+        # variantes como origen del slug.
+        for hint in candidates:
+            parts = split_team_hint(hint)
+            if len(parts) < 2:
+                continue
+            home_slug = _slugify(parts[0])
+            away_slug = _slugify(parts[1])
+            if not home_slug or not away_slug:
+                continue
+            for offset in range(-1, 2):
+                day = date + timedelta(days=offset)
+                slug = f"{day:%d-%m-%Y}-{home_slug}-vs-{away_slug}.html"
+                for league in _LEAGUE_PAGES:
+                    html = await self._fetch(f"{league}{slug}")
+                    if html is None:
+                        continue
+                    names = _TEAM_LABEL.findall(html)
+                    if len(names) < 2:
+                        continue
+                    sim = max(
+                        match_score(h, names[0].strip(), names[1].strip())
+                        for h in candidates
+                    )
+                    if sim >= _MIN_TEAM_SIMILARITY:
+                        return (
+                            f"{league}{slug}",
+                            names[0].strip(),
+                            names[1].strip(),
+                        )
+        return None
 
     def _parse_match(self, html: str) -> Optional[MatchResult]:
         """Marcador del partido si está FINAL-TIME, si no None."""
