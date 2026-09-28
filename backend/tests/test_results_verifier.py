@@ -256,6 +256,28 @@ class TestTennisRearrangedFixture:
         assert (acierto, anulada) == (True, False)
 
 
+class TestVerificadoProvider:
+    """`verify_pick` anota qué provider aportó el dato decisivo."""
+
+    async def test_registra_el_provider_que_resuelve(self):
+        provider = _StubTennisProvider(home_sets=2, away_sets=0)
+        provider.NAME = "stub-tenis"  # NAME agrupa providers por suscripción
+        pick = _pick_tenis("Alcaraz gana")
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (True, False)
+        assert pick.verificado_provider == "stub-tenis"
+
+    async def test_sin_resolver_no_atribuye(self):
+        provider = _StubTennisProvider(
+            home_sets=2, away_sets=0, home="Otro", away="Otro2"
+        )
+        provider.NAME = "stub-tenis"
+        pick = _pick_tenis("Alcaraz gana")
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+        assert pick.verificado_provider is None
+
+
 class _StubTennisStatsProvider:
     """Tenis con tabla de stats (aces, dobles faltas) — simula el
     provider-investigador (`find_match_stats`)."""

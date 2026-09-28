@@ -45,6 +45,9 @@ export interface PickItem {
   esCombinada?: boolean;
   cuotaEfectiva?: number | null;
   patas?: CombinadaPata[];
+  /** Solo picks de Telegram: apuesta anulada/devuelta (void). La
+   * pendiente real es `acierto === "Pending" && !anulada`. */
+  anulada?: boolean;
 }
 
 export interface PickCreatePayload {

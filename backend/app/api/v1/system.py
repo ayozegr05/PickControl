@@ -34,17 +34,33 @@ class ProvidersStatus(BaseModel):
     # Límite diario observado vía headers x-ratelimit (solo providers
     # que lo reportan; los gratuitos/ilimitados no aparecen).
     daily_limits: dict[str, int]
+    # Liquidaciones auto atribuidas a cada provider (`verificado_provider`
+    # en parsed_picks). NULL en las históricas anteriores a la columna.
+    resolved_by_provider: dict[str, int]
 
 
 @router.get("/providers", response_model=ProvidersStatus)
-async def providers_status(user: User = Depends(get_current_user)) -> ProvidersStatus:
+async def providers_status(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ProvidersStatus:
     """Solo admins: el estado de cuotas es información interna."""
     if user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo administradores",
         )
-    return ProvidersStatus(**results_base.providers_snapshot())
+    rows = (
+        await session.exec(
+            select(ParsedPick.verificado_provider, func.count())
+            .where(ParsedPick.verificado_provider != None)  # noqa: E711
+            .group_by(ParsedPick.verificado_provider)
+        )
+    ).all()
+    return ProvidersStatus(
+        **results_base.providers_snapshot(),
+        resolved_by_provider={str(name): n for name, n in rows},
+    )
 
 
 class PicksStatus(BaseModel):

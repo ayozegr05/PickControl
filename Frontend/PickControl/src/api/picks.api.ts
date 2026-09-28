@@ -37,6 +37,7 @@ export type RawPick = {
   cuota_efectiva?: number | null;
   patas?: CombinadaPata[] | null;
   parsed_pick_id?: number | null;
+  anulada?: boolean;
 };
 
 export function toPickItem(raw: RawPick): PickItem {
@@ -58,6 +59,7 @@ export function toPickItem(raw: RawPick): PickItem {
     cuotaEfectiva: raw.cuota_efectiva ?? null,
     patas: raw.patas ?? undefined,
     parsedPickId: raw.parsed_pick_id ?? null,
+    anulada: raw.anulada ?? false,
   };
 }
 

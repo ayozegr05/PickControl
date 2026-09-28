@@ -103,6 +103,7 @@ def _parsed_to_read(
         es_combinada=parsed.es_combinada,
         cuota_efectiva=parsed.cuota_efectiva,
         patas=[_pata_to_read(p) for p in patas] if patas else None,
+        anulada=parsed.anulada,
     )
 
 

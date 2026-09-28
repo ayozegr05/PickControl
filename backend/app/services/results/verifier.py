@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Optional
@@ -1628,11 +1629,26 @@ _PICK_CONCURRENCY = 3
 _PROVIDER_CONCURRENCY = 2
 _provider_sems: dict[str, asyncio.Semaphore] = {}
 
+# Provider que aportó el último dato dentro de un `verify_pick`:
+# ContextVar porque los picks se verifican en tareas concurrentes —
+# cada task lleva su propio valor. Lo escriben los `_find_*` al
+# recibir un resultado y lo lee el wrapper de `verify_pick` para
+# rellenar `pick.verificado_provider` (atribución "best effort": en
+# mercados de stats gana el provider de estadísticas, que se consulta
+# después del de marcador).
+_LAST_PROVIDER_HIT: ContextVar[Optional[str]] = ContextVar(
+    "last_provider_hit", default=None
+)
+
+
+def _provider_label(provider: ResultsProvider) -> str:
+    return getattr(provider, "NAME", None) or type(provider).__name__
+
 
 def _provider_sem(provider: ResultsProvider) -> asyncio.Semaphore:
     """Semáforo por suscripción: `NAME` agrupa providers que comparten
     cuota (allsportsapi2 sirve tenis, basket y odds — misma llave)."""
-    name = getattr(provider, "NAME", None) or type(provider).__name__
+    name = _provider_label(provider)
     if name not in _provider_sems:
         _provider_sems[name] = asyncio.Semaphore(_PROVIDER_CONCURRENCY)
     return _provider_sems[name]
@@ -1675,6 +1691,7 @@ async def _find_match_across_providers(
             )
             continue
         if match:
+            _LAST_PROVIDER_HIT.set(_provider_label(provider))
             return match
     return None
 
@@ -1704,6 +1721,7 @@ async def _find_stats_across_providers(
             )
             continue
         if stats:
+            _LAST_PROVIDER_HIT.set(_provider_label(provider))
             return stats
     return None
 
@@ -1734,6 +1752,7 @@ async def _find_stats_1h_across_providers(
             )
             continue
         if stats:
+            _LAST_PROVIDER_HIT.set(_provider_label(provider))
             return stats
     return None
 
@@ -1763,6 +1782,7 @@ async def _find_events_across_providers(
             )
             continue
         if events:
+            _LAST_PROVIDER_HIT.set(_provider_label(provider))
             return events
     return None
 
@@ -1792,6 +1812,7 @@ async def _find_players_across_providers(
             )
             continue
         if players:
+            _LAST_PROVIDER_HIT.set(_provider_label(provider))
             return players
     return None
 
@@ -1820,6 +1841,7 @@ async def _find_postponed_across_providers(
             )
             continue
         if state:
+            _LAST_PROVIDER_HIT.set(_provider_label(provider))
             return state
     return None
 
@@ -1876,7 +1898,26 @@ async def verify_pick(
 
     Devuelve `(acierto, anulada)`. Si todavía no se puede resolver
     (partido no encontrado, mercado no soportado...), `(None, False)`.
+
+    Cuando decide un resultado anota además `pick.verificado_provider`
+    con el provider que aportó el dato decisivo (persiste quien
+    commitea; las correcciones manuales no pasan por aquí y quedan en
+    NULL).
     """
+    token = _LAST_PROVIDER_HIT.set(None)
+    try:
+        acierto, anulada = await _verify_pick_result(pick, providers)
+        if acierto is not None or anulada:
+            pick.verificado_provider = _LAST_PROVIDER_HIT.get()
+        return acierto, anulada
+    finally:
+        _LAST_PROVIDER_HIT.reset(token)
+
+
+async def _verify_pick_result(
+    pick: ParsedPick, providers: list[ResultsProvider]
+) -> tuple[Optional[bool], bool]:
+    """Cuerpo real de `verify_pick` (ver su docstring)."""
     if pick.es_combinada:
         # El padre de una combinada nunca se verifica contra APIs: sus
         # patas se resuelven como picks normales y el padre se liquida
