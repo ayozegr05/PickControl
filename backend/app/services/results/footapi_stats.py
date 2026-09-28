@@ -70,6 +70,30 @@ from app.services.results.response_cache import (
 logger = get_logger("app.results.footapi")
 
 _MIN_SIMILARITY = 0.6
+
+# Acrónimos/apodos que el tipster usa y Sofascore no: se expanden antes
+# de comparar nombres. Lista conservadora — solo variantes sin
+# ambigüedad ("inter" queda fuera: puede ser Inter de Milán, Inter
+# Miami o Inter de Limeira).
+_TEAM_ALIASES = {
+    "psg": "paris saint germain",
+    "paris sg": "paris saint germain",
+    "paris fc femenino": "paris fc",
+    "man utd": "manchester united",
+    "man city": "manchester city",
+    "spurs": "tottenham",
+    "wolves": "wolverhampton",
+}
+
+
+def _translate_teams(text: str) -> str:
+    """'psg femenino' -> 'paris saint germain femenino' (palabra entera)."""
+    out = text.lower()
+    for alias, full in _TEAM_ALIASES.items():
+        out = re.sub(rf"\b{re.escape(alias)}\b", full, out)
+    return out
+
+
 # El pick puede llevar el día de publicación, no el del partido.
 _DATE_TOLERANCE = timedelta(days=1)
 # Páginas de `matches/previous` a revisar (~30 eventos cada una). Los
@@ -257,6 +281,38 @@ class FootApiStatsProvider:
                 best_id = entity.get("id")
         return best_id if best_score >= _MIN_SIMILARITY else None
 
+    async def _team_id_from_events(
+        self, client: httpx.AsyncClient, name: str, results: list
+    ) -> Optional[int]:
+        """Id del equipo cuando la búsqueda no devuelve entidad 'team'.
+
+        Las selecciones femeninas/filiales comparten nombre con el
+        equipo senior ("Real Madrid" femenino): `/api/search` devuelve
+        entidades `event` sin ids de equipo. El detalle
+        `/api/match/{id}` sí los trae — un par de eventos candidatos
+        basta para resolver al equipo correcto. Cada detalle es una
+        llamada de cuota: se corta en el primer equipo que casa."""
+        for res in results:
+            if res.get("type") != "event":
+                continue
+            entity = res.get("entity") or {}
+            event_id = entity.get("id")
+            if not event_id:
+                continue
+            ev_name = entity.get("name") or ""
+            if _pair_similar(name, ev_name) < _MIN_SIMILARITY:
+                continue
+            data = await self._get_json(client, f"/api/match/{event_id}")
+            event = (data or {}).get("event") or {}
+            for side in ("homeTeam", "awayTeam"):
+                team = event.get(side) or {}
+                team_id = team.get("id")
+                if team_id is None:
+                    continue
+                if _pair_similar(name, team.get("name") or "") >= _MIN_SIMILARITY:
+                    return team_id
+        return None
+
     async def _find_event(self, date: datetime, team_hint: str) -> Optional[dict]:
         """El evento terminado que mejor casa con el hint en la fecha.
 
@@ -277,8 +333,13 @@ class FootApiStatsProvider:
         if is_missed(miss_key, MISSED_TTL_PROVISIONAL if provisional else None):
             return None
 
+        # Acrónimos del tipster -> nombre real de la API ("psg" ->
+        # "paris saint germain"): sin la traducción el match_score del
+        # evento queda bajo umbral aunque el partido exista (caso UWCL).
+        match_hint = _translate_teams(hint)
         name = (
-            re.split(r"[/+&]|\s+-\s+|\s+vs\.?\s+", hint, maxsplit=1)[0].strip() or hint
+            re.split(r"[/+&]|\s+-\s+|\s+vs\.?\s+", match_hint, maxsplit=1)[0].strip()
+            or match_hint
         )
 
         async with httpx.AsyncClient(timeout=15) as client:
@@ -288,6 +349,10 @@ class FootApiStatsProvider:
                 if results is None:
                     return None  # error de API: no se marca missed
                 team_id = self._team_id(name, results)
+                if team_id is None:
+                    # Equipos femeninos/filiales no aparecen como entidad
+                    # 'team': sacar el id real del detalle de los eventos.
+                    team_id = await self._team_id_from_events(client, name, results)
                 if team_id is None:
                     mark_missed(miss_key)
                     return None
@@ -305,7 +370,7 @@ class FootApiStatsProvider:
                 if abs(played - date) > _DATE_TOLERANCE:
                     continue
             score = match_score(
-                hint,
+                match_hint,
                 (event.get("homeTeam") or {}).get("name") or "",
                 (event.get("awayTeam") or {}).get("name") or "",
             )

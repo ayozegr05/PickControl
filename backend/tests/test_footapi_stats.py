@@ -419,6 +419,125 @@ class TestFindMatchPlayers:
         assert (acierto, anulada) == (True, False)
 
 
+class TestWomensTeamResolution:
+    """Equipos femeninos/filiales que comparten nombre con el senior.
+
+    Caso real UWCL: "Real Madrid Femenino vs PSG Femenino" — la
+    búsqueda devuelve solo entidades `event` (no `team`), el equipo
+    femenino se llama "Real Madrid" igual que el senior y el tipster
+    escribe el acrónimo "PSG".
+    """
+
+    _W_TEAM_ID = 305051
+    _W_EVENT_ID = 17018497
+    _W_TS = int(datetime(2026, 9, 22, 19, 0, tzinfo=timezone.utc).timestamp())
+
+    _SEARCH_WOMEN = {
+        "results": [
+            {
+                "type": "event",
+                "entity": {
+                    "id": 14414587,
+                    "name": "Alhama Club de Fútbol - Real Madrid",
+                },
+            },
+            {
+                "type": "event",
+                "entity": {
+                    "id": 14414511,
+                    "name": "Real Madrid - Alhama Club de Fútbol",
+                },
+            },
+        ]
+    }
+
+    _MATCH_DETAIL = {
+        "event": {
+            "id": 14414587,
+            "homeTeam": {"id": 9999, "name": "Alhama Club de Fútbol"},
+            "awayTeam": {"id": _W_TEAM_ID, "name": "Real Madrid"},
+        }
+    }
+
+    _W_PREVIOUS = {
+        "events": [
+            {
+                "id": _W_EVENT_ID,
+                "startTimestamp": _W_TS,
+                "status": {"type": "finished"},
+                "homeTeam": {"name": "Real Madrid"},
+                "awayTeam": {"name": "Paris Saint-Germain"},
+                "homeScore": {"current": 1},
+                "awayScore": {"current": 1},
+            }
+        ]
+    }
+
+    _W_STATS = {
+        "statistics": [
+            {
+                "period": "ALL",
+                "groups": [
+                    {
+                        "statisticsItems": [
+                            {"name": "Corner kicks", "home": "6", "away": "4"},
+                        ]
+                    }
+                ],
+            }
+        ]
+    }
+
+    @pytest.fixture
+    def wprovider(self, monkeypatch):
+        monkeypatch.setattr(footapi, "is_rate_limited", lambda name: False)
+        monkeypatch.setattr(footapi, "is_missed", lambda key, ttl=None: False)
+        monkeypatch.setattr(footapi, "mark_missed", lambda key: None)
+        monkeypatch.setattr(footapi, "mark_rate_limited", lambda name: None)
+        prov = FootApiStatsProvider("key", "footapi7.p.rapidapi.com")
+        responses = {
+            "/api/search/real%20madrid%20femenino": self._SEARCH_WOMEN,
+            "/api/match/14414587": self._MATCH_DETAIL,
+            f"/api/team/{self._W_TEAM_ID}/matches/previous/0": self._W_PREVIOUS,
+            f"/api/match/{self._W_EVENT_ID}/statistics": self._W_STATS,
+        }
+
+        async def fake_get(client, path):
+            return responses.get(path, {})
+
+        monkeypatch.setattr(prov, "_get_json", fake_get)
+        return prov
+
+    async def test_resuelve_equipo_femenino_desde_evento(self, wprovider):
+        match = await wprovider.find_match(
+            datetime(2026, 9, 22, 19, 0), "Real Madrid Femenino vs PSG Femenino"
+        )
+        assert match is not None
+        assert (match.home_score, match.away_score) == (1, 1)
+
+    async def test_stats_corners_uwcl(self, wprovider):
+        stats = await wprovider.find_match_stats(
+            datetime(2026, 9, 22, 19, 0), "Real Madrid Femenino vs PSG Femenino"
+        )
+        assert stats is not None
+        assert stats.values["Corner Kicks"] == (6, 4)
+
+    async def test_integracion_pick_uwcl(self, wprovider):
+        pick = ParsedPick(
+            raw_message_id=1,
+            seleccion="Más de 7.0 corners",
+            mercado="over/under",
+            evento="Real Madrid Femenino vs PSG Femenino",
+            linea=7.0,
+            deporte="futbol",
+            fecha_evento=datetime(2026, 9, 22, 19, 0),
+            es_apuesta=True,
+        )
+        acierto, anulada = await verify_pick(pick, [wprovider])
+        # 6 + 4 = 10 córners > 7.0 -> acierto.
+        assert (acierto, anulada) == (True, False)
+
+
 class TestPersistentCache:
     """La caché en disco (provider_cache.json) evita repetir llamadas
     de navegación entre pasadas del verificador."""
