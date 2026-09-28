@@ -46,8 +46,16 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     resultados `event` → `/api/match/{id}` para sacar el team-id
     real; `_TEAM_ALIASES` expande acrónimos del tipster
     ("psg"→"paris saint germain") antes del match_score — cubre
-    UWCL y similares (caso: pick 2951, evento 17018497). Al final
-    de la cascada,
+    UWCL y similares (caso: pick 2951, evento 17018497).
+  - `app/services/results/espn_f1.py` — Fórmula 1 (deporte
+    `automovilismo`): scoreboard `racing/f1` (un evento por GP,
+    competición `Race`), matching por tokens de localización
+    (`_GP_LOCATION_ALIASES`: "GP ITALIA"→"Italian Grand Prix").
+    "Menos de X coches" = `Classified Cars`: el scoreboard ordena
+    también a los retirados, así que el estado de cada piloto se lee
+    de `competitors[].status.$ref` en la core API (STATUS_CLASSIFIED
+    vs STATUS_RETIRED — ~22 llamadas en paralelo, solo para picks F1).
+    Ganador del GP modelado como local 1-0. Al final de la cascada,
     `gemini_research.py` (Gemini, free tier): salto 1 = `url_context`
     lee DDG Lite (los buscadores bloquean la IP de la VM) y filtra URLs
     por allowlist de dominios de resultados; los saltos 2/3 descargan
@@ -58,7 +66,12 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     liquida marcadores solo con fuente leída + doble lectura que debe
     coincidir; `find_match_stats` extrae aces/córners/etc. validando
     que cada número aparece literalmente junto al nombre de la
-    estadística en la página. Queries de búsqueda sin día exacto ni
+    estadística en la página. IMPORTANTE cuota: los providers de
+    investigación (`NAME` gemini*) se excluyen de TODOS los barridos
+    de aplazados rutinarios (`_is_research_provider`) — solo se les
+    pregunta por aplazado cuando la resolución completa ya falló
+    (último recurso en `verify_pick`), porque cada consulta les
+    cuesta una búsqueda real. Queries de búsqueda sin día exacto ni
     conectores ("X vs Y" empobrece DDG). Config: `GOOGLE_API_KEY`.
     Fetch de páginas con fallback a **FlareSolverr** (contenedor
     `controlpick-flaresolverr`, Chromium anti-Cloudflare, solo red

@@ -1233,11 +1233,14 @@ class TestStatOverUnder:
         assert acierto is True  # 2 + (1+1) = 4
 
     async def test_sujeto_sin_estadistica_queda_pendiente(self):
+        # "Coches" ya es sujeto resoluble (F1): el provider se consulta,
+        # pero sus stats de fútbol no traen "Classified Cars" — sigue
+        # pendiente, nunca se resuelve contra otra estadística.
         provider = _StubStatsProvider(_stats({"Corner Kicks": 6}, {}))
         pick = _pick("Menos de 19.5 coches", "over/under", linea=19.5)
         acierto, anulada = await verify_pick(pick, [provider])
         assert (acierto, anulada) == (None, False)
-        assert provider.calls == 0
+        assert provider.calls == 1
 
     async def test_sin_stats_del_proveedor_queda_pendiente(self):
         # El proveedor no devolvió estadísticas (partido fuera de la
@@ -3125,3 +3128,62 @@ class TestAmbiguousHighLineCorners:
         pick = _pick("Más de 8.0", "over/under", linea=8.0)
         acierto, _ = await verify_pick(pick, [provider])
         assert acierto is None
+
+
+class _StubResearchProvider:
+    """Simula `gemini-search`: registra cuántas veces se le consulta
+    por aplazados (cada una le costaría una búsqueda real de cuota)."""
+
+    NAME = "gemini-search"
+    SUPPORTED_SPORTS = frozenset({"tenis"})
+
+    def __init__(self, state: "MatchState | None" = None):
+        self.calls = 0
+        self._state = state
+
+    async def find_postponed_match(self, date, team_hint):
+        self.calls += 1
+        return self._state
+
+
+class TestPostponedResearchLast:
+    """La investigación web solo se consulta por aplazados cuando los
+    deterministas ya han fallado — preguntarle en la fase inicial
+    quemaba búsquedas en picks que footapi7 resolvía después."""
+
+    async def test_determinista_resuelve_sin_consultar_research(self):
+        det = _StubTennisProvider(home_sets=2, away_sets=0)
+        det.NAME = "stub-tenis"
+        research = _StubResearchProvider()
+        pick = _pick_tenis("Alcaraz gana")
+        pick.fecha_evento = datetime.now() - timedelta(days=6)
+        acierto, anulada = await verify_pick(pick, [det, research])
+        assert (acierto, anulada) == (True, False)
+        assert research.calls == 0
+
+    async def test_irresoluble_pregunta_aplazado_a_research(self):
+        det = _StubTennisProvider(2, 0, home="Otro", away="Otro2")
+        det.NAME = "stub-tenis"
+        research = _StubResearchProvider(
+            MatchState(
+                home_team="Carlos Alcaraz",
+                away_team="Jannik Sinner",
+                status="postponed",
+            )
+        )
+        pick = _pick_tenis("Alcaraz gana")
+        pick.fecha_evento = datetime.now() - timedelta(days=6)
+        acierto, anulada = await verify_pick(pick, [det, research])
+        assert (acierto, anulada) == (None, True)
+        assert pick.motivo_anulada == "aplazado"
+        assert research.calls >= 1
+
+    async def test_irresoluble_sin_aplazado_queda_pendiente(self):
+        det = _StubTennisProvider(2, 0, home="Otro", away="Otro2")
+        det.NAME = "stub-tenis"
+        research = _StubResearchProvider(None)
+        pick = _pick_tenis("Alcaraz gana")
+        pick.fecha_evento = datetime.now() - timedelta(days=6)
+        acierto, anulada = await verify_pick(pick, [det, research])
+        assert (acierto, anulada) == (None, False)
+        assert research.calls >= 1
