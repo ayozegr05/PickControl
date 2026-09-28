@@ -200,6 +200,7 @@ async def anular_residuo_pendiente(
     for pick in residuo:
         pick.anulada = True
         pick.verificado_por = "expired"
+        pick.motivo_anulada = "expired"
         pick.verificado_at = now
         session.add(pick)
         afectados += 1
@@ -270,6 +271,9 @@ async def corregir_acierto_pick(
     # La atribución a provider solo vale para liquidaciones auto: una
     # corrección manual (o una reapertura a pendiente) la limpia.
     pick.verificado_provider = None
+    # El motivo del void se deriva de la cascada; una anulación manual
+    # no consta su razón.
+    pick.motivo_anulada = None
     pick.verificado_at = utc_now() if resolved else None
 
     session.add(pick)

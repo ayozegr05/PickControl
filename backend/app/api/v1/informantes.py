@@ -75,6 +75,7 @@ def _pata_to_read(leg: ParsedPick) -> CombinadaPata:
         fecha_evento=leg.fecha_evento,
         acierto=leg.acierto,
         anulada=leg.anulada,
+        motivo_anulada=leg.motivo_anulada,
     )
 
 
@@ -104,6 +105,7 @@ def _parsed_to_read(
         cuota_efectiva=parsed.cuota_efectiva,
         patas=[_pata_to_read(p) for p in patas] if patas else None,
         anulada=parsed.anulada,
+        motivo_anulada=parsed.motivo_anulada,
     )
 
 

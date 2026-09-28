@@ -4,6 +4,15 @@
 
 export type Acierto = "Pending" | "True" | "False";
 export type PickSource = "manual" | "telegram";
+/** Motivo registrado del void (solo con anulada=true; null en
+ * anuladas históricas): empate técnico en línea entera / DNB,
+ * partido no disputado, jugador del prop sin minutos, o cierre del
+ * barrido de residuos. */
+export type MotivoAnulada =
+  | "push"
+  | "aplazado"
+  | "jugador_fuera"
+  | "expired";
 
 /** Una pata de una combinada (cada una se verifica por separado). */
 export interface CombinadaPata {
@@ -17,6 +26,7 @@ export interface CombinadaPata {
   fecha_evento?: string | null;
   acierto?: boolean | null;
   anulada: boolean;
+  motivo_anulada?: MotivoAnulada | null;
 }
 
 export interface PickItem {
@@ -48,6 +58,8 @@ export interface PickItem {
   /** Solo picks de Telegram: apuesta anulada/devuelta (void). La
    * pendiente real es `acierto === "Pending" && !anulada`. */
   anulada?: boolean;
+  /** Motivo del void cuando consta; null en anuladas históricas. */
+  motivoAnulada?: MotivoAnulada | null;
 }
 
 export interface PickCreatePayload {
