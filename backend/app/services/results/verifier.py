@@ -479,7 +479,7 @@ def _resolve_asian_handicap(
     if all(o == "lose" for o in outcomes):
         return False, False
     if all(o == "push" for o in outcomes):
-        return None, True
+        return _void("push")
     # Mezcla posible solo win+push o lose+push (win+lose es imposible:
     # las medias difieren en 0.5).
     return ("win" in outcomes), False
@@ -494,13 +494,13 @@ def _compare_over_under(
             return True, False
         if total < linea:
             return False, False
-        return None, True
+        return _void("push")
     # direction == "under"
     if total < linea:
         return True, False
     if total > linea:
         return False, False
-    return None, True
+    return _void("push")
 
 
 def _resolve_over_under(
@@ -740,7 +740,7 @@ def _resolve_player_market(
     if hit(events.participants):
         return False, False
     if played is not None:
-        return (False, False) if hit(played) else (None, True)
+        return (False, False) if hit(played) else _void("jugador_fuera")
     return None, False
 
 
@@ -860,7 +860,7 @@ def _resolve_player_prop(
     minutos -> anulada (la casa devuelve). Stat ausente -> 0."""
     name = next((n for n in players.played if _player_name_matches(player, n)), None)
     if name is None:
-        return None, True
+        return _void("jugador_fuera")
     total = sum(players.stats.get(name, {}).get(k, 0) for k in stat_keys)
     return _compare_over_under(total, direction, linea)
 
@@ -1080,7 +1080,7 @@ def _handicap_result(player_score: int, opp_score: int, linea: float):
     if all(o == "lose" for o in outcomes):
         return False, False
     if all(o == "push" for o in outcomes):
-        return None, True
+        return _void("push")
     return ("win" in outcomes), False
 
 
@@ -1141,7 +1141,7 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
-            return None, True
+            return _void("aplazado")
         if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         if not match.sets:
@@ -1177,7 +1177,7 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
-            return None, True
+            return _void("aplazado")
         if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         scores = _tennis_scores(match, team)
@@ -1220,7 +1220,7 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
-            return None, True
+            return _void("aplazado")
         if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         winner_side = _tennis_set_winner_index(match, set_idx)
@@ -1243,7 +1243,7 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
-            return None, True
+            return _void("aplazado")
         if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         had_tiebreak = _tennis_had_tiebreak(match)
@@ -1267,7 +1267,7 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
-            return None, True
+            return _void("aplazado")
         if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         if not player:
@@ -1342,7 +1342,7 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
-            return None, True
+            return _void("aplazado")
         if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         # Over/under sobre un set concreto ("más de 9.5 juegos en el
@@ -1640,6 +1640,22 @@ _LAST_PROVIDER_HIT: ContextVar[Optional[str]] = ContextVar(
     "last_provider_hit", default=None
 )
 
+# Motivo del último void dentro de un `verify_pick`: "push" (empate
+# técnico en línea entera / "resultado sin empate" empatado),
+# "aplazado" (cancelado/aplazado/walkover/fixture reordenado) o
+# "jugador_fuera" (prop cuyo jugador no disputó minutos). Lo escribe
+# `_void` en cada retorno de anulada y lo lee el wrapper de
+# `verify_pick` para rellenar `pick.motivo_anulada`.
+_LAST_VOID_REASON: ContextVar[Optional[str]] = ContextVar(
+    "last_void_reason", default=None
+)
+
+
+def _void(reason: str) -> tuple[None, bool]:
+    """Marca un retorno anulado con su motivo para `verify_pick`."""
+    _LAST_VOID_REASON.set(reason)
+    return None, True
+
 
 def _provider_label(provider: ResultsProvider) -> str:
     return getattr(provider, "NAME", None) or type(provider).__name__
@@ -1888,6 +1904,7 @@ async def _rearranged_fixture_void(
         match.home_team,
         match.away_team,
     )
+    _LAST_VOID_REASON.set("aplazado")
     return True
 
 
@@ -1905,13 +1922,16 @@ async def verify_pick(
     NULL).
     """
     token = _LAST_PROVIDER_HIT.set(None)
+    token_reason = _LAST_VOID_REASON.set(None)
     try:
         acierto, anulada = await _verify_pick_result(pick, providers)
         if acierto is not None or anulada:
             pick.verificado_provider = _LAST_PROVIDER_HIT.get()
+            pick.motivo_anulada = _LAST_VOID_REASON.get() if anulada else None
         return acierto, anulada
     finally:
         _LAST_PROVIDER_HIT.reset(token)
+        _LAST_VOID_REASON.reset(token_reason)
 
 
 async def _verify_pick_result(
@@ -1975,7 +1995,7 @@ async def _verify_pick_result(
                 state.home_team,
                 state.away_team,
             )
-            return None, True
+            return _void("aplazado")
 
     # Mercados de fútbol que se resuelven solo con el marcador final.
     combined = f"{pick.mercado or ''} {pick.seleccion or ''}"
@@ -2272,11 +2292,11 @@ async def _verify_pick_result(
         return None, False
     if match.status in _TENNIS_VOID_STATUSES:
         # Retirada/walkover (tenis): la casa suele devolver la apuesta.
-        return None, True
+        return _void("aplazado")
     if sport == "tenis" and await _rearranged_fixture_void(
         pick, match, predicted_team, providers_for_sport
     ):
-        return None, True
+        return _void("aplazado")
 
     if is_first_half:
         if _HT_FT_PATTERN.search(combined):
@@ -2302,7 +2322,7 @@ async def _verify_pick_result(
         if es_mercado_sin_empate:
             # "Resultado sin empate" anula/devuelve la apuesta en caso
             # de empate en vez de perderla.
-            return None, True
+            return _void("push")
         return False, False  # empate: la apuesta a "gana" falla
 
     if sport == "tenis":

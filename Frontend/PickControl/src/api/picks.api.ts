@@ -38,6 +38,7 @@ export type RawPick = {
   patas?: CombinadaPata[] | null;
   parsed_pick_id?: number | null;
   anulada?: boolean;
+  motivo_anulada?: PickItem["motivoAnulada"];
 };
 
 export function toPickItem(raw: RawPick): PickItem {
@@ -60,6 +61,7 @@ export function toPickItem(raw: RawPick): PickItem {
     patas: raw.patas ?? undefined,
     parsedPickId: raw.parsed_pick_id ?? null,
     anulada: raw.anulada ?? false,
+    motivoAnulada: raw.motivo_anulada ?? null,
   };
 }
 

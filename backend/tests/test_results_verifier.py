@@ -278,6 +278,49 @@ class TestVerificadoProvider:
         assert pick.verificado_provider is None
 
 
+class TestMotivoAnulada:
+    """`verify_pick` anota el motivo del void en `pick.motivo_anulada`:
+    distingue push (devuelta por línea entera) de aplazado/cancelado y
+    deja NULL en las que no son anuladas."""
+
+    async def test_push_linea_entera_anota_push(self):
+        # 6-4 6-4 = 20 juegos exactos contra línea 20 -> push, la casa
+        # devuelve (como #971 Elche-RM con 7 córners y línea 7).
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])
+        pick = _pick_tenis("Más de 20 juegos", "más de")
+        pick.linea = 20.0
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, True)
+        assert pick.motivo_anulada == "push"
+
+    async def test_fixture_reordenado_anota_aplazado(self):
+        provider = _StubTennisRearranged(
+            cancelled=MatchState(
+                home_team="Kestelboim M./Romboli F.",
+                away_team="Rodriguez Taverna S./Vega Hernandez D.",
+                status="cancelled",
+            ),
+            home_sets=2,
+            away_sets=1,
+            sets=[(4, 6), (7, 6), (10, 8)],
+            home="Kestelboim M./Romboli F.",
+            away="Barton H./Sanchez Izquierdo I.",
+        )
+        pick = _pick_tenis("Kestelboim/Romboli gana")
+        pick.evento = "CHALLENGER SZCZECIN DOBLES"
+        pick.fecha_evento = datetime.now() - timedelta(hours=5)
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, True)
+        assert pick.motivo_anulada == "aplazado"
+
+    async def test_acierto_limpia_motivo(self):
+        provider = _StubTennisProvider(2, 0)
+        pick = _pick_tenis("Alcaraz gana")
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (True, False)
+        assert pick.motivo_anulada is None
+
+
 class _StubTennisStatsProvider:
     """Tenis con tabla de stats (aces, dobles faltas) — simula el
     provider-investigador (`find_match_stats`)."""

@@ -20,6 +20,9 @@ export type ParsedPick = {
   linea: number | null;
   acierto: boolean | null;
   anulada: boolean;
+  /** Motivo del void ("push" | "aplazado" | "jugador_fuera" | "expired"),
+   * null en anuladas históricas sin motivo registrado. */
+  motivo_anulada: string | null;
   verificado_por: string | null;
   informante_id: number | null;
   raw_message_id: number;

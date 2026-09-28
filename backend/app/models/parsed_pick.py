@@ -82,6 +82,13 @@ class ParsedPickBase(SQLModel):
     # NULL en liquidaciones manuales/expired y en las históricas
     # anteriores a la migración.
     verificado_provider: Optional[str] = Field(default=None, max_length=40)
+    # Por qué se anuló (solo con anulada=True): "push" (empate técnico
+    # en línea entera / resultado sin empate empatado), "aplazado"
+    # (partido cancelado/aplazado/walkover o fixture reordenado),
+    # "jugador_fuera" (prop de jugador cuyo jugador no disputó
+    # minutos) o "expired" (barrido de residuos). NULL en anuladas
+    # históricas previas a la columna — motivo no registrado.
+    motivo_anulada: Optional[str] = Field(default=None, max_length=20)
     # Cuándo se liquidó (auto o manual). NULL mientras siga pendiente;
     # si una corrección reabre el pick, vuelve a NULL.
     verificado_at: Optional[datetime] = None

@@ -342,7 +342,11 @@ export default function ParsedPicksScreen() {
   }, [picksStatus, reload]);
 
   const estadoPata = (pata: ParsedPick): string => {
-    if (pata.anulada) return "Anulada";
+    if (pata.anulada) {
+      return pata.motivo_anulada
+        ? `Anulada · ${pata.motivo_anulada}`
+        : "Anulada";
+    }
     if (pata.acierto === true) return "Acertó";
     if (pata.acierto === false) return "Falló";
     return "Pendiente";
@@ -472,7 +476,9 @@ export default function ParsedPicksScreen() {
               }
             >
               {pick.anulada
-                ? "Anulada"
+                ? pick.motivo_anulada
+                  ? `Anulada · ${pick.motivo_anulada}`
+                  : "Anulada"
                 : pick.acierto === true
                   ? "Acertó"
                   : pick.acierto === false

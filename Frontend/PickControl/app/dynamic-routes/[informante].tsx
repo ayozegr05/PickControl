@@ -258,10 +258,32 @@ export default function InformantDetail() {
 
   // Picks de Telegram: solo lectura, sin tocar el modal de edición.
   // Anulada (void) es un estado cerrado distinto de pendiente: sin la
-  // flag la pintábamos con "❓" igual que una no verificada.
-  const renderPronosticoTelegram = (acierto: Acierto, anulada?: boolean) => {
+  // flag la pintábamos con "❓" igual que una no verificada. El icono
+  // distingue el motivo cuando consta: ↩️ push (devuelta por línea
+  // entera), 📅 aplazado/cancelado, 👤 jugador sin minutos, ⏰
+  // expirada por barrido; ⊘ genérico en históricas sin motivo.
+  const iconoAnulada = (motivo?: string | null): string =>
+    motivo === "push"
+      ? "↩️"
+      : motivo === "aplazado"
+        ? "📅"
+        : motivo === "jugador_fuera"
+          ? "👤"
+          : motivo === "expired"
+            ? "⏰"
+            : "⊘";
+
+  const renderPronosticoTelegram = (
+    acierto: Acierto,
+    anulada?: boolean,
+    motivoAnulada?: string | null
+  ) => {
     if (anulada) {
-      return <Text style={[styles.icon, { color: "gray" }]}>↩️</Text>;
+      return (
+        <Text style={[styles.icon, { color: "gray" }]}>
+          {iconoAnulada(motivoAnulada)}
+        </Text>
+      );
     }
     if (acierto === "True") {
       return (
@@ -794,7 +816,8 @@ export default function InformantDetail() {
                           <Text>
                             {renderPronosticoTelegram(
                               apuesta.acierto,
-                              apuesta.anulada
+                              apuesta.anulada,
+                              apuesta.motivoAnulada
                             )}
                           </Text>
                         </View>
@@ -876,7 +899,12 @@ export default function InformantDetail() {
                         {reto.cuota != null
                           ? Number(reto.cuota).toFixed(2)
                           : "—"}{" "}
-                        · {renderPronosticoTelegram(reto.acierto, reto.anulada)}
+                        ·{" "}
+                        {renderPronosticoTelegram(
+                          reto.acierto,
+                          reto.anulada,
+                          reto.motivoAnulada
+                        )}
                       </Text>
                     </TouchableOpacity>
                   ))}
@@ -930,7 +958,8 @@ export default function InformantDetail() {
                               {numPatas} patas ·{" "}
                               {renderPronosticoTelegram(
                                 comb.acierto,
-                                comb.anulada
+                                comb.anulada,
+                                comb.motivoAnulada
                               )}
                             </Text>
                           </TouchableOpacity>
@@ -957,7 +986,7 @@ export default function InformantDetail() {
                             <View key={pata.id} style={styles.pataRow}>
                               <Text style={styles.pataIcono}>
                                 {pata.anulada
-                                  ? "↩️"
+                                  ? iconoAnulada(pata.motivo_anulada)
                                   : pata.acierto === true
                                     ? "✅"
                                     : pata.acierto === false

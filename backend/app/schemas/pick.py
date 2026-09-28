@@ -49,6 +49,7 @@ class CombinadaPata(SQLModel):
     fecha_evento: Optional[datetime] = None
     acierto: Optional[bool] = None
     anulada: bool = False
+    motivo_anulada: Optional[str] = None
 
 
 class PickRead(SQLModel):
@@ -86,6 +87,9 @@ class PickRead(SQLModel):
     # flag la anulada serializaba como Pending y la UI la mostraba con
     # "❓" igual que una pendiente real.
     anulada: bool = False
+    # Motivo del void cuando consta ("push", "aplazado", "jugador_fuera",
+    # "expired"); NULL en anuladas históricas sin motivo registrado.
+    motivo_anulada: Optional[str] = None
 
 
 class ParsedPickRead(ParsedPickBase):
