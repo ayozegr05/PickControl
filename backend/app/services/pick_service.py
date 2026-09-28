@@ -55,6 +55,7 @@ class StatsInput:
     cantidad_apostada: float
     cuota: float
     acierto: Acierto
+    anulada: bool = False
 
 
 @dataclass
@@ -114,7 +115,12 @@ def _stats_inputs_to_result(
         # El % de aciertos e yield se calculan solo sobre las finalizadas:
         # sin este dato la card mostraba "3 picks, 1 acierto, 100%" y
         # parecía que el tipster lo había acertado todo.
-        total_pendientes=total_apuestas - len(finalizadas),
+        # Las anuladas son picks cerradas (void): ni finalizadas con
+        # resultado ni pendientes — excluirlas evita que cada canal
+        # muestre "N pendientes" por apuestas ya devueltas.
+        total_pendientes=sum(
+            1 for i in inputs if i.acierto == Acierto.PENDING and not i.anulada
+        ),
         ganancias_por_pick=ganancias_por_pick,
     )
 
@@ -157,6 +163,7 @@ def to_stats_input_from_parsed(parsed: ParsedPick) -> StatsInput:
         cantidad_apostada=parsed.stake or 1.0,
         cuota=cuota,
         acierto=acierto,
+        anulada=parsed.anulada,
     )
 
 

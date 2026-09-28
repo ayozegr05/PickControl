@@ -122,3 +122,16 @@ class TestCalcularStatsParsed:
         assert stats.total_aciertos == 1
         # Sólo la finalizada entra en % aciertos
         assert stats.porcentaje_aciertos == 100.0
+
+    def test_parsed_anulada_no_es_pendiente(self):
+        """Una pick anulada está cerrada (void): no puede quedar
+        sumando como pendiente en las stats del canal para siempre."""
+        parsed = [
+            _make_parsed(1, 10.0, 2.0, None),  # pendiente real
+            _make_parsed(2, 10.0, 2.0, True),  # acierto
+        ]
+        anulada = _make_parsed(3, 10.0, 2.0, None)
+        anulada.anulada = True
+        stats = calcular_stats_parsed([*parsed, anulada])
+        assert stats.total_apuestas == 3
+        assert stats.total_pendientes == 1
