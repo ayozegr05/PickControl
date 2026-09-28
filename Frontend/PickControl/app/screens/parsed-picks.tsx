@@ -626,9 +626,9 @@ export default function ParsedPicksScreen() {
                         : ""}
                       {row.callsToday > 0 && row.misses > 0 ? " · " : ""}
                       {row.misses > 0
-                        ? `${row.misses} búsqueda${
+                        ? `${row.misses} no encontrado${
                             row.misses !== 1 ? "s" : ""
-                          } sin resultado en caché`
+                          } (en caché)`
                         : ""}
                       {(row.callsToday > 0 || row.misses > 0) &&
                       row.resolved > 0
