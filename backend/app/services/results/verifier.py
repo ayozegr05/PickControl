@@ -1574,12 +1574,12 @@ async def _get_providers() -> list[ResultsProvider]:
     # FIBA (sin ACB ni Euroliga: ESPN no las publica; esas siguen en
     # API-Basketball y los mirrors).
     providers.append(EspnBasketballProvider())
-    # F1: mismo feed gratis de ESPN (`racing/f1`). Los picks de coches
-    # son raros pero existen ("menos de X coches" = clasificados).
-    providers.append(EspnF1Provider())
-    # Segundo determinista F1: Jolpica/Ergast (clasificación oficial
-    # FIA; también gratis y sin key).
+    # F1: Jolpica/Ergast primero — es la clasificación oficial FIA y
+    # gratis sin key. ESPN queda de respaldo: su conteo por `status`
+    # puede desviarse (en Baku 2025 contó 15 clasificados cuando la
+    # clasificación oficial marca 19).
     providers.append(JolpicaF1Provider())
+    providers.append(EspnF1Provider())
     # 365scores para basket: mismo feed por día, sin cuota — antes de
     # API-Basketball (cuota propia) y los mirrors.
     providers.append(Scores365Provider("baloncesto"))
