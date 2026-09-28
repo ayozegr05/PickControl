@@ -70,6 +70,7 @@ from app.services.results.footapi_stats import FootApiStatsProvider
 from app.services.results.football24h import Football24hProvider
 from app.services.results.football_data import FootballDataProvider
 from app.services.results.gemini_research import GeminiResearchProvider
+from app.services.results.jolpica_f1 import JolpicaF1Provider
 from app.services.results.rapidapi_tennis import RapidApiTennisProvider
 from app.services.results.scores365 import Scores365Provider
 from app.services.results.sofascore_basketball import SofascoreBasketballProvider
@@ -1576,6 +1577,9 @@ async def _get_providers() -> list[ResultsProvider]:
     # F1: mismo feed gratis de ESPN (`racing/f1`). Los picks de coches
     # son raros pero existen ("menos de X coches" = clasificados).
     providers.append(EspnF1Provider())
+    # Segundo determinista F1: Jolpica/Ergast (clasificación oficial
+    # FIA; también gratis y sin key).
+    providers.append(JolpicaF1Provider())
     # 365scores para basket: mismo feed por día, sin cuota — antes de
     # API-Basketball (cuota propia) y los mirrors.
     providers.append(Scores365Provider("baloncesto"))

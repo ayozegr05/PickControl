@@ -192,7 +192,13 @@ def _race_competition(event: dict) -> Optional[dict]:
 
 
 class EspnF1Provider(EspnCoreProvider):
-    """Fórmula 1 vía scoreboard `racing/f1` + statuses de la core API."""
+    """Fórmula 1 vía scoreboard `racing/f1` + statuses de la core API.
+
+    La parte genérica (matching por hint + tolerancia de fecha, miss
+    keys, orquestación de find_match/stats/postponed) vive aquí y se
+    apoya en hooks `_fetch_races`/`_race_*` que cada provider implementa
+    — `jolpica_f1.py` los sobrescribe para la API Ergast-compatible.
+    """
 
     SUPPORTED_SPORTS = frozenset({"automovilismo"})
     _SPORT_PATH = "racing"
@@ -200,10 +206,55 @@ class EspnF1Provider(EspnCoreProvider):
     _SPORT_TAG = "automovilismo"
     _DATE_TOLERANCE = _DATE_TOLERANCE
 
-    async def _find_race(
-        self, date: datetime, team_hint: str
-    ) -> Optional[tuple[dict, dict]]:
-        """(evento, competición Race) del GP que casa con el hint."""
+    # --- Hooks por provider (ESPN abajo, Jolpica en su módulo) ----------
+
+    async def _fetch_races(self, year: int, month: int) -> list[dict]:
+        """Carreras del mes como dicts opacos `{"event", "race"}`."""
+        board = await self._scoreboard("f1", f"{year}{month:02d}")
+        races = []
+        for event in (board or {}).get("events") or []:
+            race = _race_competition(event)
+            if race is not None:
+                races.append({"event": event, "race": race})
+        return races
+
+    def _race_name(self, race: dict) -> str:
+        return race["event"].get("name") or ""
+
+    def _race_date(self, race: dict) -> Optional[datetime]:
+        return _competition_date(race["race"])
+
+    async def _race_completed(self, race: dict) -> bool:
+        return self._is_completed(race["race"])
+
+    def _race_postponed_status(self, race: dict) -> Optional[str]:
+        """Estado void (`postponed`/`cancelled`) o None si se jugó."""
+        status_name = ((race["race"].get("status") or {}).get("type") or {}).get("name")
+        return _VOIDED_STATUSES.get(status_name or "")
+
+    async def _race_result(self, race: dict) -> Optional[tuple[str, str]]:
+        """(ganador, segundo) por orden de clasificación."""
+        ordered = sorted(
+            race["race"].get("competitors") or [],
+            key=lambda c: c.get("order") or 999,
+        )
+        if len(ordered) < 2:
+            return None
+        return _competitor_name(ordered[0]), _competitor_name(ordered[1])
+
+    async def _classified_count(self, race: dict) -> Optional[int]:
+        """Pilotos que acabaron la carrera (None = dato incompleto)."""
+        statuses = await self._competitor_statuses(
+            str(race["event"].get("id") or ""), str(race["race"].get("id") or "")
+        )
+        if statuses is None:
+            return None
+        return sum(1 for s in statuses if s == _CLASSIFIED_STATUS)
+
+    # --- Matching genérico ----------------------------------------------
+
+    async def _find_race(self, date: datetime, team_hint: str) -> Optional[dict]:
+        """La carrera del GP que casa con el hint (dict del provider)."""
         hint = team_hint.strip()
         if not hint or is_rate_limited(self.NAME):
             return None
@@ -217,27 +268,20 @@ class EspnF1Provider(EspnCoreProvider):
         if is_missed(miss_key, MISSED_TTL_PROVISIONAL if provisional else None):
             return None
 
-        best: Optional[tuple[dict, dict]] = None
+        best: Optional[dict] = None
         best_score = 0.0
-        months = [_shift_month(date, off).strftime("%Y%m") for off in _MONTH_OFFSETS]
-        for period in months:
-            board = await self._scoreboard("f1", period)
-            if board is None:
-                continue
-            for event in board.get("events") or []:
-                race = _race_competition(event)
-                if race is None:
-                    continue
-                race_date = _competition_date(race)
+        for shifted in (_shift_month(date, off) for off in _MONTH_OFFSETS):
+            for race in await self._fetch_races(shifted.year, shifted.month):
+                race_date = self._race_date(race)
                 if (
                     race_date is not None
                     and abs(race_date - date) > self._DATE_TOLERANCE
                 ):
                     continue
-                score = _event_score(hint, event.get("name") or "")
+                score = _event_score(hint, self._race_name(race))
                 if score > best_score:
                     best_score = score
-                    best = (event, race)
+                    best = race
 
         if best is None or best_score < _MIN_EVENT_SCORE:
             mark_missed(miss_key)
@@ -277,29 +321,19 @@ class EspnF1Provider(EspnCoreProvider):
 
     # --- Interfaz ResultsProvider --------------------------------------
 
-    def _ordered_competitors(self, race: dict) -> list[dict]:
-        """Pilotos por orden de clasificación (`order` 1..N)."""
-        competitors = race.get("competitors") or []
-        return sorted(competitors, key=lambda c: c.get("order") or 999)
-
     async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:
         """Ganador del GP modelado como "local 1-0 visitante": el
         ganador es `home` y el segundo `away` — así "Verstappen gana"
         se resuelve con la maquinaria de ganador existente."""
-        found = await self._find_race(date, team_hint)
-        if found is None:
+        race = await self._find_race(date, team_hint)
+        if race is None or not await self._race_completed(race):
             return None
-        _, race = found
-        if not self._is_completed(race):
+        result = await self._race_result(race)
+        if result is None:
             return None
-        ordered = self._ordered_competitors(race)
-        if len(ordered) < 2:
-            return None
+        winner, runner_up = result
         return MatchResult(
-            home_team=_competitor_name(ordered[0]),
-            away_team=_competitor_name(ordered[1]),
-            home_score=1,
-            away_score=0,
+            home_team=winner, away_team=runner_up, home_score=1, away_score=0
         )
 
     async def find_match_stats(
@@ -310,20 +344,14 @@ class EspnF1Provider(EspnCoreProvider):
         Sirve a "más/menos de X coches" — el único mercado F1 que
         meten los tipsters seguidos hoy.
         """
-        found = await self._find_race(date, team_hint)
-        if found is None:
+        race = await self._find_race(date, team_hint)
+        if race is None or not await self._race_completed(race):
             return None
-        event, race = found
-        if not self._is_completed(race):
+        classified = await self._classified_count(race)
+        if classified is None:
             return None
-        statuses = await self._competitor_statuses(
-            str(event.get("id") or ""), str(race.get("id") or "")
-        )
-        if statuses is None:
-            return None
-        classified = sum(1 for s in statuses if s == _CLASSIFIED_STATUS)
         return MatchStats(
-            home_team=event.get("name") or "",
+            home_team=self._race_name(race),
             away_team="",
             values={"Classified Cars": (classified, 0)},
         )
@@ -332,14 +360,10 @@ class EspnF1Provider(EspnCoreProvider):
         self, date: datetime, team_hint: str
     ) -> Optional[MatchState]:
         """GP aplazado/cancelado (raro en F1, pero el estado existe)."""
-        found = await self._find_race(date, team_hint)
-        if found is None:
+        race = await self._find_race(date, team_hint)
+        if race is None:
             return None
-        event, race = found
-        status_name = ((race.get("status") or {}).get("type") or {}).get("name")
-        status = _VOIDED_STATUSES.get(status_name or "")
+        status = self._race_postponed_status(race)
         if status is None:
             return None
-        return MatchState(
-            home_team=event.get("name") or "", away_team="", status=status
-        )
+        return MatchState(home_team=self._race_name(race), away_team="", status=status)

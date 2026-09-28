@@ -388,7 +388,7 @@ class GeminiResearchProvider:
     """
 
     NAME = _PROVIDER_NAME
-    SUPPORTED_SPORTS = frozenset({"futbol", "tenis", "baloncesto"})
+    SUPPORTED_SPORTS = frozenset({"futbol", "tenis", "baloncesto", "automovilismo"})
 
     def __init__(self, sport: str, api_key: str) -> None:
         self._sport = sport
