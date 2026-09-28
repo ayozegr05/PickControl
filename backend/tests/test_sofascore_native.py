@@ -251,6 +251,78 @@ class TestDirectTransport:
         assert await transport.get_json("/api/v1/search/all?q=x") is None
         assert marked == ["sofascore_direct"]
 
+    async def test_403_rescatado_por_flaresolverr(self, monkeypatch):
+        """Si curl_cffi recibe 403 pero FlareSolverr ejecuta el
+        challenge y devuelve el JSON, se sirve el dato y NO se marca
+        baneo — no había baneo, solo fingerprint insuficiente."""
+        marked = []
+        cleared = []
+        monkeypatch.setattr(
+            native,
+            "mark_rate_limited_escalating",
+            lambda name: marked.append(name),
+        )
+        monkeypatch.setattr(
+            native,
+            "clear_rate_limit_streak",
+            lambda name: cleared.append(name),
+        )
+        self._mock_session(monkeypatch, _FakeResponse(403))
+
+        async def fake_flare(url):
+            return '<html><body><pre>{"ok": true}</pre></body></html>'
+
+        monkeypatch.setattr(native, "_fetch_via_flaresolverr", fake_flare)
+        transport = _DirectTransport()
+        assert await transport.get_json("/api/v1/search/all?q=x") == {"ok": True}
+        assert marked == []
+        assert cleared == ["sofascore_direct"]
+
+    async def test_200_html_rescatado_por_flaresolverr(self, monkeypatch):
+        """El desafío puede llegar como 200-HTML: mismo rescate."""
+        marked = []
+        monkeypatch.setattr(
+            native,
+            "mark_rate_limited_escalating",
+            lambda name: marked.append(name),
+        )
+
+        class _HtmlResponse(_FakeResponse):
+            def json(self):
+                raise ValueError("not json")
+
+        self._mock_session(monkeypatch, _HtmlResponse(200))
+
+        async def fake_flare(url):
+            return '<pre>{"events": []}</pre>'
+
+        monkeypatch.setattr(native, "_fetch_via_flaresolverr", fake_flare)
+        transport = _DirectTransport()
+        assert await transport.get_json("/api/v1/team/1/events/last/0") == {
+            "events": []
+        }
+        assert marked == []
+
+    async def test_challenge_sin_rescate_marca_baneo(self, monkeypatch):
+        """Si FlareSolverr tampoco resuelve, el backoff escalonado se
+        declara igual que antes — el rescate es opcional, no cambia
+        el peor caso."""
+        marked = []
+        monkeypatch.setattr(
+            native,
+            "mark_rate_limited_escalating",
+            lambda name: marked.append(name),
+        )
+        self._mock_session(monkeypatch, _FakeResponse(403))
+
+        async def fake_flare(url):
+            return None
+
+        monkeypatch.setattr(native, "_fetch_via_flaresolverr", fake_flare)
+        transport = _DirectTransport()
+        assert await transport.get_json("/api/v1/search/all?q=x") is None
+        assert marked == ["sofascore_direct"]
+
     def test_backoff_escalonado_crece_y_se_resetea(self):
         """Cada baneo consecutivo alarga el descanso (24h -> 72h) y la
         primera respuesta buena devuelve la racha a 24h."""
