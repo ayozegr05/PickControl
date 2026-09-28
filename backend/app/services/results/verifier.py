@@ -79,6 +79,7 @@ from app.services.results.sofascore_native import (
     sofascore6_transport,
 )
 from app.services.results.tennisapi1 import TennisApi1Provider
+from app.services.results.transfermarkt import TransfermarktProvider
 
 logger = get_logger("app.results.verifier")
 
@@ -1494,6 +1495,11 @@ async def _get_providers() -> list[ResultsProvider]:
     # cuota — cubre la cola larga (reservas DK, AFC Cup, ligas menores)
     # que ningún provider de API toca. Free: va antes que los de cuota.
     providers.append(Football24hProvider())
+    # transfermarkt.es: livescore por fecha (todas las competiciones,
+    # marcador inline) + tabla de stats por match_id. Cloudflare ->
+    # FlareSolverr. Mismo tier gratuito que f24h, más cobertura de
+    # divisiones inferiores/femenino y stats redundantes en las grandes.
+    providers.append(TransfermarktProvider())
     if settings.football_data_api_key:
         providers.append(FootballDataProvider(settings.football_data_api_key))
     if settings.api_football_key:
