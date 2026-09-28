@@ -137,6 +137,42 @@ class TestFindMatch:
         )
         assert match is None
 
+    async def test_slug_probe_cuando_el_listado_ya_no_lo_tiene(self):
+        """La página del partido sobrevive fuera del listado: slug
+        construido desde el evento la encuentra directamente."""
+        provider = Football24hProvider()
+        _stub_pages(
+            provider,
+            {
+                # El listado ya solo muestra otros fixtures.
+                "/denmark/u21-ligaen/": FIRST_DIV_PAGE,
+                "/denmark/u21-ligaen/21-09-2026-sonderjyske-reserves-vs-silkeborg-reserves.html": MATCH_PAGE,
+            },
+        )
+        match = await provider.find_match(
+            datetime(2026, 9, 21, 10, 5),
+            "SønderjyskE Reserves - Silkeborg Reserves",
+        )
+        assert match is not None
+        assert (match.home_score, match.away_score) == (0, 0)
+
+    async def test_slug_probe_rechaza_soft404(self):
+        """Un slug que no existe devuelve una página sin los equipos:
+        los nombres del marcador no casan -> no hay match."""
+        provider = Football24hProvider()
+        _stub_pages(
+            provider,
+            {
+                "/denmark/u21-ligaen/": FIRST_DIV_PAGE,
+                # Soft-404: 200 con contenido de otro partido.
+                "/denmark/u21-ligaen/21-09-2026-sevilla-vs-betis.html": MATCH_PAGE,
+            },
+        )
+        match = await provider.find_match(
+            datetime(2026, 9, 21, 10, 5), "Sevilla - Betis"
+        )
+        assert match is None
+
 
 class TestFindMatchStats:
     async def test_stats_con_claves_canonicas(self):
