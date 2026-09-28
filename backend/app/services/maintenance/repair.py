@@ -38,6 +38,7 @@ from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
+from app.services.results.base import fold_name
 from app.services.telegram.pick_extractor import ExtractedPick, extract_pick
 from app.services.telegram.processor import _persist_patas
 
@@ -188,11 +189,18 @@ async def _source_text(
     return "\n\n".join(p for p in parts if p), raw
 
 
-async def _supersede_legs(session, parent: ParsedPick) -> int:
+async def _supersede_legs(
+    session, parent: ParsedPick
+) -> tuple[list[ParsedPick], dict[tuple[int, str], ParsedPick]]:
     """Marca las patas viejas como excluidas: `anulada=True` las saca
     del reparto de `settle_combinada` y `es_apuesta=False` las saca del
-    escaneo de pendientes. La fila se conserva para auditoría."""
-    legs = (
+    escaneo de pendientes. La fila se conserva para auditoría.
+
+    Devuelve (patas, veredictos): el mapa orden+selección -> pata
+    capturado ANTES de pisar `anulada`, para que las patas nuevas
+    idénticas puedan heredar el veredicto de su gemela (evita patas
+    huérfanas eternamente pendientes tras una re-extracción)."""
+    legs = list(
         (
             await session.exec(
                 select(ParsedPick).where(ParsedPick.combinada_id == parent.id)
@@ -201,12 +209,57 @@ async def _supersede_legs(session, parent: ParsedPick) -> int:
         .scalars()
         .all()
     )
+    verdicts: dict[tuple[int, str], ParsedPick] = {}
     for leg in legs:
+        if leg.acierto is not None or leg.anulada:
+            verdicts[(leg.orden or 0, fold_name(leg.seleccion or ""))] = leg
         if leg.es_apuesta or not leg.anulada:
             leg.es_apuesta = False
             leg.anulada = True
             session.add(leg)
-    return len(legs)
+    return legs, verdicts
+
+
+async def _inherit_leg_verdicts(
+    session,
+    parent: ParsedPick,
+    verdicts: dict[tuple[int, str], ParsedPick],
+) -> int:
+    """Patas nuevas idénticas a una vieja ya cerrada heredan su veredicto.
+
+    La re-extracción regenera el boleto: si la pata nueva coincide con
+    una anterior por `orden` + selección (plegada) y la anterior ya
+    estaba cerrada (acierto o anulada), es literalmente la misma
+    apuesta — sin la herencia quedaría pendiente para siempre cuando
+    su extracción es peor (sin evento)."""
+    if not verdicts:
+        return 0
+    await session.flush()  # las patas nuevas aún están pendientes de flush
+    new_legs = list(
+        (
+            await session.exec(
+                select(ParsedPick)
+                .where(ParsedPick.combinada_id == parent.id)
+                .where(ParsedPick.es_apuesta == True)  # noqa: E712
+            )
+        )
+        .scalars()
+        .all()
+    )
+    inherited = 0
+    for leg in new_legs:
+        twin = verdicts.get((leg.orden or 0, fold_name(leg.seleccion or "")))
+        if twin is None:
+            continue
+        leg.acierto = twin.acierto
+        leg.anulada = twin.anulada
+        leg.motivo_anulada = twin.motivo_anulada
+        leg.verificado_por = twin.verificado_por
+        leg.verificado_at = twin.verificado_at
+        leg.verificado_provider = twin.verificado_provider
+        session.add(leg)
+        inherited += 1
+    return inherited
 
 
 def _apply_fields(pick: ParsedPick, new: ExtractedPick) -> None:
@@ -313,7 +366,7 @@ async def repair_pick(session, pick: ParsedPick, *, apply: bool) -> RepairReport
         if apply:
             pick.es_apuesta = False
             pick.metodo = "rejected+reext"
-            await _supersede_legs(session, pick)
+            await _supersede_legs(session, pick)  # patas excluidas, sin herencia
             session.add(pick)
         return report
 
@@ -321,7 +374,7 @@ async def repair_pick(session, pick: ParsedPick, *, apply: bool) -> RepairReport
     was_combinada = pick.es_combinada
     if apply:
         _apply_fields(pick, new)
-        superseded = await _supersede_legs(session, pick)
+        superseded_legs, leg_verdicts = await _supersede_legs(session, pick)
         if n_patas >= 2:
             pick.es_combinada = True
             pick.mercado = "combinada"
@@ -338,10 +391,12 @@ async def repair_pick(session, pick: ParsedPick, *, apply: bool) -> RepairReport
         else:
             pick.es_combinada = False
             session.add(pick)
+        inherited = await _inherit_leg_verdicts(session, pick, leg_verdicts)
         report.action = "repaired"
         report.detail = (
             f"combinada {was_combinada}->{n_patas >= 2}, "
-            f"{superseded} patas viejas excluidas, {n_patas} nuevas"
+            f"{len(superseded_legs)} patas viejas excluidas, {n_patas} nuevas, "
+            f"{inherited} veredictos heredados"
             + (" [vía reglas: LLM rechazó]" if rules_fallback else "")
         )
     else:
