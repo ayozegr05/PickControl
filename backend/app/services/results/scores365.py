@@ -161,13 +161,20 @@ def _game_score(game: dict, sport: str, hint: str) -> float:
 def _to_match_result(game: dict, sport: str) -> Optional[MatchResult]:
     """Partido terminado del feed -> MatchResult normalizado."""
     status_text = (game.get("statusText") or "").lower()
-    if status_text not in _FINISHED_STATUSES:
+    # "Player1/2 Retired" es un final real (retirada): hay que devolverlo
+    # como status="retired" — si se ignora, el matcher puede casar el
+    # pick con OTRO partido del jugador ese mismo día (falso positivo).
+    retired = "retired" in status_text or "retir" in status_text
+    if status_text not in _FINISHED_STATUSES and not retired:
         return None
     home, home_score, _ = _competitor(game, "homeCompetitor")
     away, away_score, _ = _competitor(game, "awayCompetitor")
     if home_score is None or away_score is None:
         return None
-    status = "walkover" if status_text == "walkover" else None
+    if retired:
+        status = "retired"
+    else:
+        status = "walkover" if status_text == "walkover" else None
     return MatchResult(
         home_team=home,
         away_team=away,

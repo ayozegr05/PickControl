@@ -314,3 +314,66 @@ class TestFindPostponed:
             datetime(2026, 9, 20, 12, 0), "Sinner vs Alcaraz"
         )
         assert state is None
+
+
+_GAME_RETIRED = {
+    "id": 8,
+    "statusText": "Player1 Retired",
+    "startTime": "2026-09-16T12:00:00+02:00",
+    "homeCompetitor": {"name": "Laslo Djere", "score": 0.0, "isWinner": False},
+    "awayCompetitor": {"name": "Luka Mikrut", "score": 1.0, "isWinner": True},
+    "stages": [
+        {"name": "Set 1", "homeCompetitorScore": 3.0, "awayCompetitorScore": 6.0},
+        {"name": "Set 2", "homeCompetitorScore": 2.0, "awayCompetitorScore": 2.0},
+    ],
+}
+
+
+class TestRetired:
+    async def test_retirada_devuelve_status_retired(self, tennis_provider, monkeypatch):
+        """Un partido acabado por retirada se devuelve con
+        status="retired" para que el verificador lo anule en vez de
+        casar el pick con otro partido del mismo jugador ese día."""
+
+        async def fake_get(client, url):
+            return _feed(_GAME_RETIRED)
+
+        monkeypatch.setattr(tennis_provider, "_get_json", fake_get)
+        match = await tennis_provider.find_match(
+            datetime(2026, 9, 16, 12, 0), "Djere vs Mikrut"
+        )
+        assert match is not None
+        assert match.status == "retired"
+        assert match.sets == [(3, 6), (2, 2)]
+
+    async def test_retirada_no_casa_con_otro_partido(
+        self, tennis_provider, monkeypatch
+    ):
+        """Con la retirada visible, el hint "Djere Mikrut" no debe
+        acabar resolviendo contra un partido distinto del jugador."""
+        other_day_win = {
+            "id": 9,
+            "statusText": "Ended",
+            "startTime": "2026-09-16T10:00:00+02:00",
+            "homeCompetitor": {
+                "name": "Johan Nikles",
+                "score": 1.0,
+                "isWinner": False,
+            },
+            "awayCompetitor": {
+                "name": "Laslo Djere",
+                "score": 2.0,
+                "isWinner": True,
+            },
+        }
+
+        async def fake_get(client, url):
+            return _feed(other_day_win, _GAME_RETIRED)
+
+        monkeypatch.setattr(tennis_provider, "_get_json", fake_get)
+        match = await tennis_provider.find_match(
+            datetime(2026, 9, 16, 12, 0), "Djere vs Mikrut"
+        )
+        assert match is not None
+        assert match.status == "retired"
+        assert match.away_team == "Luka Mikrut"
