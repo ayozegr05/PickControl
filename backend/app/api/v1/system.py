@@ -16,6 +16,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.api.deps import get_current_user
 from app.core.dates import utc_now
 from app.db.postgres import get_session
+from app.models.odds_snapshot import OddsEvent, OddsSnapshot
 from app.models.parsed_pick import ParsedPick
 from app.models.user import User, UserRole
 from app.services.results import base as results_base
@@ -37,6 +38,12 @@ class ProvidersStatus(BaseModel):
     # Liquidaciones auto atribuidas a cada provider (`verificado_provider`
     # en parsed_picks). NULL en las históricas anteriores a la columna.
     resolved_by_provider: dict[str, int]
+    # Capa de cuotas: snapshots escritos por provider (espn,
+    # allsportsapi2, sofascore_direct, oddspapi, oddsfeed...), eventos
+    # con cuota registrados y picks pendientes de backfill histórico.
+    odds_snapshots_by_provider: dict[str, int]
+    odds_events_count: int
+    odds_backfill_pending: int
 
 
 @router.get("/providers", response_model=ProvidersStatus)
@@ -57,9 +64,24 @@ async def providers_status(
             .group_by(ParsedPick.verificado_provider)
         )
     ).all()
+    odds_rows = (
+        await session.exec(
+            select(OddsSnapshot.provider, func.count()).group_by(OddsSnapshot.provider)
+        )
+    ).all()
+    odds_events = (
+        await session.exec(select(func.count()).select_from(OddsEvent))
+    ).one()
+    # Import perezoso: tira de httpx/sqlmodel pesados y el endpoint de
+    # picks no los necesita.
+    from app.services.odds.historical_backfill import count_pending_backfill
+
     return ProvidersStatus(
         **results_base.providers_snapshot(),
         resolved_by_provider={str(name): n for name, n in rows},
+        odds_snapshots_by_provider={str(name): n for name, n in odds_rows},
+        odds_events_count=int(odds_events),
+        odds_backfill_pending=await count_pending_backfill(session),
     )
 
 

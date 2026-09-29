@@ -398,15 +398,15 @@ class TestBackfillPendingCount:
                 captured_at=utc_now(),
             )
         )
-        # Deporte no soportado por OddsPapi (baloncesto): no cuenta.
-        await self._pick(session, deporte="baloncesto")
+        # Deporte no soportado por NINGUNA fuente de backfill
+        # (automovilismo — odds-feed sí cubre baloncesto): no cuenta.
+        await self._pick(session, deporte="automovilismo")
         await session.commit()
 
         assert await count_pending_backfill(session) == 1
         _ = done_pick
 
     async def test_nofixture_miss_excluye(self, session, monkeypatch, tmp_path):
-        import app.services.odds.historical_backfill as hb
         from app.services.results import base as results_base
 
         monkeypatch.setattr(results_base, "_STATE", None)
@@ -417,7 +417,10 @@ class TestBackfillPendingCount:
         await session.commit()
         assert await count_pending_backfill(session) == 1
 
-        results_base.mark_missed(hb._NOFIXTURE_MISS_KEY.format(pick.id))
+        # Miss de nofixture en TODAS las fuentes (las claves son por
+        # proveedor: una fuente puede cubrir lo que la otra no).
+        results_base.mark_missed(f"oddspapi|nofixture|{pick.id}")
+        results_base.mark_missed(f"oddsfeed|nofixture|{pick.id}")
         assert await count_pending_backfill(session) == 0
 
     async def _pick(self, session, **kwargs) -> ParsedPick:

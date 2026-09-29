@@ -96,9 +96,13 @@ class Settings(BaseSettings):
     # fuera de su ventana ±1 día del plan gratis.
     rapidapi_footapi_host: str = "footapi7.p.rapidapi.com"
     # Cuotas históricas (backfill de auditoría): "OddsPapi" (bet36528).
-    # Reutiliza RAPIDAPI_TENNIS_KEY; el histórico es ilimitado en el
-    # plan gratis — solo lo consume scripts/backfill_historical_odds.py.
+    # Reutiliza RAPIDAPI_TENNIS_KEY; plan BASIC de 200 req/MES — cuando
+    # se agota, el reset real viene en x-ratelimit-requests-reset.
     rapidapi_oddspapi_host: str = "bet36528.p.rapidapi.com"
+    # Segunda fuente de histórico: "OddsFeed" (odds-feed). Reutiliza la
+    # misma key de cuenta (cuota propia: 500 req/mes en BASIC). Cubre
+    # solo mercados principales (1X2, O/U, hándicap, BTTS) — sin props.
+    rapidapi_oddsfeed_host: str = "odds-feed.p.rapidapi.com"
     # Espejo RapidAPI con rutas nativas de Sofascore (/api/v1/...):
     # "SportAPI" (sportapi7). Reutiliza RAPIDAPI_TENNIS_KEY y aporta
     # otra cuota diaria propia — pero hay que suscribirlo a mano en la

@@ -12,6 +12,12 @@ export interface ProvidersStatus {
   // Límite diario observado vía headers x-ratelimit (solo providers
   // que lo reportan).
   daily_limits: Record<string, number>;
+  /** Snapshots de cuotas escritos por provider (capa de cuotas). */
+  odds_snapshots_by_provider?: Record<string, number>;
+  /** Eventos con cuotas registrados en odds_events. */
+  odds_events_count?: number;
+  /** Picks pendientes de backfill histórico de cuotas. */
+  odds_backfill_pending?: number;
 }
 
 export function getProvidersStatus(): Promise<ProvidersStatus> {
