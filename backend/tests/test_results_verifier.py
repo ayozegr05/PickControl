@@ -3187,3 +3187,230 @@ class TestPostponedResearchLast:
         acierto, anulada = await verify_pick(pick, [det, research])
         assert (acierto, anulada) == (None, False)
         assert research.calls >= 1
+
+
+class TestVoidRecheck:
+    """Barrido correctivo diario de anuladas automáticas sospechosas
+    (`recheck_suspicious_voids`): solo entran auto + motivo NULL/
+    'aplazado', con calendario D+1/D+3/D+6 desde `verificado_at` y un
+    máximo de 3 re-checks por pick."""
+
+    async def _mk_anulada(
+        self,
+        session,
+        informante_id,
+        raw_mid: int,
+        *,
+        motivo=None,
+        verificado_por="auto",
+        verificado_at=None,
+        rechecks=0,
+        es_combinada=False,
+        acierto=None,
+        fecha_evento=None,
+    ) -> ParsedPick:
+        raw = TelegramRawMessage(
+            channel_id=1, message_id=raw_mid, channel_name="c", text="x"
+        )
+        session.add(raw)
+        await session.flush()
+        pp = ParsedPick(
+            raw_message_id=raw.id,
+            informante_id=informante_id,
+            es_apuesta=True,
+            apuesta="A gana",
+            seleccion="A gana",
+            acierto=acierto,
+            anulada=True,
+            motivo_anulada=motivo,
+            verificado_por=verificado_por,
+            verificado_at=verificado_at or utc_now(),
+            anulada_rechecks=rechecks,
+            es_combinada=es_combinada,
+            fecha_evento=fecha_evento or utc_now() - timedelta(days=2),
+        )
+        session.add(pp)
+        await session.flush()
+        return pp
+
+    def _patch(self, monkeypatch, session, outcomes):
+        """verify_pick falso: devuelve el resultado que dicta el test."""
+        monkeypatch.setattr(verifier_mod, "AsyncSessionLocal", _session_cm(session))
+        monkeypatch.setattr(
+            verifier_mod, "_get_providers", AsyncMock(return_value=[object()])
+        )
+        verify = AsyncMock(side_effect=outcomes)
+        monkeypatch.setattr(verifier_mod, "verify_pick", verify)
+        notify = AsyncMock()
+        monkeypatch.setattr(verifier_mod, "notify_settled_picks", notify)
+        return verify, notify
+
+    async def test_candidata_d1_se_procesa(self, session, crear_canal, monkeypatch):
+        canal = await crear_canal("ElTipster")
+        pick = await self._mk_anulada(
+            session, canal.id, 1, verificado_at=utc_now() - timedelta(days=2)
+        )
+        await session.commit()
+        self._patch(monkeypatch, session, [(None, True)])
+
+        stats = await verifier_mod.recheck_suspicious_voids()
+
+        assert stats["procesadas"] == 1
+        assert stats["confirmadas"] == 1
+        await session.refresh(pick)
+        assert pick.anulada is True
+        assert pick.anulada_rechecks == 1
+        assert pick.anulada_last_recheck is not None
+
+    async def test_no_due_antes_de_d1(self, session, crear_canal, monkeypatch):
+        canal = await crear_canal("ElTipster")
+        pick = await self._mk_anulada(
+            session, canal.id, 2, verificado_at=utc_now() - timedelta(hours=12)
+        )
+        await session.commit()
+        verify, _ = self._patch(monkeypatch, session, [])
+
+        stats = await verifier_mod.recheck_suspicious_voids()
+
+        assert stats["procesadas"] == 0
+        assert verify.await_count == 0
+        await session.refresh(pick)
+        assert pick.anulada_rechecks == 0
+
+    async def test_segundo_recheck_espera_a_d3(self, session, crear_canal, monkeypatch):
+        """Tras el 1er re-check (D+1), el 2º no toca hasta D+3 desde la
+        anulación — el calendario es acumulativo, no por intento."""
+        canal = await crear_canal("ElTipster")
+        await self._mk_anulada(
+            session,
+            canal.id,
+            3,
+            verificado_at=utc_now() - timedelta(days=2, hours=12),
+            rechecks=1,
+        )
+        await session.commit()
+        verify, _ = self._patch(monkeypatch, session, [])
+
+        stats = await verifier_mod.recheck_suspicious_voids()
+
+        assert stats["procesadas"] == 0
+        assert verify.await_count == 0
+
+    async def test_tercer_recheck_desde_d6(self, session, crear_canal, monkeypatch):
+        canal = await crear_canal("ElTipster")
+        pick = await self._mk_anulada(
+            session,
+            canal.id,
+            4,
+            verificado_at=utc_now() - timedelta(days=7),
+            rechecks=2,
+        )
+        await session.commit()
+        self._patch(monkeypatch, session, [(None, True)])
+
+        stats = await verifier_mod.recheck_suspicious_voids()
+
+        assert stats["procesadas"] == 1
+        await session.refresh(pick)
+        assert pick.anulada_rechecks == 3
+
+    async def test_max_tres_rechecks(self, session, crear_canal, monkeypatch):
+        canal = await crear_canal("ElTipster")
+        await self._mk_anulada(
+            session,
+            canal.id,
+            5,
+            verificado_at=utc_now() - timedelta(days=9),
+            rechecks=3,
+        )
+        await session.commit()
+        verify, _ = self._patch(monkeypatch, session, [])
+
+        stats = await verifier_mod.recheck_suspicious_voids()
+
+        assert stats["procesadas"] == 0
+        assert verify.await_count == 0
+
+    async def test_correccion_liquida_y_notifica(
+        self, session, crear_canal, monkeypatch
+    ):
+        canal = await crear_canal("ElTipster")
+        pick = await self._mk_anulada(
+            session,
+            canal.id,
+            6,
+            motivo="aplazado",
+            verificado_at=utc_now() - timedelta(days=2),
+        )
+        await session.commit()
+        _, notify = self._patch(monkeypatch, session, [(True, False)])
+
+        stats = await verifier_mod.recheck_suspicious_voids()
+
+        assert stats["corregidas"] == 1
+        await session.refresh(pick)
+        assert pick.anulada is False
+        assert pick.acierto is True
+        assert pick.motivo_anulada is None
+        assert notify.await_count == 1
+
+    async def test_excluye_manuales_push_y_liquidadas(
+        self, session, crear_canal, monkeypatch
+    ):
+        canal = await crear_canal("ElTipster")
+        viejo = utc_now() - timedelta(days=2)
+        await self._mk_anulada(
+            session, canal.id, 7, verificado_por="manual", verificado_at=viejo
+        )
+        await self._mk_anulada(session, canal.id, 8, motivo="push", verificado_at=viejo)
+        await self._mk_anulada(
+            session, canal.id, 9, motivo="jugador_fuera", verificado_at=viejo
+        )
+        await self._mk_anulada(
+            session, canal.id, 10, es_combinada=True, verificado_at=viejo
+        )
+        await session.commit()
+        verify, _ = self._patch(monkeypatch, session, [])
+
+        stats = await verifier_mod.recheck_suspicious_voids()
+
+        assert stats["procesadas"] == 0
+        assert verify.await_count == 0
+
+    async def test_sin_datos_cuenta_intento(self, session, crear_canal, monkeypatch):
+        """verify_pick sin veredicto (None, False): la anulada se queda
+        como estaba pero el intento cuenta — si no, un provider que no
+        encuentra nada reintentaría cada día para siempre."""
+        canal = await crear_canal("ElTipster")
+        pick = await self._mk_anulada(
+            session, canal.id, 11, verificado_at=utc_now() - timedelta(days=2)
+        )
+        await session.commit()
+        self._patch(monkeypatch, session, [(None, False)])
+
+        stats = await verifier_mod.recheck_suspicious_voids()
+
+        assert stats["procesadas"] == 1
+        assert stats["sin_datos"] == 1
+        await session.refresh(pick)
+        assert pick.anulada is True
+        assert pick.anulada_rechecks == 1
+
+    async def test_resumen_se_registra_en_state(
+        self, session, crear_canal, monkeypatch
+    ):
+        import app.services.results.base as results_base
+
+        canal = await crear_canal("ElTipster")
+        await self._mk_anulada(
+            session, canal.id, 12, verificado_at=utc_now() - timedelta(days=2)
+        )
+        await session.commit()
+        self._patch(monkeypatch, session, [(True, False)])
+
+        await verifier_mod.recheck_suspicious_voids()
+
+        snap = results_base.void_rechecks_snapshot()
+        today = utc_now().date().isoformat()
+        assert snap[today]["procesadas"] == 1
+        assert snap[today]["corregidas"] == 1

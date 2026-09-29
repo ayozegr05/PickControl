@@ -93,6 +93,16 @@ class ParsedPickBase(SQLModel):
     # si una corrección reabre el pick, vuelve a NULL.
     verificado_at: Optional[datetime] = None
 
+    # Barrido correctivo diario de anuladas automáticas sospechosas
+    # (motivo NULL del sistema viejo, o "aplazado" — el motivo con más
+    # falsos positivos: provider que reporta cancelado un partido que
+    # sí se jugó, o que tarda en subir el resultado). Se reintentan en
+    # días +1/+3/+6 desde `verificado_at`, máximo 3 intentos.
+    # `anulada_rechecks` cuenta los ya hechos; `anulada_last_recheck`
+    # es el timestamp del último (auditoría).
+    anulada_rechecks: int = Field(default=0)
+    anulada_last_recheck: Optional[datetime] = None
+
 
 class ParsedPick(ParsedPickBase, table=True):
     """Pick estructurado ligado a un mensaje crudo de Telegram."""
