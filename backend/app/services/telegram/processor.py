@@ -21,6 +21,7 @@ from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.services.notifications.push import notify_new_pick
 from app.services.pick_service import get_or_create_informante, to_naive_utc
+from app.services.results.base import fold_name
 from app.services.telegram.pick_extractor import (
     ExtractedPick,
     _is_settled_ticket,
@@ -363,6 +364,67 @@ async def _find_duplicate_pick(
     return None
 
 
+def _leg_signature(leg) -> tuple:
+    """Identidad normalizada de una pata: selección + mercado + línea.
+
+    Las palabras van plegadas (sin acentos, minúsculas) y ordenadas para
+    que reordenaciones del tipster den la misma firma; la cuota por pata
+    queda fuera (el OCR no siempre la extrae igual).
+    """
+    sel = " ".join(sorted(re.findall(r"\w+", fold_name(leg.seleccion or ""))))
+    mercado = " ".join(sorted(re.findall(r"\w+", fold_name(leg.mercado or ""))))
+    linea = round(leg.linea, 2) if leg.linea is not None else None
+    return (sel, mercado, linea)
+
+
+def combinada_signature(patas) -> tuple:
+    """Firma canónica de un boleto: las patas normalizadas, sin orden."""
+    return tuple(sorted(_leg_signature(p) for p in patas))
+
+
+async def _find_duplicate_combinada(
+    session: AsyncSession, channel: str, pick: ExtractedPick
+) -> ParsedPick | None:
+    """Boleto idéntico ya guardado en el mismo canal, sin ventana.
+
+    La dedup normal solo ve ±6 h alrededor del mensaje: un tipster que
+    republica el mismo slip días después creaba otra combinada. Aquí se
+    casa por firma (mismas patas) y, si ambos traen cuota total, cuota
+    coincidente — dos boletos con las mismas patas y cuota distinta son
+    apuestas distintas.
+    """
+    target = combinada_signature(pick.patas)
+    if len(target) < 2:
+        return None
+    parents = (
+        await session.exec(
+            select(ParsedPick)
+            .where(ParsedPick.informante == channel)
+            .where(ParsedPick.es_apuesta == True)  # noqa: E712
+            .where(ParsedPick.es_combinada == True)  # noqa: E712
+            .where(ParsedPick.combinada_id == None)  # noqa: E711
+        )
+    ).all()
+    for parent in parents:
+        legs = (
+            await session.exec(
+                select(ParsedPick)
+                .where(ParsedPick.combinada_id == parent.id)
+                .where(ParsedPick.es_apuesta == True)  # noqa: E712
+            )
+        ).all()
+        if combinada_signature(legs) != target:
+            continue
+        if (
+            pick.cuota is not None
+            and parent.cuota is not None
+            and abs(parent.cuota - pick.cuota) >= 0.01
+        ):
+            continue
+        return parent
+    return None
+
+
 async def _persist_patas(
     db_session: AsyncSession,
     parent: ParsedPick,
@@ -370,10 +432,14 @@ async def _persist_patas(
     informante_id: int,
     channel: str,
     es_reto: bool,
+    *,
+    es_duplicada: bool = False,
 ) -> None:
     """Una fila por pata (self-FK): cada una se verifica por separado
     con el verificador normal y el padre se liquida en conjunto
-    (ver verifier.settle_combinada)."""
+    (ver verifier.settle_combinada). Las patas de una combinada
+    duplicada nacen ya anuladas — quedan de auditoría pero nunca
+    entran a la cola de verificación ni a las stats."""
     for orden, pata in enumerate(pick.patas):
         leg = ParsedPick(
             raw_message_id=parent.raw_message_id,
@@ -397,6 +463,10 @@ async def _persist_patas(
             metodo=pick.metodo,
             confianza=pick.confianza,
             es_reto=es_reto,
+            anulada=es_duplicada,
+            motivo_anulada="duplicado" if es_duplicada else None,
+            verificado_por="auto" if es_duplicada else None,
+            verificado_at=utc_now() if es_duplicada else None,
         )
         db_session.add(leg)
 
@@ -631,6 +701,27 @@ async def process_incoming_message(
                         )
                     )
                     es_combinada = pick.es_apuesta and len(pick.patas) >= 2
+                    # Slip republicado días después (la dedup normal solo
+                    # ve ±6 h): misma firma de patas + cuota en el canal
+                    # -> la copia nace ya anulada·duplicado, queda en la
+                    # lista para auditoría pero fuera de stats y de la
+                    # cola de verificación. La original no se toca.
+                    combinada_dup = (
+                        await _find_duplicate_combinada(db_session, channel, pick)
+                        if es_combinada
+                        else None
+                    )
+                    if combinada_dup is not None:
+                        logger.info(
+                            "[TELEGRAM_PROCESSOR] Combinada duplicada en "
+                            "canal %s (canónica ParsedPick id=%s): se crea "
+                            "como anulada·duplicado.",
+                            channel,
+                            combinada_dup.id,
+                        )
+                        # El repost puede aportar cuota/stake al canónico.
+                        if _merge_pick_data(combinada_dup, pick):
+                            db_session.add(combinada_dup)
                     parsed = ParsedPick(
                         raw_message_id=raw.id,
                         informante_id=informante.id,
@@ -651,12 +742,22 @@ async def process_incoming_message(
                         confianza=pick.confianza,
                         es_reto=es_reto,
                         es_combinada=es_combinada,
+                        anulada=combinada_dup is not None,
+                        motivo_anulada=(
+                            "duplicado" if combinada_dup is not None else None
+                        ),
+                        verificado_por=("auto" if combinada_dup is not None else None),
+                        verificado_at=(
+                            utc_now() if combinada_dup is not None else None
+                        ),
                     )
                     db_session.add(parsed)
                     if pick.es_apuesta:
                         # flush para tener parsed.id antes del commit.
                         await db_session.flush()
-                        created_pick_ids.append(parsed.id)
+                        if combinada_dup is None:
+                            # Las copias no notifican: no son picks nuevos.
+                            created_pick_ids.append(parsed.id)
 
                     if es_combinada:
                         # Una fila por pata (self-FK): cada una se verifica
@@ -664,7 +765,13 @@ async def process_incoming_message(
                         # se liquida en conjunto (ver verifier.settle_combinada).
                         await db_session.flush()
                         await _persist_patas(
-                            db_session, parsed, pick, informante.id, channel, es_reto
+                            db_session,
+                            parsed,
+                            pick,
+                            informante.id,
+                            channel,
+                            es_reto,
+                            es_duplicada=combinada_dup is not None,
                         )
         elif not source_text:
             # Sin texto (ni extraído ni crudo), no hay nada que procesar.

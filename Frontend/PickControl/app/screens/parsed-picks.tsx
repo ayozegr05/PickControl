@@ -676,8 +676,8 @@ export default function ParsedPicksScreen() {
             </View>
             <Text style={styles.statSub}>
               {picksStatus.pendientes_simples} simples ·{" "}
-              {picksStatus.pendientes_patas} patas ·{" "}
-              {picksStatus.pendientes_combinadas} combinadas
+              {picksStatus.pendientes_combinadas} combinadas (
+              {picksStatus.pendientes_patas} patas)
             </Text>
             <Text style={styles.statSub}>
               {picksStatus.pendientes_jugados_ventana ?? 0} jugadas &lt;14d
