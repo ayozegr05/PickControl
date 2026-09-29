@@ -97,10 +97,14 @@ class PicksStatus(BaseModel):
     resueltas_total: int
     # Liquidaciones por día ("YYYY-MM-DD" -> n), últimos 14 días.
     resueltas_por_dia: dict[str, int]
-    # Liquidaciones por hora UTC ("YYYY-MM-DD HH:00" -> n), últimas 16
-    # entradas — aproxima cuántas resolvió cada pasada del verifier
-    # (corre cada ~3 h).
+    # Liquidaciones por hora UTC ("YYYY-MM-DD HH:00" -> n), solo del
+    # día actual — aproxima cuántas resolvió cada pasada del verifier
+    # (corre cada ~3 h). Los días anteriores están en resueltas_por_dia.
     resueltas_por_pasada: dict[str, int]
+    # Barrido correctivo de anuladas sospechosas (pasada diaria
+    # D+1/D+3/D+6): día -> {"procesadas", "corregidas", "confirmadas",
+    # "sin_datos"}. Últimos 14 días, más reciente primero.
+    rechecks_por_dia: dict[str, dict[str, int]]
 
 
 @router.get("/picks", response_model=PicksStatus)
@@ -215,10 +219,13 @@ async def picks_status(
                 await session.exec(
                     select(pasada_bucket, func.count())
                     .where(ParsedPick.verificado_at != None)  # noqa: E711
+                    # Solo hoy: el histórico por hora ensuciaba la vista.
+                    .where(func.date(ParsedPick.verificado_at) == ahora.date())
                     .group_by(pasada_bucket)
                     .order_by(pasada_bucket.desc())
                     .limit(16)
                 )
             ).all()
         },
+        rechecks_por_dia=results_base.void_rechecks_snapshot(),
     )

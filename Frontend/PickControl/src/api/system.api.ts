@@ -37,9 +37,20 @@ export interface PicksStatus {
   resueltas_hoy_evento_previo: number;
   resueltas_total: number;
   resueltas_por_dia: Record<string, number>;
-  // Liquidaciones por hora UTC ("YYYY-MM-DD HH:00") — aproxima cada
-  // pasada del verifier (cada ~3 h).
+  // Liquidaciones por hora UTC ("YYYY-MM-DD HH:00"), solo del día
+  // actual — aproxima cada pasada del verifier (cada ~3 h).
   resueltas_por_pasada: Record<string, number>;
+  // Barrido correctivo diario de anuladas sospechosas (D+1/D+3/D+6):
+  // día -> contadores de la pasada.
+  rechecks_por_dia: Record<
+    string,
+    {
+      procesadas?: number;
+      corregidas?: number;
+      confirmadas?: number;
+      sin_datos?: number;
+    }
+  >;
 }
 
 export function getPicksStatus(): Promise<PicksStatus> {

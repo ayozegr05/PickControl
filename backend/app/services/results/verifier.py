@@ -58,6 +58,7 @@ from app.services.results.base import (
     ResultsProvider,
     fold_name,
     match_reversed,
+    record_void_recheck,
 )
 from app.services.results.espn import (
     EspnBasketballProvider,
@@ -2712,3 +2713,149 @@ async def verify_pending_picks() -> int:
         len(pending),
     )
     return verified_count
+
+
+# --- Barrido correctivo diario de anuladas sospechosas ----------------
+#
+# Una anulada automática con motivo NULL (sistema viejo, sin motivo
+# registrado) o "aplazado" puede ser un falso negativo: el provider
+# reportó "cancelado" un partido que sí se jugó, o el dato llegó tarde.
+# Se re-verifica con la cascada normal en días +1/+3/+6 desde
+# `verificado_at` (calendario acumulativo), máximo 3 intentos — si el
+# provider corrige su dato, la siguiente pasada lo caza; si nadie lo
+# resuelve en 3 intentos, la anulada se da por buena y no se toca más.
+#
+# Fuera quedan "push"/"jugador_fuera" (veredictos con datos reales: el
+# partido SÍ se jugó), las manuales/expired y cualquier pick ya
+# liquidado (acierto IS NOT NULL): re-verificar todo lo resuelto solo
+# quemaría cuota y un provider con datos malos hoy podría voltear un
+# pick bien resuelto ayer.
+_VOID_RECHECK_SCHEDULE_DAYS = (1, 3, 6)
+_VOID_RECHECK_MOTIVOS = ("aplazado",)  # NULL también entra (ver query)
+# Solo anuladas recientes entran al ciclo: las anteriores son históricas
+# ya revisadas — sin el tope, la primera pasada tras desplegar esto
+# re-verificaría años de anuladas de golpe.
+_VOID_RECHECK_MAX_AGE = timedelta(days=10)
+
+
+def _void_recheck_due(pick: ParsedPick, now: datetime) -> bool:
+    """True si a la anulada le toca su siguiente re-check programado.
+
+    El ancla es siempre `verificado_at` (cuándo se anuló): los plazos
+    +1/+3/+6 son acumulativos desde la anulación, no desde el intento
+    anterior — así un re-check tardío no retrasa los siguientes.
+    `anulada_last_recheck` solo registra cuándo se miró por última vez.
+    """
+    rechecks = pick.anulada_rechecks or 0
+    if rechecks >= len(_VOID_RECHECK_SCHEDULE_DAYS) or pick.verificado_at is None:
+        return False
+    deadline = pick.verificado_at + timedelta(
+        days=_VOID_RECHECK_SCHEDULE_DAYS[rechecks]
+    )
+    return now >= deadline
+
+
+async def recheck_suspicious_voids() -> dict[str, int]:
+    """Re-verifica anuladas automáticas sospechosas que tocan hoy.
+
+    Cada candidata pasa por la cascada normal (`verify_pick`): si el
+    partido consta jugado se liquida con provider atribuido y se
+    propaga a combinadas y apuestas de usuario en cascada; si sigue
+    anulada solo avanza el calendario de re-checks (no se actualiza
+    `verificado_at` — no es una liquidación nueva — ni se notifica).
+
+    Devuelve el resumen de la pasada {"procesadas", "corregidas",
+    "confirmadas", "sin_datos"} y lo acumula en provider_state para la
+    vista de depuración.
+    """
+    providers = await _get_providers()
+    if not providers:
+        return {}
+    now = utc_now()
+    stats = {
+        "procesadas": 0,
+        "corregidas": 0,
+        "confirmadas": 0,
+        "sin_datos": 0,
+    }
+    settled_ids: list[int] = []
+
+    async with AsyncSessionLocal() as session:
+        candidatas = (
+            await session.exec(
+                select(ParsedPick)
+                .where(ParsedPick.es_apuesta == True)  # noqa: E712
+                .where(ParsedPick.anulada == True)  # noqa: E712
+                .where(ParsedPick.verificado_por == "auto")
+                # Padres de combinada no se consultan a APIs — si una
+                # pata cambia, el padre se re-liquida abajo.
+                .where(ParsedPick.es_combinada == False)  # noqa: E712
+                .where(
+                    (ParsedPick.motivo_anulada == None)  # noqa: E711
+                    | ParsedPick.motivo_anulada.in_(_VOID_RECHECK_MOTIVOS)
+                )
+                .where(ParsedPick.anulada_rechecks < len(_VOID_RECHECK_SCHEDULE_DAYS))
+                .where(ParsedPick.verificado_at != None)  # noqa: E711
+                .where(ParsedPick.verificado_at >= now - _VOID_RECHECK_MAX_AGE)
+                .order_by(ParsedPick.verificado_at)
+            )
+        ).all()
+        due = [p for p in candidatas if _void_recheck_due(p, now)]
+
+        for pick in due:
+            try:
+                acierto, anulada = await verify_pick(pick, providers)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "[VOID_RECHECK] Error re-verificando pick id=%s: %s",
+                    pick.id,
+                    exc,
+                )
+                continue
+            stats["procesadas"] += 1
+            pick.anulada_rechecks = (pick.anulada_rechecks or 0) + 1
+            pick.anulada_last_recheck = now
+            if acierto is not None:
+                # Anulada -> acierto/fallo: corrección real. Solo
+                # entonces se actualiza verificado_at (liquidación
+                # nueva) y se notifica.
+                pick.acierto = acierto
+                pick.anulada = False
+                pick.motivo_anulada = None
+                pick.verificado_por = "auto"
+                pick.verificado_at = now
+                stats["corregidas"] += 1
+                settled_ids.append(pick.id)
+                logger.info(
+                    "[VOID_RECHECK] Pick id=%s ('%s') corregido: "
+                    "anulada -> acierto=%s (%s)",
+                    pick.id,
+                    pick.seleccion,
+                    acierto,
+                    pick.verificado_provider,
+                )
+            elif anulada:
+                stats["confirmadas"] += 1
+            else:
+                stats["sin_datos"] += 1
+            session.add(pick)
+
+        # Si alguna pata corregida des-anula una combinada, el padre se
+        # re-liquida en conjunto (settle_combinada es idempotente).
+        settled_ids.extend(await _settle_combinadas(session))
+        await cascade_user_settlements(session)
+        await session.commit()
+
+    if settled_ids:
+        await notify_settled_picks(settled_ids)
+    if stats["procesadas"]:
+        record_void_recheck(stats)
+    logger.info(
+        "[VOID_RECHECK] Pasada: %s procesadas — %s corregidas, "
+        "%s confirmadas, %s sin dato nuevo.",
+        stats["procesadas"],
+        stats["corregidas"],
+        stats["confirmadas"],
+        stats["sin_datos"],
+    )
+    return stats

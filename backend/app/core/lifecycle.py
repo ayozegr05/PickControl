@@ -16,7 +16,10 @@ from app.services.maintenance.rescue import run_rescue_cycle
 from app.services.odds.historical_backfill import count_pending_backfill, run
 from app.services.odds.snapshotter import run_odds_snapshot_cycle
 from app.services.results.base import loop_due, mark_loop_ran
-from app.services.results.verifier import verify_pending_picks
+from app.services.results.verifier import (
+    recheck_suspicious_voids,
+    verify_pending_picks,
+)
 from app.services.telegram.catchup import run_catchup
 from app.services.telegram.channels import (
     refresh_channel_cache,
@@ -26,6 +29,10 @@ from app.services.telegram.client import get_telegram_client, reset_telegram_cli
 from app.services.telegram.handlers import register_handlers
 
 logger = get_logger("app.lifecycle")
+
+# El barrido correctivo de anuladas corre una vez al día dentro del
+# loop del verifier (usa los mismos providers y misma puerta de keys).
+_VOID_RECHECK_INTERVAL_SECONDS = 24 * 3600
 
 
 async def _run_telegram_listener() -> None:
@@ -57,6 +64,11 @@ async def _run_results_verifier_loop() -> None:
             if loop_due("verifier", interval_seconds):
                 await verify_pending_picks()
                 mark_loop_ran("verifier")
+            # Barrido correctivo de anuladas sospechosas: una pasada al
+            # día (no en cada ciclo), calendario D+1/D+3/D+6 por pick.
+            if loop_due("void_recheck", _VOID_RECHECK_INTERVAL_SECONDS):
+                await recheck_suspicious_voids()
+                mark_loop_ran("void_recheck")
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "[RESULTS_VERIFIER] Error verificando picks pendientes: %s", exc

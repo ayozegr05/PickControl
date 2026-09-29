@@ -326,6 +326,7 @@ def _load_state() -> dict[str, dict[str, str]]:
         _STATE.setdefault("calls", {})
         _STATE.setdefault("loops", {})
         _STATE.setdefault("limits", {})
+        _STATE.setdefault("void_rechecks", {})
     return _STATE
 
 
@@ -341,6 +342,11 @@ def _save_state() -> None:
     # Contadores de llamadas: retener solo la última semana.
     calls_cutoff = (utc_now().date() - timedelta(days=7)).isoformat()
     state["calls"] = {k: v for k, v in state["calls"].items() if k >= calls_cutoff}
+    # Registro del barrido de anuladas: último mes.
+    rechecks_cutoff = (utc_now().date() - timedelta(days=30)).isoformat()
+    state["void_rechecks"] = {
+        k: v for k, v in state["void_rechecks"].items() if k >= rechecks_cutoff
+    }
     try:
         _STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
     except OSError as exc:
@@ -535,6 +541,28 @@ def providers_snapshot() -> dict:
         "calls_by_day": dict(calls),
         "daily_limits": dict(state.get("limits", {})),
     }
+
+
+def record_void_recheck(stats: dict[str, int]) -> None:
+    """Registra el resumen de una pasada correctiva de anuladas.
+
+    Acumulado por día UTC en `provider_state.json` ("void_rechecks"):
+    {"procesadas", "confirmadas", "corregidas", "sin_datos"}. Es el
+    registro que muestra la pantalla de depuración — una línea por día,
+    no una por pick.
+    """
+    today = utc_now().date().isoformat()
+    log = _load_state()["void_rechecks"]
+    entry = log.setdefault(today, {})
+    for key, n in stats.items():
+        entry[key] = int(entry.get(key, 0)) + int(n)
+    _save_state()
+
+
+def void_rechecks_snapshot() -> dict[str, dict[str, int]]:
+    """Resumen por día del barrido correctivo, más reciente primero."""
+    log = _load_state().get("void_rechecks", {})
+    return {dia: dict(log[dia]) for dia in sorted(log, reverse=True)[:14]}
 
 
 def is_rate_limited(provider_name: str) -> bool:

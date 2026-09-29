@@ -736,7 +736,9 @@ export default function ParsedPicksScreen() {
             {Object.keys(picksStatus.resueltas_por_pasada ?? {}).length >
               0 && (
               <>
-                <Text style={styles.systemSubtitle}>Por pasada (UTC)</Text>
+                <Text style={styles.systemSubtitle}>
+                  Por pasada (hoy, UTC)
+                </Text>
                 {Object.entries(picksStatus.resueltas_por_pasada ?? {}).map(
                   ([pasada, n]) => (
                     <View key={pasada} style={styles.providerRow}>
@@ -744,6 +746,31 @@ export default function ParsedPicksScreen() {
                         {pasada.slice(5)}
                       </Text>
                       <Text style={styles.statValue}>{n}</Text>
+                    </View>
+                  )
+                )}
+              </>
+            )}
+            {Object.keys(picksStatus.rechecks_por_dia ?? {}).length > 0 && (
+              <>
+                <Text style={styles.systemSubtitle}>
+                  Barrido de anuladas (diario)
+                </Text>
+                {Object.entries(picksStatus.rechecks_por_dia ?? {}).map(
+                  ([dia, r]) => (
+                    <View key={dia} style={styles.providerRow}>
+                      <Text style={styles.statSubFlex}>{dia.slice(5)}</Text>
+                      <Text style={styles.statValue}>
+                        {r.procesadas ?? 0} proc.
+                        {(r.corregidas ?? 0) > 0
+                          ? ` · ${r.corregidas} corregida${
+                              r.corregidas !== 1 ? "s" : ""
+                            }`
+                          : ""}
+                        {(r.confirmadas ?? 0) > 0
+                          ? ` · ${r.confirmadas} siguen anuladas`
+                          : ""}
+                      </Text>
                     </View>
                   )
                 )}
