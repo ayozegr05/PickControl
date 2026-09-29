@@ -46,6 +46,35 @@ class TestPickNeedsRepair:
         legs = [_P(evento="A vs B"), _P(evento=None)]
         assert not _pick_needs_repair(_P(es_combinada=True, evento="A vs B"), legs)
 
+    def test_combinada_patas_spam(self):
+        """Boleto-anuncio (#1741): la mayoría de patas son líneas de
+        publi/afiliación -> entra a reparación y la re-extracción lo
+        descarta como no-apuesta."""
+        legs = [
+            _P(seleccion="LLEVA TUS APUESTAS AL SIGUIENTE NIVEL!"),
+            _P(seleccion="COMIENZA A GANAR DESDE YA"),
+            _P(seleccion="@dm7allsports"),
+        ]
+        assert _pick_needs_repair(_P(es_combinada=True, evento="A vs B"), legs)
+
+    def test_combinada_una_pata_spam_no_dispara(self):
+        """Una sola pata ruidosa entre selecciones reales no basta: la
+        reparación tiene que ser claramente necesaria."""
+        legs = [
+            _P(seleccion="@canal_tipster"),
+            _P(seleccion="Isak marca"),
+            _P(seleccion="Menos de 9.5 córners"),
+        ]
+        assert not _pick_needs_repair(_P(es_combinada=True, evento="A vs B"), legs)
+
+    def test_pata_vip_no_es_spam(self):
+        """'vip' con frontera de palabra: un equipo tipo Vipava no debe
+        disparar la señal de publi."""
+        legs = [_P(seleccion="Vipava gana"), _P(seleccion="Olimpija gana")]
+        assert not _pick_needs_repair(
+            _P(es_combinada=True, evento="Vipava vs Olimpija"), legs
+        )
+
     def test_simple_evento_torneo(self):
         assert _pick_needs_repair(_P(evento="Challenger Biella"), [])
 

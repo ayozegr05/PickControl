@@ -1160,7 +1160,7 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
-            return _void("aplazado")
+            return _void("retirada")
         if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         if not match.sets:
@@ -1196,7 +1196,7 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
-            return _void("aplazado")
+            return _void("retirada")
         if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         scores = _tennis_scores(match, team)
@@ -1239,7 +1239,7 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
-            return _void("aplazado")
+            return _void("retirada")
         if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         winner_side = _tennis_set_winner_index(match, set_idx)
@@ -1262,7 +1262,7 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
-            return _void("aplazado")
+            return _void("retirada")
         if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         had_tiebreak = _tennis_had_tiebreak(match)
@@ -1286,7 +1286,7 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
-            return _void("aplazado")
+            return _void("retirada")
         if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         if not player:
@@ -1361,7 +1361,7 @@ async def _verify_tennis_pick(
         if not match:
             return None, False
         if match.status in _TENNIS_VOID_STATUSES:
-            return _void("aplazado")
+            return _void("retirada")
         if await _rearranged_fixture_void(pick, match, team_hint, providers):
             return None, True
         # Over/under sobre un set concreto ("más de 9.5 juegos en el
@@ -1420,7 +1420,7 @@ async def _verify_tennis_pick(
     if not match:
         return None, False
     if match.status in _TENNIS_VOID_STATUSES:
-        return None, True
+        return _void("retirada")
     if await _rearranged_fixture_void(pick, match, player, providers):
         return None, True
     if set_idx is not None:
@@ -1672,7 +1672,8 @@ _LAST_PROVIDER_HIT: ContextVar[Optional[str]] = ContextVar(
 
 # Motivo del último void dentro de un `verify_pick`: "push" (empate
 # técnico en línea entera / "resultado sin empate" empatado),
-# "aplazado" (cancelado/aplazado/walkover/fixture reordenado) o
+# "aplazado" (cancelado/aplazado/fixture reordenado), "retirada"
+# (retired/walkover en tenis: el jugador se retira o ni comparece) o
 # "jugador_fuera" (prop cuyo jugador no disputó minutos). Lo escribe
 # `_void` en cada retorno de anulada y lo lee el wrapper de
 # `verify_pick` para rellenar `pick.motivo_anulada`.
@@ -2377,7 +2378,7 @@ async def _verify_pick_result(
         return None, False
     if match.status in _TENNIS_VOID_STATUSES:
         # Retirada/walkover (tenis): la casa suele devolver la apuesta.
-        return _void("aplazado")
+        return _void("retirada")
     if sport == "tenis" and await _rearranged_fixture_void(
         pick, match, predicted_team, providers_for_sport
     ):
@@ -2718,8 +2719,9 @@ async def verify_pending_picks() -> int:
 # --- Barrido correctivo diario de anuladas sospechosas ----------------
 #
 # Una anulada automática con motivo NULL (sistema viejo, sin motivo
-# registrado) o "aplazado" puede ser un falso negativo: el provider
-# reportó "cancelado" un partido que sí se jugó, o el dato llegó tarde.
+# registrado), "aplazado" o "retirada" puede ser un falso negativo: el
+# provider reportó "cancelado"/"retired" un partido que sí se jugó y
+# terminó, o el dato llegó tarde.
 # Se re-verifica con la cascada normal en días +1/+3/+6 desde
 # `verificado_at` (calendario acumulativo), máximo 3 intentos — si el
 # provider corrige su dato, la siguiente pasada lo caza; si nadie lo
@@ -2731,7 +2733,7 @@ async def verify_pending_picks() -> int:
 # quemaría cuota y un provider con datos malos hoy podría voltear un
 # pick bien resuelto ayer.
 _VOID_RECHECK_SCHEDULE_DAYS = (1, 3, 6)
-_VOID_RECHECK_MOTIVOS = ("aplazado",)  # NULL también entra (ver query)
+_VOID_RECHECK_MOTIVOS = ("aplazado", "retirada")  # NULL también entra (ver query)
 # Solo anuladas recientes entran al ciclo: las anteriores son históricas
 # ya revisadas — sin el tope, la primera pasada tras desplegar esto
 # re-verificaría años de anuladas de golpe.

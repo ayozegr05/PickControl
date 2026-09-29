@@ -320,6 +320,23 @@ class TestMotivoAnulada:
         assert (acierto, anulada) == (True, False)
         assert pick.motivo_anulada is None
 
+    async def test_retirada_tenis_anota_retirada(self):
+        """Retired/walkover lleva su propio motivo: la casa devuelve por
+        abandono del jugador, no por aplazamiento del partido (caso
+        Kostovic-Cengiz, pick #4369)."""
+        provider = _StubTennisProvider(1, 0, sets=[(6, 4)], status="retired")
+        pick = _pick_tenis("Alcaraz gana")
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, True)
+        assert pick.motivo_anulada == "retirada"
+
+    async def test_walkover_tenis_anota_retirada(self):
+        provider = _StubTennisProvider(0, 0, status="walkover")
+        pick = _pick_tenis("Alcaraz gana")
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, True)
+        assert pick.motivo_anulada == "retirada"
+
 
 class _StubTennisStatsProvider:
     """Tenis con tabla de stats (aces, dobles faltas) — simula el
@@ -3261,6 +3278,28 @@ class TestVoidRecheck:
         assert pick.anulada is True
         assert pick.anulada_rechecks == 1
         assert pick.anulada_last_recheck is not None
+
+    async def test_candidata_retirada_se_procesa(
+        self, session, crear_canal, monkeypatch
+    ):
+        """'retirada' es motivo rechequeable: el provider pudo confundir
+        un abandono con el partido equivocado — antes de separar el
+        motivo entraba como 'aplazado' y sí se re-verificaba."""
+        canal = await crear_canal("ElTipster")
+        await self._mk_anulada(
+            session,
+            canal.id,
+            10,
+            motivo="retirada",
+            verificado_at=utc_now() - timedelta(days=2),
+        )
+        await session.commit()
+        verify, _ = self._patch(monkeypatch, session, [(None, True)])
+
+        stats = await verifier_mod.recheck_suspicious_voids()
+
+        assert stats["procesadas"] == 1
+        assert verify.await_count == 1
 
     async def test_no_due_antes_de_d1(self, session, crear_canal, monkeypatch):
         canal = await crear_canal("ElTipster")

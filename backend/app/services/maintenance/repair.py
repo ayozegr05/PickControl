@@ -445,6 +445,18 @@ _CROSS = re.compile(r"\bvs\.?\b|\s-\s", re.IGNORECASE)
 # Selección "1X"/"X2" guardada como hándicap: es doble oportunidad.
 _DC_IN_HANDICAP = re.compile(r"\b(?:1x|x2)\b", re.IGNORECASE)
 
+# Pata cuya "selección" es ruido de publi/afiliación, no una apuesta:
+# URL, handle de Telegram o CTA de marketing. El extractor viejo coló
+# boletos-anuncio enteros como combinadas (caso #1741: "LLEVA TUS
+# APUESTAS AL SIGUIENTE NIVEL!", "https://premiumpay.pro/...").
+_SPAM_LEG = re.compile(
+    r"https?://|www\.|t\.me/|@\w+|"
+    r"\b(?:reg[ií]strate|gratis|bono|afiliad\w*|premium|vip|"
+    r"comienza\w*|empieza\w*|desde\s+ya|nivel|s[ií]guenos|"
+    r"telegram|whatsapp|promo)\b",
+    re.IGNORECASE,
+)
+
 
 def _tournament_only(evento: Optional[str]) -> bool:
     return bool(
@@ -469,6 +481,12 @@ def _pick_needs_repair(pick: ParsedPick, active_legs: list[ParsedPick]) -> bool:
             return True
         # Pata cuyo "evento" es el torneo — el cruce se perdió.
         if any(_tournament_only(leg.evento) for leg in active_legs):
+            return True
+        # Boleto-anuncio: la mitad o más de las patas activas son líneas
+        # de publi/afiliación, no selecciones. La re-extracción dirá
+        # "no es apuesta" y la fila se descarta sola.
+        spam = sum(1 for leg in active_legs if _SPAM_LEG.search(leg.seleccion or ""))
+        if spam >= 2 and spam >= len(active_legs) / 2:
             return True
     else:
         if _tournament_only(pick.evento):

@@ -6,6 +6,7 @@ memoria: comprobamos que, aunque el extractor falle, el mensaje crudo
 siempre se persiste.
 """
 
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -21,6 +22,7 @@ from app.services.telegram.processor import (
     _text_similarity,
     _word_set_similarity,
     _word_subset,
+    combinada_signature,
     process_incoming_message,
 )
 
@@ -61,6 +63,30 @@ class TestWordSubset:
     def test_ignora_stopwords(self):
         # Foto "Más de 3 tarjetas" ⊂ texto "Más 3 tarjetas en el partido".
         assert _word_subset("Más de 3 tarjetas", "Más 3 tarjetas en el partido") is True
+
+
+class TestCombinadaSignature:
+    """Firma canónica del boleto: patas normalizadas sin orden."""
+
+    def test_normaliza_orden_acentos_y_mayusculas(self):
+        a = [
+            SimpleNamespace(seleccion="Isak marca", mercado="goleador", linea=None),
+            SimpleNamespace(
+                seleccion="Menos de 9.5 córners", mercado="córners", linea=9.5
+            ),
+        ]
+        b = [
+            SimpleNamespace(
+                seleccion="MENOS DE 9,5 CORNERS", mercado="Corners", linea=9.5
+            ),
+            SimpleNamespace(seleccion="MARCA ISAK", mercado="goleador", linea=None),
+        ]
+        assert combinada_signature(a) == combinada_signature(b)
+
+    def test_linea_distinta_firma_distinta(self):
+        a = [SimpleNamespace(seleccion="Más córners", mercado=None, linea=9.5)]
+        b = [SimpleNamespace(seleccion="Más córners", mercado=None, linea=10.5)]
+        assert combinada_signature(a) != combinada_signature(b)
 
 
 class TestMergePickData:
@@ -550,7 +576,7 @@ class TestFindPairSlipBidirectional:
     texto como después (el tipster publica el pick y luego la captura)."""
 
     async def test_slip_posterior_al_texto_empareja(self, session):
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         from app.services.telegram.processor import _find_pair_slip
 
@@ -563,7 +589,7 @@ class TestFindPairSlipBidirectional:
         assert slip.message_id == 200
 
     async def test_slip_fuera_de_ventana_no_empareja(self, session):
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         from app.services.telegram.processor import _find_pair_slip
 
@@ -576,7 +602,7 @@ class TestFindPairSlipBidirectional:
     async def test_elige_el_slip_mas_cercano_en_tiempo(self, session):
         """Entre un slip 1 min antes y otro 5 min después, gana el más
         cercano: el posterior pertenece a otro pick."""
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         from app.services.telegram.processor import _find_pair_slip
 
@@ -588,3 +614,148 @@ class TestFindPairSlipBidirectional:
         slip = await _find_pair_slip(session, 1, when, 199)
         assert slip is not None
         assert slip.message_id == 200
+
+
+def _combinada_pick(cuota: float = 91.0) -> ExtractedPick:
+    """Slip de 3 patas como el de Liverpool cuota 91 de DM7/AllSports."""
+    patas = [
+        ExtractedPick(es_apuesta=True, seleccion="Isak marca", mercado="goleador"),
+        ExtractedPick(
+            es_apuesta=True,
+            seleccion="Menos de 9.5 córners",
+            mercado="córners",
+            linea=9.5,
+        ),
+        ExtractedPick(
+            es_apuesta=True,
+            seleccion="Mac Allister tarjeta",
+            mercado="tarjetas jugador",
+        ),
+    ]
+    return ExtractedPick(
+        es_apuesta=True,
+        seleccion=" + ".join(p.seleccion or "" for p in patas),
+        mercado="combinada",
+        cuota=cuota,
+        metodo="llm",
+        confianza=0.9,
+        patas=patas,
+    )
+
+
+@pytest.mark.asyncio
+class TestCombinadaRepostDedup:
+    """El mismo slip republicado días después (fuera de la ventana ±6 h
+    de la dedup por texto) se detecta por firma de patas + cuota: la
+    copia nace ya `anulada · duplicado` — visible para auditoría pero
+    fuera de stats y de la cola de verificación."""
+
+    async def test_repost_dias_despues_marca_duplicado(
+        self, session, fake_settings, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "app.services.telegram.processor.extract_pick",
+            AsyncMock(return_value=_combinada_pick()),
+        )
+        await process_incoming_message(
+            session=session,
+            channel="Canal A",
+            channel_id=1,
+            message_id=1,
+            text="slip",
+            message_date=datetime(2026, 9, 11, 12, 0),
+        )
+        await process_incoming_message(
+            session=session,
+            channel="Canal A",
+            channel_id=1,
+            message_id=2,
+            text="slip repost",
+            message_date=datetime(2026, 9, 15, 12, 0),
+        )
+
+        parents = (
+            (await session.exec(select(ParsedPick).where(ParsedPick.es_combinada)))
+            .scalars()
+            .all()
+        )
+        assert len(parents) == 2
+        canonical = min(parents, key=lambda p: p.id)
+        dup = max(parents, key=lambda p: p.id)
+        assert canonical.anulada is False
+        assert dup.anulada is True
+        assert dup.motivo_anulada == "duplicado"
+        assert dup.verificado_por == "auto"
+        assert dup.verificado_at is not None
+
+        dup_legs = (
+            (
+                await session.exec(
+                    select(ParsedPick).where(ParsedPick.combinada_id == dup.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(dup_legs) == 3
+        assert all(
+            leg.anulada and leg.motivo_anulada == "duplicado" for leg in dup_legs
+        )
+
+    async def test_misma_firma_cuota_distinta_no_es_dup(
+        self, session, fake_settings, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "app.services.telegram.processor.extract_pick",
+            AsyncMock(side_effect=[_combinada_pick(91.0), _combinada_pick(45.0)]),
+        )
+        for i, day in enumerate((11, 15)):
+            await process_incoming_message(
+                session=session,
+                channel="Canal A",
+                channel_id=1,
+                message_id=i + 1,
+                text="slip",
+                message_date=datetime(2026, 9, day, 12, 0),
+            )
+        parents = (
+            (await session.exec(select(ParsedPick).where(ParsedPick.es_combinada)))
+            .scalars()
+            .all()
+        )
+        # Mismas patas pero cuota total distinta: dos apuestas distintas.
+        assert len(parents) == 2
+        assert all(not p.anulada for p in parents)
+
+    async def test_misma_firma_en_otro_canal_cuenta(
+        self, session, fake_settings, monkeypatch
+    ):
+        """La dedup es por canal: el mismo slip en dos canales cuenta en
+        cada uno (stats independientes por tipster)."""
+        monkeypatch.setattr(
+            "app.services.telegram.processor.extract_pick",
+            AsyncMock(return_value=_combinada_pick()),
+        )
+        await process_incoming_message(
+            session=session,
+            channel="Canal A",
+            channel_id=1,
+            message_id=1,
+            text="slip",
+            message_date=datetime(2026, 9, 11, 12, 0),
+        )
+        await process_incoming_message(
+            session=session,
+            channel="Canal B",
+            channel_id=2,
+            message_id=2,
+            text="slip",
+            message_date=datetime(2026, 9, 15, 12, 0),
+        )
+        parents = (
+            (await session.exec(select(ParsedPick).where(ParsedPick.es_combinada)))
+            .scalars()
+            .all()
+        )
+        assert len(parents) == 2
+        assert all(not p.anulada for p in parents)
