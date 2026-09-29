@@ -8,7 +8,7 @@ y los hooks se comprueban sustituyendo las funciones `notify_*`.
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -407,6 +407,54 @@ class TestMarkRateLimited:
         results_base.mark_rate_limited("tennisapi1")
 
         assert notify.call_count == 2
+
+    async def test_cuota_mensual_aparca_hasta_el_reset(self, monkeypatch, tmp_path):
+        """429 con `x-ratelimit-requests-reset` grande (plan mensual):
+        el proveedor se aparca hasta ese instante — no solo "hoy" —
+        y no vuelve a notificar en marcas posteriores."""
+        monkeypatch.setattr(results_base, "_STATE", None)
+        monkeypatch.setattr(
+            results_base, "_STATE_FILE", tmp_path / "provider_state.json"
+        )
+        notify = Mock()
+        monkeypatch.setattr(results_base, "_notify_rate_limited", notify)
+        resp = httpx.Response(
+            429,
+            headers={
+                "x-ratelimit-requests-remaining": "-1",
+                "x-ratelimit-requests-reset": "1782333",  # ~20 días
+            },
+        )
+
+        results_base.mark_rate_limited("oddspapi", resp)
+        results_base.mark_rate_limited("oddspapi", resp)
+
+        assert results_base.is_rate_limited("oddspapi")
+        notify.assert_called_once_with("oddspapi")
+        # El bloqueo es un timestamp futuro lejano, no la fecha de hoy.
+        raw = results_base._load_state()["rate_limited"]["oddspapi"]
+        assert "T" in raw
+        parked_until = datetime.fromisoformat(raw)
+        assert parked_until > utc_now() + timedelta(days=19)
+
+    async def test_429_con_cuota_restante_es_cooldown(self, monkeypatch, tmp_path):
+        """429 con `remaining`>0: ráfaga, no fin de cuota — cooldown
+        corto de minutos, sin notificación."""
+        monkeypatch.setattr(results_base, "_STATE", None)
+        monkeypatch.setattr(
+            results_base, "_STATE_FILE", tmp_path / "provider_state.json"
+        )
+        notify = Mock()
+        monkeypatch.setattr(results_base, "_notify_rate_limited", notify)
+        resp = httpx.Response(429, headers={"x-ratelimit-requests-remaining": "5"})
+
+        results_base.mark_rate_limited("tennisapi1", resp)
+
+        raw = results_base._load_state()["rate_limited"]["tennisapi1"]
+        assert "T" in raw
+        parked_until = datetime.fromisoformat(raw)
+        assert utc_now() < parked_until < utc_now() + timedelta(hours=1)
+        notify.assert_not_called()
 
 
 class TestSystemProvidersApi:

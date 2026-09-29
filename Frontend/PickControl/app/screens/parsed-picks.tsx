@@ -287,6 +287,49 @@ export default function ParsedPicksScreen() {
       });
   }, [providersStatus]);
 
+  // Providers de la capa de cuotas (snapshotter + backfill histórico).
+  // Los comparten nombre con los de resultados (espn...) — la sección
+  // separa por rol, no por proveedor físico.
+  const oddsProviderRows = useMemo(() => {
+    if (!providersStatus) return [];
+    const known = new Set([
+      "espn",
+      "allsportsapi2",
+      "tennisapi1",
+      "sportapi7",
+      "sofascore6",
+      "sofascore_direct",
+      "oddspapi",
+      "oddsfeed",
+    ]);
+    const names = new Set<string>([
+      ...Object.keys(providersStatus.odds_snapshots_by_provider ?? {}),
+      ...[...known].filter(
+        (n) =>
+          n in providersStatus.rate_limited ||
+          (providersStatus.calls_today?.[n] ?? 0) > 0
+      ),
+    ]);
+    return [...names]
+      .sort((a, b) => {
+        const aLimited = a in providersStatus.rate_limited;
+        const bLimited = b in providersStatus.rate_limited;
+        if (aLimited !== bLimited) return aLimited ? -1 : 1;
+        return a.localeCompare(b);
+      })
+      .map((name) => {
+        const limitedSince = providersStatus.rate_limited[name] ?? null;
+        return {
+          name,
+          limitedSince,
+          cooldown: limitedSince !== null && limitedSince.includes("T"),
+          callsToday: providersStatus.calls_today?.[name] ?? 0,
+          dailyLimit: providersStatus.daily_limits?.[name] ?? null,
+          snapshots: providersStatus.odds_snapshots_by_provider?.[name] ?? 0,
+        };
+      });
+  }, [providersStatus]);
+
   const applyUpdate = (list: ParsedPick[], updated: ParsedPick) =>
     list.map((p) => (p.id === updated.id ? updated : p));
 
@@ -623,20 +666,28 @@ export default function ParsedPicksScreen() {
                       </Text>
                     </View>
                   </View>
-                  {(row.callsToday > 0 || row.misses > 0 || row.resolved > 0) && (
+                  {(row.callsToday > 0 || row.misses > 0 || row.resolved > 0 || row.cooldown) && (
                     <Text style={styles.providerMeta}>
+                      {row.cooldown && row.limitedSince
+                        ? `hasta ${row.limitedSince
+                            .slice(5, 16)
+                            .replace("T", " ")} UTC`
+                        : ""}
+                      {row.cooldown && row.callsToday > 0 ? " · " : ""}
                       {row.callsToday > 0
                         ? `${row.callsToday}${
                             row.dailyLimit ? `/${row.dailyLimit}` : ""
                           } llamada${row.callsToday !== 1 ? "s" : ""} hoy`
                         : ""}
-                      {row.callsToday > 0 && row.misses > 0 ? " · " : ""}
+                      {(row.cooldown || row.callsToday > 0) && row.misses > 0
+                        ? " · "
+                        : ""}
                       {row.misses > 0
                         ? `${row.misses} no encontrado${
                             row.misses !== 1 ? "s" : ""
                           } (en caché)`
                         : ""}
-                      {(row.callsToday > 0 || row.misses > 0) &&
+                      {(row.callsToday > 0 || row.misses > 0 || row.cooldown) &&
                       row.resolved > 0
                         ? " · "
                         : ""}
@@ -650,6 +701,73 @@ export default function ParsedPicksScreen() {
                 </View>
               ))
             )}
+          </View>
+        )}
+
+        {isAdmin && providersStatus !== null && (
+          <View style={styles.systemCard}>
+            <Text style={styles.systemTitle}>Sistema · cuotas</Text>
+            {oddsProviderRows.length === 0 ? (
+              <Text style={styles.providerOk}>Sin actividad aún</Text>
+            ) : (
+              oddsProviderRows.map((row) => (
+                <View key={row.name} style={styles.providerItem}>
+                  <View style={styles.providerRow}>
+                    <Text style={styles.providerName} numberOfLines={1}>
+                      {row.name}
+                    </Text>
+                    <View
+                      style={[
+                        styles.providerBadge,
+                        row.limitedSince
+                          ? row.cooldown
+                            ? styles.providerBadgeWarn
+                            : styles.providerBadgeBad
+                          : styles.providerBadgeOk,
+                      ]}
+                    >
+                      <Text
+                        style={
+                          row.limitedSince
+                            ? row.cooldown
+                              ? styles.providerWarn
+                              : styles.providerBad
+                            : styles.providerOk
+                        }
+                      >
+                        {row.limitedSince
+                          ? row.cooldown
+                            ? `EN PAUSA · hasta ${row.limitedSince
+                                .slice(5, 16)
+                                .replace("T", " ")}`
+                            : "SIN CUOTA"
+                          : "OK"}
+                      </Text>
+                    </View>
+                  </View>
+                  {(row.callsToday > 0 || row.snapshots > 0) && (
+                    <Text style={styles.providerMeta}>
+                      {row.callsToday > 0
+                        ? `${row.callsToday}${
+                            row.dailyLimit ? `/${row.dailyLimit}` : ""
+                          } llamada${row.callsToday !== 1 ? "s" : ""} hoy`
+                        : ""}
+                      {row.callsToday > 0 && row.snapshots > 0 ? " · " : ""}
+                      {row.snapshots > 0
+                        ? `${row.snapshots} snapshot${
+                            row.snapshots !== 1 ? "s" : ""
+                          }`
+                        : ""}
+                    </Text>
+                  )}
+                </View>
+              ))
+            )}
+            <Text style={styles.statSub}>
+              {providersStatus.odds_events_count ?? 0} eventos con cuota ·{" "}
+              {providersStatus.odds_backfill_pending ?? 0} pendientes de
+              backfill
+            </Text>
           </View>
         )}
 

@@ -278,9 +278,9 @@ class ResultsProvider(Protocol):
 # cosas en un JSON junto al backend para sobrevivir a los reinicios de
 # uvicorn (--reload reinicia en cada guardado y resetearía la memoria):
 #
-# - "rate_limited": proveedor -> fecha ISO en que agotó su cuota
-#   (403/429). Ese día se salta sin ni siquiera llamar; al cambiar de
-#   día vuelve a intentarse.
+# - "rate_limited": proveedor -> fecha ISO (cuota del día agotada: se
+#   salta hasta mañana) o timestamp ISO (cooldown por ritmo, o aparcado
+#   hasta el reset real del periodo — planes mensuales).
 # - "missed": clave de búsqueda (p. ej. "2026-09-15|alcaraz" en
 #   proveedor) -> fecha ISO en que se comprobó sin resultado. Una
 #   búsqueda que falló no se repite durante _MISSED_TTL_DAYS: los
@@ -405,6 +405,30 @@ def _cooldown_from(response: httpx.Response | None) -> timedelta | None:
     return None
 
 
+def _quota_reset_at(response: httpx.Response | None) -> datetime | None:
+    """Instante real del reset de cuota según RapidAPI.
+
+    `x-ratelimit-requests-reset` trae los segundos que faltan para
+    renovar el periodo de facturación de la suscripción: horas en
+    planes diarios, semanas en mensuales (p.ej. 200 req/mes → reset
+    en ~20 días). Devuelve el datetime del reset o None si el header
+    no viene — el llamador cae entonces al aparcado clásico del día.
+    """
+    if response is None:
+        return None
+    headers = getattr(response, "headers", None) or {}
+    raw = headers.get("x-ratelimit-requests-reset")
+    if raw is None:
+        return None
+    try:
+        secs = float(raw)
+    except ValueError:
+        return None
+    if secs <= 0:
+        return None
+    return utc_now() + timedelta(seconds=secs)
+
+
 def mark_rate_limited(
     provider_name: str, response: httpx.Response | None = None
 ) -> None:
@@ -423,6 +447,29 @@ def mark_rate_limited(
         return  # aparcado el día entero: no degradar a cooldown
     cooldown = _cooldown_from(response)
     if cooldown is None:
+        # Cuota realmente agotada. RapidAPI reporta el instante del
+        # reset (`x-ratelimit-requests-reset`): en planes mensuales
+        # puede ser dentro de semanas — aparcar "solo hoy" gastaba
+        # una llamada inútil cada día hasta el reset (caso oddspapi).
+        reset_at = _quota_reset_at(response)
+        if reset_at is not None:
+            prev = state.get(provider_name)
+            already_parked = False
+            if prev and "T" in prev:
+                try:
+                    already_parked = datetime.fromisoformat(prev) > utc_now()
+                except ValueError:
+                    already_parked = False
+            state[provider_name] = reset_at.isoformat()
+            _save_state()
+            logger.info(
+                "[QUOTA] %s: cuota del periodo agotada — aparcado hasta %s UTC",
+                provider_name,
+                reset_at.strftime("%Y-%m-%d %H:%M"),
+            )
+            if not already_parked:
+                _notify_rate_limited(provider_name)
+            return
         state[provider_name] = today
         _save_state()
         _notify_rate_limited(provider_name)
