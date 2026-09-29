@@ -2363,8 +2363,14 @@ async def _verify_pick_result(
         or _DRAW_NO_BET_PATTERN.search(pick.seleccion or "")
     )
 
+    # Tenis: el evento "A vs B" desambigua — un jugador puede tener
+    # dos partidos el mismo día (ej. uno retirado y otro ganado);
+    # buscar solo por "Djere" casa con cualquiera de ellos.
+    winner_hint = predicted_team
+    if sport == "tenis":
+        winner_hint = _tennis_lookup_hint(pick, predicted_team)
     match = await _find_match_across_providers(
-        pick.fecha_evento, predicted_team, providers_for_sport, pick.id
+        pick.fecha_evento, winner_hint, providers_for_sport, pick.id
     )
     if not match:
         return None, False
