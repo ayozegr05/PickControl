@@ -334,6 +334,30 @@ def _save_state() -> None:
     today = utc_now().date().isoformat()
     cutoff = (utc_now().date() - _MISSED_TTL).isoformat()
     state = _load_state()
+    # Merge con disco antes de escribir: el backend mantiene `_STATE`
+    # en memoria y un dump ciego pisaría las marcas de procesos
+    # paralelos (backfill manual, scripts) que escribieron entretanto.
+    # En conflicto gana el valor mayor (timestamps ISO comparan bien:
+    # conserva la marca más reciente/larga).
+    try:
+        disk = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        disk = {}
+    for section in ("rate_limited", "missed", "limits", "void_rechecks", "loops"):
+        merged: dict[str, str] = {}
+        for src in (disk.get(section) or {}, state.get(section) or {}):
+            for k, v in src.items():
+                if k not in merged or str(v) > str(merged[k]):
+                    merged[k] = v
+        state[section] = merged
+    merged_calls: dict[str, dict[str, int]] = {
+        d: dict(p) for d, p in (disk.get("calls") or {}).items()
+    }
+    for day, providers in (state.get("calls") or {}).items():
+        target = merged_calls.setdefault(day, {})
+        for name, n in providers.items():
+            target[name] = max(int(target.get(name, 0)), int(n))
+    state["calls"] = merged_calls
     # Podar entradas viejas para que el archivo no crezca sin límite.
     state["rate_limited"] = {
         k: v for k, v in state["rate_limited"].items() if v >= today
