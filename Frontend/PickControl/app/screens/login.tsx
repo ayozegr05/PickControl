@@ -7,11 +7,11 @@ import {
   StyleSheet,
   Alert,
   ScrollView,
+  Platform,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Formik } from "formik";
 import * as Yup from "yup";
-import * as LocalAuthentication from "expo-local-authentication";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import BottomBar from "@/src/components/bottom-bar";
 import TopBar from "@/src/components/top-bar";
@@ -25,6 +25,24 @@ const LoginSchema = Yup.object().shape({
   email: Yup.string().email("Email inválido").required("El email es requerido"),
   password: Yup.string().required("La contraseña es requerida"),
 });
+
+// expo-local-authentication ejecuta `requireNativeModule` al evaluarse:
+// en web/Expo Go el import estático lanzaría "Cannot find native
+// module" y tumbaría la pantalla al cargar. Carga perezosa — sin
+// módulo nativo simplemente no se ofrece login biométrico.
+type LocalAuthModule = typeof import("expo-local-authentication");
+let localAuthPromise: Promise<LocalAuthModule | null> | null = null;
+
+function loadLocalAuth(): Promise<LocalAuthModule | null> {
+  if (Platform.OS === "web") return Promise.resolve(null);
+  if (!localAuthPromise) {
+    localAuthPromise = import("expo-local-authentication").then(
+      (m) => m,
+      () => null
+    );
+  }
+  return localAuthPromise;
+}
 
 const LoginScreen = () => {
   const router = useRouter();
@@ -40,6 +58,8 @@ const LoginScreen = () => {
   }, []);
 
   const checkBiometricSupport = async () => {
+    const LocalAuthentication = await loadLocalAuth();
+    if (!LocalAuthentication) return;
     const compatible = await LocalAuthentication.hasHardwareAsync();
     setIsBiometricSupported(compatible);
   };
@@ -61,6 +81,15 @@ const LoginScreen = () => {
         Alert.alert(
           "No hay credenciales guardadas",
           "Primero debes iniciar sesión normalmente para poder usar la huella dactilar"
+        );
+        return;
+      }
+
+      const LocalAuthentication = await loadLocalAuth();
+      if (!LocalAuthentication) {
+        Alert.alert(
+          "No disponible",
+          "La autenticación biométrica no está disponible en este dispositivo"
         );
         return;
       }

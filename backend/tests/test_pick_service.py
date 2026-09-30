@@ -12,6 +12,7 @@ from app.models.pick import Acierto, Pick, PickSource
 from app.services.pick_service import (
     calcular_ganancia,
     calcular_stats,
+    calcular_stats_combinadas,
     calcular_stats_parsed,
 )
 
@@ -134,4 +135,33 @@ class TestCalcularStatsParsed:
         anulada.anulada = True
         stats = calcular_stats_parsed([*parsed, anulada])
         assert stats.total_apuestas == 3
+        assert stats.total_pendientes == 1
+
+    def test_parsed_duplicado_no_cuenta_en_stats(self):
+        """Un simple `anulada·duplicado` es ruido de ingesta (reposteo):
+        auditoría, no resultado — no puede inflar el total del canal."""
+        parsed = [
+            _make_parsed(1, 10.0, 2.0, True),
+            _make_parsed(2, 10.0, 2.0, None),
+        ]
+        dup = _make_parsed(3, 10.0, 2.0, None)
+        dup.anulada = True
+        dup.motivo_anulada = "duplicado"
+        stats = calcular_stats_parsed([*parsed, dup])
+        assert stats.total_apuestas == 2
+        assert stats.total_pendientes == 1
+
+
+class TestCalcularStatsCombinadas:
+    def test_padre_duplicado_no_cuenta_en_stats(self):
+        """Los padres `anulada·duplicado` son reposteos del mismo boleto:
+        no pueden inflar el total/pendientes de combinadas."""
+        normal = _make_parsed(1, 10.0, 2.0, None)
+        normal.es_combinada = True
+        dup = _make_parsed(2, 10.0, 2.0, None)
+        dup.es_combinada = True
+        dup.anulada = True
+        dup.motivo_anulada = "duplicado"
+        stats = calcular_stats_combinadas([normal, dup])
+        assert stats.total_apuestas == 1
         assert stats.total_pendientes == 1

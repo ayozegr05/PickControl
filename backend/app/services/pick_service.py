@@ -176,13 +176,16 @@ def _es_pick_simple(parsed: ParsedPick) -> bool:
     """True si el parsed_pick cuenta en las stats de picks simples.
 
     Quedan fuera los retos (sección propia), las combinadas (padre) y
-    las patas (se liquidan dentro de su combinada, nunca sueltas).
+    las patas (se liquidan dentro de su combinada, nunca sueltas), y el
+    ruido de ingesta `anulada·duplicado` (reposteos: son auditoría, no
+    resultados — la misma exclusión que el listado).
     """
     return (
         parsed.es_apuesta
         and not parsed.es_reto
         and not parsed.es_combinada
         and parsed.combinada_id is None
+        and parsed.motivo_anulada != "duplicado"
     )
 
 
@@ -204,13 +207,15 @@ def calcular_stats_combinadas(
     """Métricas de las combinadas del canal (solo los padres).
 
     Sección propia, igual que los retos: las patas nunca cuentan
-    sueltas — su resultado ya está agregado en el padre.
+    sueltas — su resultado ya está agregado en el padre. Los padres
+    `anulada·duplicado` son reposteos del mismo boleto: auditoría, no
+    apuestas — no cuentan.
     """
     return _stats_inputs_to_result(
         [
             to_stats_input_from_parsed(p)
             for p in parsed_picks
-            if p.es_apuesta and p.es_combinada
+            if p.es_apuesta and p.es_combinada and p.motivo_anulada != "duplicado"
         ]
     )
 

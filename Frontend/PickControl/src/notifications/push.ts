@@ -6,22 +6,47 @@
 import { Platform } from "react-native";
 
 import Constants from "expo-constants";
-import * as Notifications from "expo-notifications";
 
 import { registerDeviceToken } from "@/src/api/devices.api";
 
-// Notificaciones recibidas con la app en primer plano: se muestran
-// igualmente (el aviso de "pick nuevo" interesa aunque estés dentro).
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldPlaySound: false,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+type NotificationsModule = typeof import("expo-notifications");
 
-async function configureAndroidChannel(): Promise<void> {
+// Import dinámico: `expo-notifications` lanza al evaluarse en entornos
+// sin push remoto (Expo Go desde SDK 53, web) — con import estático el
+// módulo tumbaba la app entera al cargar AuthContext.
+let notificationsPromise: Promise<NotificationsModule | null> | null = null;
+
+function loadNotifications(): Promise<NotificationsModule | null> {
+  if (Platform.OS === "web") return Promise.resolve(null);
+  if (!notificationsPromise) {
+    notificationsPromise = import("expo-notifications").then(
+      (m) => {
+        // Notificaciones recibidas con la app en primer plano: se
+        // muestran igualmente (el aviso de "pick nuevo" interesa aunque
+        // estés dentro). En Expo Go esta llamada también lanza.
+        try {
+          m.setNotificationHandler({
+            handleNotification: async () => ({
+              shouldPlaySound: false,
+              shouldSetBadge: false,
+              shouldShowBanner: true,
+              shouldShowList: true,
+            }),
+          });
+          return m;
+        } catch {
+          return null;
+        }
+      },
+      () => null,
+    );
+  }
+  return notificationsPromise;
+}
+
+async function configureAndroidChannel(
+  Notifications: NotificationsModule,
+): Promise<void> {
   // Android 8+ exige un canal para mostrar notificaciones.
   if (Platform.OS === "android") {
     await Notifications.setNotificationChannelAsync("default", {
@@ -33,10 +58,10 @@ async function configureAndroidChannel(): Promise<void> {
 
 export async function registerForPushNotifications(): Promise<void> {
   try {
-    // Web/emulador no tienen tokens push reales.
-    if (Platform.OS === "web") return;
+    const Notifications = await loadNotifications();
+    if (!Notifications) return; // web / Expo Go / entorno sin push
 
-    await configureAndroidChannel();
+    await configureAndroidChannel(Notifications);
 
     const { status: current } = await Notifications.getPermissionsAsync();
     const status =

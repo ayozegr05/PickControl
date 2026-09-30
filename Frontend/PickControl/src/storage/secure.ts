@@ -10,7 +10,6 @@
 
 import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as SecureStore from "expo-secure-store";
 
 // `available` se evalúa en caliente: el módulo nativo falta en web,
 // Expo Go y en dev-clients construidos antes de añadir la dependencia
@@ -18,17 +17,37 @@ import * as SecureStore from "expo-secure-store";
 // el dev-client/APK con el plugin, SecureStore pasa a responder solo.
 const isNative = Platform.OS === "ios" || Platform.OS === "android";
 
-async function secureAvailable(): Promise<boolean> {
-  if (!isNative) return false;
+type SecureStoreModule = typeof import("expo-secure-store");
+
+// Import dinámico: `expo-secure-store` ejecuta `requireNativeModule`
+// al evaluarse, así que un import estático lanza "Cannot find native
+// module" en web/Expo Go y tumbaba el grafo entero antes del fallback.
+let secureStorePromise: Promise<SecureStoreModule | null> | null = null;
+
+function loadSecureStore(): Promise<SecureStoreModule | null> {
+  if (!isNative) return Promise.resolve(null);
+  if (!secureStorePromise) {
+    secureStorePromise = import("expo-secure-store").then(
+      (m) => m,
+      () => null,
+    );
+  }
+  return secureStorePromise;
+}
+
+async function secureAvailable(): Promise<SecureStoreModule | null> {
+  const SecureStore = await loadSecureStore();
+  if (!SecureStore) return null;
   try {
-    return await SecureStore.isAvailableAsync();
+    return (await SecureStore.isAvailableAsync()) ? SecureStore : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
 export async function getSecureItem(key: string): Promise<string | null> {
-  if (!(await secureAvailable())) {
+  const SecureStore = await secureAvailable();
+  if (!SecureStore) {
     return AsyncStorage.getItem(key);
   }
   try {
@@ -49,7 +68,8 @@ export async function getSecureItem(key: string): Promise<string | null> {
 }
 
 export async function setSecureItem(key: string, value: string): Promise<void> {
-  if (await secureAvailable()) {
+  const SecureStore = await secureAvailable();
+  if (SecureStore) {
     try {
       return await SecureStore.setItemAsync(key, value);
     } catch {
@@ -60,7 +80,8 @@ export async function setSecureItem(key: string, value: string): Promise<void> {
 }
 
 export async function removeSecureItem(key: string): Promise<void> {
-  if (await secureAvailable()) {
+  const SecureStore = await secureAvailable();
+  if (SecureStore) {
     try {
       await SecureStore.deleteItemAsync(key);
     } catch {
