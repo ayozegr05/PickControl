@@ -677,6 +677,30 @@ Pendiente:
       Idempotente por evento (provider="oddspapi") y misses solo en
       404 real (un 429 no bloquea el fixture).
 
+- [~] **Optimización de cobertura de cuotas** (2026-10-01):
+      - [x] **Pasada Gemini agrupada por evento**
+            (`gemini_research.find_closing_odds_multi` + `_run_gemini_pass`):
+            una búsqueda web por partido (no por pick) — varias patas del
+            mismo evento comparten la página del comparador; el presupuesto
+            por pasada cuenta eventos (`_GEMINI_MAX_EVENTS_PER_RUN`).
+      - [x] **Enriquecimiento cruzado del snapshotter**: un evento enlazado
+            vía ESPN (solo ganador/total/hándicap) se rebusca en la familia
+            Sofascore con equipos+fecha ya conocidos y sus mercados ricos
+            (córners, tarjetas, BTTS, DC, DNB) se guardan bajo el
+            `event_ext_id` del pick con `provider` del espejo
+            (`snapshotter._fetch_cross_family_odds`).
+      - [ ] **Reutilizar aliases de equipo en el matching de odds**:
+            `_TEAM_ALIASES` de footapi7 ("depò", "psg", "barça"…) solo
+            aplica a resultados; el casado de fixtures en
+            `historical_backfill`/`snapshotter` usa el `evento` crudo y
+            genera `nofixture` falsos. Centralizar la normalización en
+            `results/base.py` en lugar de duplicar diccionarios.
+      - [ ] **Política de quota de OddsPapi al renovar (20/10)**: ~200
+            req/mes se agotan rápido si va primero en todos los cubos.
+            Valorar: reservarla a tenis (donde más aporta), orden por
+            deporte (oddsfeed primero en fútbol) o presupuesto por
+            pasada tipo `_FEED_MAX_CALLS_PER_RUN`.
+
 ## Estado actual del entorno
 
 - **Backend:** FastAPI en `http://0.0.0.0:8000` con `DATABASE_URL=postgresql+asyncpg://<usuario>:<contraseña>@localhost:5432/controlpick`

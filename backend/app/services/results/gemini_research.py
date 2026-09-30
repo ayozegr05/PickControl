@@ -388,6 +388,40 @@ Reglas:
   hándicaps.
 - Si la página no muestra esa apuesta: {{"market_name": null}}."""
 
+# Variante multi-apuesta: mismo partido, varias apuestas del tipster —
+# una página de comparador suele traer TODOS los mercados del evento,
+# así que una extracción resuelve el grupo entero (una búsqueda por
+# evento, no por pick).
+_ODDS_MULTI_PROMPT = """Texto extraído de una página web de apuestas
+deportivas (comparador de cuotas o casa):
+
+{text}
+
+Busco la cuota de cierre pre-partido de VARIAS apuestas del MISMO
+partido {hint} ({sport}, {date}). Las apuestas son:
+
+{apuestas}
+
+Responde SOLO con JSON válido (array), sin markdown — un objeto por
+cada apuesta que SÍ aparece en el texto (omite las que no):
+[{{"n": <número de la apuesta en la lista>,
+ "market_name": "<uno exacto de: {markets}>",
+ "choice_name": "<1|X|2|Over|Under|Yes|No o '(<línea>) <equipo>'>",
+ "choice_group": "<línea numérica como 9.5, o null>",
+ "cuota_decimal": <número como 2.05>,
+ "cuota_texto": "<la cuota EXACTAMENTE como aparece en el texto
+   (2.05, 2,05 o 21/20)>",
+ "casa": "<casa de apuestas o cadena vacía>"}}]
+
+Reglas:
+- La cuota tiene que aparecer LITERALMENTE en el texto — nunca la
+  inventes ni la calcules de memoria.
+- Prefiere la cuota de bet365 si hay varias casas; si no, la de la
+  primera casa que muestre esa apuesta.
+- "1"/"X"/"2" = gana local/empate/visitante; "Over"/"Under" para
+  totales; "Yes"/"No" para ambos marcan; "(<línea>) <equipo>" para
+  hándicaps."""
+
 
 @dataclass
 class ClosingOdds:
@@ -442,6 +476,18 @@ def _extract_json(text: str) -> Optional[dict[str, Any]]:
     except ValueError:
         return None
     return data if isinstance(data, dict) else None
+
+
+def _extract_json_array(text: str) -> list[dict[str, Any]]:
+    """Primer array JSON de objetos del texto (tolera code fences)."""
+    m = re.search(r"\[.*\]", text, re.DOTALL)
+    if not m:
+        return []
+    try:
+        data = json.loads(m.group(0))
+    except ValueError:
+        return []
+    return [e for e in data if isinstance(e, dict)] if isinstance(data, list) else []
 
 
 class GeminiResearchProvider:
@@ -1099,6 +1145,72 @@ class GeminiResearchProvider:
                 )
                 return found
         return None
+
+    async def find_closing_odds_multi(
+        self, date: datetime, team_hint: str, market_descs: list[str]
+    ) -> dict[int, ClosingOdds]:
+        """Varias cuotas de cierre del MISMO partido en una pasada.
+
+        Varias patas/picks del mismo evento comparten la página del
+        comparador (oddspedia lista todos sus mercados): se hace UNA
+        búsqueda web por evento y UNA extracción por página con todas
+        las apuestas pendientes, en vez de un ciclo completo por pick.
+        Devuelve índice en `market_descs` → cuota validada con la
+        misma doble barrera anti-alucinación que `find_closing_odds`.
+        """
+        descs = [d.strip() for d in market_descs]
+        if len(descs) == 1:
+            one = await self.find_closing_odds(date, team_hint, descs[0])
+            return {0: one} if one else {}
+        if self._in_cooldown():
+            return {}
+        hint = (team_hint or "").strip()
+        if not hint or not descs or any(not d for d in descs):
+            return {}
+        priority = ["oddspedia cuotas", "oddsportal odds", "betexplorer odds"]
+        urls = await self._search_urls(date, hint, priority_terms=priority)
+        apuestas = "\n".join(f"{i + 1}. {d}" for i, d in enumerate(descs))
+        found: dict[int, ClosingOdds] = {}
+        for url in urls:
+            if len(found) == len(descs):
+                break
+            text = await self._fetch_page_text(url)
+            if not text:
+                continue
+            payload = await self._ask(
+                _ODDS_MULTI_PROMPT.format(
+                    text=text[:_MAX_PAGE_CHARS],
+                    sport=self._sport_es(),
+                    hint=hint,
+                    date=date.strftime("%d de %B de %Y"),
+                    apuestas=apuestas,
+                    markets="|".join(_ODDS_MARKET_NAMES),
+                )
+            )
+            if payload is None:
+                continue
+            for entry in _extract_json_array(self._payload_text(payload)):
+                try:
+                    idx = int(entry.get("n")) - 1
+                except (TypeError, ValueError):
+                    continue
+                if not (0 <= idx < len(descs)) or idx in found:
+                    continue
+                closing = self._closing_from_text(text, entry, url)
+                if closing is None:
+                    continue
+                found[idx] = closing
+                logger.info(
+                    "[GEMINI] cuota cierre '%s' [%d] %s/%s = %s (%s) en %s",
+                    hint,
+                    idx + 1,
+                    closing.market_name,
+                    closing.choice_name,
+                    closing.cuota,
+                    closing.casa or "?",
+                    url,
+                )
+        return found
 
     def _closing_from_text(
         self, text: str, data: dict[str, Any], url: str

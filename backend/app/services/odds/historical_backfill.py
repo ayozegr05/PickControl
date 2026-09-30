@@ -100,7 +100,10 @@ _FEED_MAX_CALLS_PER_RUN = 40
 # intentado cuesta 2-4 llamadas al modelo; el presupuesto por pasada
 # comparte el free tier con la investigación de resultados.
 _GEMINI_ODDS_PROVIDER = "gemini-odds"
-_GEMINI_MAX_PICKS_PER_RUN = 8
+# Presupuesto por pasada en EVENTOS (no picks): varias patas del mismo
+# partido comparten una sola búsqueda web — el grupo entero se resuelve
+# con una extracción por página.
+_GEMINI_MAX_EVENTS_PER_RUN = 8
 # Una fuente aparcada por quota más allá de este horizonte (~1 día,
 # p. ej. el reset mensual de una suscripción) no bloquea el drenaje
 # del backlog ni se le llama: no es un cooldown de ritmo, no hay nada
@@ -769,7 +772,11 @@ async def _run_gemini_pass(
             continue
         pending.append(pick)
 
-    for pick in pending[:_GEMINI_MAX_PICKS_PER_RUN]:
+    # Agrupa por evento: patas/picks del mismo partido comparten la
+    # página del comparador — una búsqueda + una extracción por página
+    # resuelven el grupo entero en vez de un ciclo por pick.
+    groups: dict[tuple[str, date, str], list[ParsedPick]] = {}
+    for pick in pending:
         sport = _canonical_sport(pick.deporte)
         hint = (_lookup_hint(pick, sport) or "") if sport else ""
         desc = _market_desc(pick)
@@ -777,105 +784,135 @@ async def _run_gemini_pass(
             if apply:
                 mark_missed(done_key.format(pick.id))
             continue
+        evento = re.sub(r"\s+", " ", (pick.evento or hint).strip().lower())
+        groups.setdefault((sport, pick.fecha_evento.date(), evento), []).append(pick)
 
-        ext_id = pick.odds_event_id or f"{_GEMINI_ODDS_PROVIDER}:{pick.id}"
-        event = events.get(ext_id) or _synthetic_event(pick, sport, ext_id)
-
+    for (sport, _day, _evento), group in list(groups.items())[
+        :_GEMINI_MAX_EVENTS_PER_RUN
+    ]:
         provider = GeminiResearchProvider(
             sport, settings.google_api_key, calls_as=_GEMINI_ODDS_PROVIDER
         )
-        found = await provider.find_closing_odds(pick.fecha_evento, hint, desc)
-        if found is None:
-            if provider._in_cooldown():
-                # Cuota/ritmo agotado: ni marca ni reintento — se
-                # retoma en la próxima pasada.
+        hint = _lookup_hint(group[0], sport) or ""
+        results = await provider.find_closing_odds_multi(
+            group[0].fecha_evento, hint, [_market_desc(p) for p in group]
+        )
+        cooled = provider._in_cooldown()
+        for idx, pick in enumerate(group):
+            found = results.get(idx)
+            if found is None:
+                if cooled:
+                    # Búsqueda abortada por ritmo/cuota: sin marca,
+                    # se retoma en la próxima pasada.
+                    continue
+                if apply:
+                    mark_missed(done_key.format(pick.id))
                 report.detalles.append(
-                    "  ! [gemini-odds] cooldown del free tier — "
-                    "el resto sigue en la próxima pasada"
+                    f"  - pick {pick.id}: sin cuota en comparadores "
+                    f"[{_GEMINI_ODDS_PROVIDER}]"
                 )
-                break
-            if apply:
-                mark_missed(done_key.format(pick.id))
-            report.detalles.append(
-                f"  - pick {pick.id}: sin cuota en comparadores "
-                f"[{_GEMINI_ODDS_PROVIDER}]"
+                continue
+            _record_gemini_closing(
+                session, events, registered, done, pick, found, apply, report
             )
-            continue
+        if cooled:
+            report.detalles.append(
+                "  ! [gemini-odds] cooldown del free tier — "
+                "el resto sigue en la próxima pasada"
+            )
+            break
 
-        # Autocheck: la propuesta del modelo tiene que casar con el
-        # pick por la misma función que usa el comparador. Si el
-        # evento sintético tiene los lados invertidos se prueba la
-        # orientación contraria antes de descartar.
-        probe = OddsSnapshot(
-            provider=_GEMINI_ODDS_PROVIDER,
-            event_ext_id=ext_id,
-            market_name=found.market_name,
-            choice_name=found.choice_name,
-            choice_group=found.choice_group,
-            cuota=found.cuota,
-            captured_at=pick.fecha_evento,
+
+def _record_gemini_closing(
+    session,
+    events: dict[str, OddsEvent],
+    registered: set[str],
+    done_events: set[str],
+    pick: ParsedPick,
+    found,
+    apply: bool,
+    report: BackfillReport,
+) -> None:
+    """Valida y persiste la cuota que Gemini propuso para UN pick.
+
+    Autocheck: la propuesta tiene que casar con el pick por la misma
+    función que usa el comparador. Si el evento sintético tiene los
+    lados invertidos se prueba la orientación contraria antes de
+    descartar.
+    """
+    sport = _canonical_sport(pick.deporte) or ""
+    ext_id = pick.odds_event_id or f"{_GEMINI_ODDS_PROVIDER}:{pick.id}"
+    event = events.get(ext_id) or _synthetic_event(pick, sport, ext_id)
+    probe = OddsSnapshot(
+        provider=_GEMINI_ODDS_PROVIDER,
+        event_ext_id=ext_id,
+        market_name=found.market_name,
+        choice_name=found.choice_name,
+        choice_group=found.choice_group,
+        cuota=found.cuota,
+        captured_at=pick.fecha_evento,
+    )
+    matched = map_pick_choices(pick, event, [probe])
+    if (
+        matched is None
+        and event.home_team
+        and event.away_team
+        and event is not events.get(ext_id)
+    ):
+        event = OddsEvent(
+            event_ext_id=event.event_ext_id,
+            sport=event.sport,
+            home_team=event.away_team,
+            away_team=event.home_team,
+            start=event.start,
         )
         matched = map_pick_choices(pick, event, [probe])
-        if (
-            matched is None
-            and event.home_team
-            and event.away_team
-            and event is not events.get(ext_id)
-        ):
-            event = OddsEvent(
-                event_ext_id=event.event_ext_id,
-                sport=event.sport,
-                home_team=event.away_team,
-                away_team=event.home_team,
-                start=event.start,
-            )
-            matched = map_pick_choices(pick, event, [probe])
-        key = (found.market_name, found.choice_name, found.choice_group)
-        if (
-            matched is None
-            or (
-                matched.market_name,
-                matched.choice_name,
-                matched.choice_group,
-            )
-            != key
-        ):
-            if apply:
-                mark_missed(done_key.format(pick.id))
-            report.detalles.append(
-                f"  - pick {pick.id}: propuesta no verificable "
-                f"({found.market_name}/{found.choice_name}) "
-                f"[{_GEMINI_ODDS_PROVIDER}]"
-            )
-            continue
-
-        report.mapeados += 1
-        report.detalles.append(
-            f"  + pick {pick.id}: {found.market_name} / {found.choice_name}"
-            f" | cierre {found.cuota} ({found.casa or '?'}) "
-            f"[{_GEMINI_ODDS_PROVIDER} via {found.source_url}]"
+    key = (found.market_name, found.choice_name, found.choice_group)
+    if (
+        matched is None
+        or (
+            matched.market_name,
+            matched.choice_name,
+            matched.choice_group,
         )
+        != key
+    ):
         if apply:
-            if ext_id not in registered:
-                session.add(event)
-                registered.add(ext_id)
-            session.add(
-                OddsSnapshot(
-                    provider=_GEMINI_ODDS_PROVIDER,
-                    event_ext_id=ext_id,
-                    market_name=found.market_name,
-                    choice_name=found.choice_name,
-                    choice_group=found.choice_group,
-                    cuota=found.cuota,
-                    captured_at=pick.fecha_evento,
-                    parsed_pick_id=pick.id,
-                )
+            mark_missed(_gemini_done_key().format(pick.id))
+        report.detalles.append(
+            f"  - pick {pick.id}: propuesta no verificable "
+            f"({found.market_name}/{found.choice_name}) "
+            f"[{_GEMINI_ODDS_PROVIDER}]"
+        )
+        return
+
+    report.mapeados += 1
+    report.detalles.append(
+        f"  + pick {pick.id}: {found.market_name} / {found.choice_name}"
+        f" | cierre {found.cuota} ({found.casa or '?'}) "
+        f"[{_GEMINI_ODDS_PROVIDER} via {found.source_url}]"
+    )
+    if apply:
+        if ext_id not in registered:
+            session.add(event)
+            registered.add(ext_id)
+        session.add(
+            OddsSnapshot(
+                provider=_GEMINI_ODDS_PROVIDER,
+                event_ext_id=ext_id,
+                market_name=found.market_name,
+                choice_name=found.choice_name,
+                choice_group=found.choice_group,
+                cuota=found.cuota,
+                captured_at=pick.fecha_evento,
+                parsed_pick_id=pick.id,
             )
-            if not pick.odds_event_id:
-                pick.odds_event_id = ext_id
-                session.add(pick)
-            done.add(ext_id)
-            report.filas += 1
+        )
+        if not pick.odds_event_id:
+            pick.odds_event_id = ext_id
+        session.add(pick)
+        done_events.add(ext_id)
+        report.filas += 1
 
 
 async def run(apply: bool, limit: int | None) -> BackfillReport:

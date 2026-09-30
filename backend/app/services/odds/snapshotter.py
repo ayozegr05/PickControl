@@ -19,6 +19,11 @@ Corre cada `odds_snapshot_interval_minutes` en segundo plano (ver
 3. Inserta TODAS las opciones de todos los mercados en
    `odds_snapshots` (append-only): el mapeo pick->mercado se hace al
    comparar, así mapeos futuros no necesitan nuevas llamadas.
+   Eventos enlazados vía ESPN (solo ganador/total/hándicap) se
+   enriquecen cruzando a la familia Sofascore: el evento ya está
+   localizado, así que córners/tarjetas/BTTS cuestan una búsqueda
+   más — se guardan bajo el `event_ext_id` del pick con `provider`
+   del espejo que las trajo (`_fetch_cross_family_odds`).
 
 Cadena de proveedores por deporte (misma semántica que el
 verificador: un 403/429 lo marca sin cuota y se pasa al siguiente):
@@ -55,7 +60,7 @@ from app.models.parsed_pick import ParsedPick
 from app.services.odds.base import EventRef, OddsProvider
 from app.services.odds.espn_odds import EspnOddsProvider
 from app.services.odds.sofascore import SofaScoreOddsProvider
-from app.services.results.base import is_missed, mark_missed
+from app.services.results.base import is_missed, mark_missed, match_score
 from app.services.results.sofascore_native import (
     SofaScoreNativeOddsProvider,
     direct_transport,
@@ -198,6 +203,45 @@ async def _find_event_across_providers(
         if ref is not None:
             return ref
     return None
+
+
+async def _fetch_cross_family_odds(
+    session: AsyncSession,
+    sport: str,
+    event_ext_id: str,
+    start: Optional[datetime],
+    providers: list[OddsProvider],
+):
+    """Enriquecimiento de un evento enlazado vía ESPN.
+
+    ESPN pickcenter solo devuelve ganador/total/hándicap; el mismo
+    partido en Sofascore añade córners, tarjetas, BTTS, doble
+    oportunidad... El evento YA está localizado (equipos + fecha
+    exactas del `OddsEvent`), así que el extra cuesta una búsqueda en
+    la familia Sofascore + un fetch — las filas se escriben bajo el
+    `event_ext_id` original con `provider` del espejo que las trajo
+    (mismo convenio que `gemini-odds`: el id agrupa el partido real,
+    el provider dice quién aportó la evidencia).
+    """
+    if sport != "futbol" or not event_ext_id.startswith("espn:"):
+        return None, None
+    sofa_providers = [
+        p for p in providers if getattr(p, "ID_PREFIX", None) == "sofascore:"
+    ]
+    if not sofa_providers or start is None:
+        return None, None
+    ev = (
+        await session.execute(
+            select(OddsEvent).where(OddsEvent.event_ext_id == event_ext_id)
+        )
+    ).scalar_one_or_none()
+    if ev is None or not ev.home_team or not ev.away_team:
+        return None, None
+    hint = f"{ev.home_team} vs {ev.away_team}"
+    ref = await _find_event_across_providers(sport, start, hint, sofa_providers)
+    if ref is None or match_score(hint, ref.home_team, ref.away_team) < 0.75:
+        return None, None
+    return await _fetch_odds_across_providers(sport, ref.event_ext_id, providers)
 
 
 async def _fetch_odds_across_providers(
@@ -384,6 +428,41 @@ async def run_odds_snapshot_cycle() -> dict[str, int]:
                 len(choices),
                 provider.NAME,
             )
+
+            # Enriquecimiento cruzado: un `espn:*` solo trajo
+            # ganador/total/hándicap — se busca el mismo partido en la
+            # familia Sofascore y sus mercados ricos se guardan bajo
+            # el mismo evento (provider = quien los trajo).
+            x_provider, x_choices = await _fetch_cross_family_odds(
+                session,
+                info["sport"],
+                event_ext_id,
+                info["start"],
+                providers,
+            )
+            if x_provider is not None and x_choices:
+                for choice in x_choices:
+                    session.add(
+                        OddsSnapshot(
+                            provider=x_provider.NAME,
+                            event_ext_id=event_ext_id,
+                            market_name=choice.market_name,
+                            choice_group=choice.choice_group,
+                            choice_name=choice.choice_name,
+                            cuota=choice.cuota,
+                            cuota_apertura=choice.cuota_apertura,
+                            is_live=choice.is_live,
+                            suspended=choice.suspended,
+                            parsed_pick_id=info["pick_id"],
+                        )
+                    )
+                    stats["filas"] += 1
+                logger.info(
+                    "[ODDS] %s: +%d opciones cruzadas vía %s",
+                    event_ext_id,
+                    len(x_choices),
+                    x_provider.NAME,
+                )
 
         await session.commit()
 

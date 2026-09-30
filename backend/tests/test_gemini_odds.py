@@ -299,6 +299,69 @@ class TestGeminiBackfillPass:
         assert finder.await_count == 0
         assert results_base.is_missed("gemini-odds|done|42")
 
+    async def test_picks_mismo_evento_comparten_busqueda(self, session, monkeypatch):
+        """Dos picks del mismo partido: UNA llamada multi resuelve a
+        los dos — la búsqueda web es por evento, no por pick."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        calls: list[list[str]] = []
+
+        async def multi(self, date, hint, descs):
+            calls.append(descs)
+            offers = [
+                ClosingOdds(
+                    market_name="Match goals",
+                    choice_name="Over",
+                    choice_group="2.5",
+                    cuota=1.85,
+                    casa="bet365",
+                    source_url="https://oddspedia.com/x",
+                ),
+                ClosingOdds(
+                    market_name="Match goals",
+                    choice_name="Under",
+                    choice_group="3.5",
+                    cuota=2.10,
+                    casa="bet365",
+                    source_url="https://oddspedia.com/x",
+                ),
+            ]
+            return {i: offers[i] for i in range(len(descs))}
+
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        p1 = self._pick(id=10)
+        p2 = self._pick(id=11, seleccion="Menos de 3.5 goles", linea=3.5)
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [p1, p2], set(), set(), session, apply=True, report=report
+        )
+
+        assert len(calls) == 1  # una búsqueda para el evento
+        assert len(calls[0]) == 2  # con las dos apuestas
+        assert report.mapeados == 2
+
+    async def test_eventos_distintos_busquedas_independientes(
+        self, session, monkeypatch
+    ):
+        """Dos eventos distintos siguen gastando una pasada cada uno."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        calls: list[list[str]] = []
+
+        async def multi(self, date, hint, descs):
+            calls.append(descs)
+            return {}
+
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        p1 = self._pick(id=20)
+        p2 = self._pick(id=21, evento="Sevilla vs Betis")
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [p1, p2], set(), set(), session, apply=True, report=report
+        )
+
+        assert len(calls) == 2
+        assert results_base.is_missed("gemini-odds|done|20")
+        assert results_base.is_missed("gemini-odds|done|21")
+
 
 class TestPickPendingGemini:
     """La marca `gemini-odds|done` entra en el conteo de pendientes."""
