@@ -98,6 +98,25 @@ ssh -i ~/Downloads/ssh-key-2026-09-20.key ubuntu@130.110.233.198 \
 El contenedor ejecuta `alembic upgrade head` al arrancar — las
 migraciones se aplican solas.
 
+## Build APK local (sin EAS)
+
+```bash
+cd Frontend/PickControl/android
+# local.properties: sdk.dir=C:\\Users\\asert\\AppData\\Local\\Android\\Sdk
+EXPO_PUBLIC_API_BASE_URL=https://controlpick.duckdns.org/api/v1 \
+  ./gradlew assembleRelease
+# APK: android/app/build/outputs/apk/release/app-release.apk
+```
+
+- OJO firma: va firmado con `debug.keystore` (default de prebuild) —
+  distinto al keystore de EAS. Sobre una app instalada por EAS,
+  Android exige DESINSTALAR primero (pierde login guardado).
+- Si `ninja: error: manifest 'build.ninja' still dirty after 100
+  tries`: es el ninja 1.10.2 bundled con cmake 3.22.1 del SDK —
+  sustituir `%LOCALAPPDATA%\Android\Sdk\cmake\3.22.1\bin\ninja.exe`
+  por ninja >= 1.12 (github.com/ninja-build/ninja/releases). El
+  original queda en `ninja-1.10.2.bak.exe` en ese dir.
+
 ## Operaciones comunes
 
 ```bash
