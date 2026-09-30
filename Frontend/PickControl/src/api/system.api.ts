@@ -2,6 +2,30 @@
 // resultados/cuotas — quién está sin cuota hoy y misses registrados.
 import { apiRequest } from "./client";
 
+/** Embudo del backlog de cuotas históricas (backend lo calcula por
+ * pick cruzando marcas de fuentes). `en_cola` = trabajo real;
+ * `aplazados` = solo esperan a providers en quota larga. */
+export interface BackfillStatus {
+  total: number;
+  resueltos: number;
+  en_cola: number;
+  aplazados: number;
+  agotados: number;
+  por_fuente: Record<string, number>;
+  gemini_pendientes: number;
+  fuentes_en_pausa: Record<string, string>;
+  ultima_pasada?: {
+    at?: string;
+    revisados?: number;
+    filas?: number;
+    con_fixture?: number;
+    sin_fixture?: number;
+    sin_historial?: number;
+    sin_opcion?: number;
+    mapeados?: number;
+  } | null;
+}
+
 export interface ProvidersStatus {
   rate_limited: Record<string, string>;
   missed_by_provider: Record<string, number>;
@@ -18,6 +42,8 @@ export interface ProvidersStatus {
   odds_events_count?: number;
   /** Picks pendientes de backfill histórico de cuotas. */
   odds_backfill_pending?: number;
+  /** Embudo del backlog (en_cola vs aplazados por quota). */
+  odds_backfill?: BackfillStatus | null;
 }
 
 export function getProvidersStatus(): Promise<ProvidersStatus> {

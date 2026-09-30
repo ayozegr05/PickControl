@@ -327,6 +327,7 @@ def _load_state() -> dict[str, dict[str, str]]:
         _STATE.setdefault("loops", {})
         _STATE.setdefault("limits", {})
         _STATE.setdefault("void_rechecks", {})
+        _STATE.setdefault("summaries", {})
     return _STATE
 
 
@@ -337,19 +338,22 @@ def _save_state() -> None:
     # Merge con disco antes de escribir: el backend mantiene `_STATE`
     # en memoria y un dump ciego pisaría las marcas de procesos
     # paralelos (backfill manual, scripts) que escribieron entretanto.
-    # En conflicto gana el valor mayor (timestamps ISO comparan bien:
-    # conserva la marca más reciente/larga).
+    # En conflicto por la MISMA clave gana la copia en memoria — es la
+    # escritura más reciente (un max() resucitaría bloqueos acortados
+    # tras resetear la racha de backoff).
     try:
         disk = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         disk = {}
-    for section in ("rate_limited", "missed", "limits", "void_rechecks", "loops"):
-        merged: dict[str, str] = {}
-        for src in (disk.get(section) or {}, state.get(section) or {}):
-            for k, v in src.items():
-                if k not in merged or str(v) > str(merged[k]):
-                    merged[k] = v
-        state[section] = merged
+    for section in (
+        "rate_limited",
+        "missed",
+        "limits",
+        "void_rechecks",
+        "loops",
+        "summaries",
+    ):
+        state[section] = {**(disk.get(section) or {}), **state.get(section, {})}
     merged_calls: dict[str, dict[str, int]] = {
         d: dict(p) for d, p in (disk.get("calls") or {}).items()
     }
@@ -642,15 +646,47 @@ def is_rate_limited(provider_name: str) -> bool:
     El valor guardado es una fecha ISO (sin cuota: dura todo el día)
     o un timestamp ISO (cooldown por ritmo: dura hasta ese instante —
     ver `mark_rate_limited`)."""
+    until = rate_limited_until(provider_name)
+    return until is not None and until > utc_now()
+
+
+def rate_limited_until(provider_name: str) -> datetime | None:
+    """Instante hasta el que el provider está aparcado, o None.
+
+    Fecha ISO desnuda -> fin de ese día UTC; timestamp -> el instante.
+    Sirve para distinguir cooldown de ritmo (minutos) de quota
+    agotada (días/semanas, p. ej. reset mensual de RapidAPI)."""
     raw = _load_state()["rate_limited"].get(provider_name)
     if not raw:
-        return False
+        return None
     if "T" not in raw:
-        return raw == utc_now().date().isoformat()
+        try:
+            return datetime.fromisoformat(raw) + timedelta(days=1)
+        except ValueError:
+            return None
     try:
-        return datetime.fromisoformat(raw) > utc_now()
+        return datetime.fromisoformat(raw)
     except ValueError:
-        return False
+        return None
+
+
+def record_loop_summary(loop_name: str, summary: dict) -> None:
+    """Guarda el mini-resumen de la última pasada de un loop
+    (p. ej. el backfill de cuotas: revisados, filas, llamadas).
+
+    Persistido en `provider_state.json` bajo `summaries` — la
+    pantalla de depuración muestra qué hizo la última pasada sin
+    tener que abrir logs del contenedor."""
+    _load_state().setdefault("summaries", {})[loop_name] = {
+        "at": utc_now().isoformat(),
+        **summary,
+    }
+    _save_state()
+
+
+def loop_summary(loop_name: str) -> dict | None:
+    """Último resumen registrado para `loop_name`, o None."""
+    return _load_state().get("summaries", {}).get(loop_name)
 
 
 def mark_missed(key: str) -> None:

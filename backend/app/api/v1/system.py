@@ -24,6 +24,26 @@ from app.services.results import base as results_base
 router = APIRouter(prefix="/system", tags=["system"])
 
 
+class BackfillStatus(BaseModel):
+    """Desglose del backlog de cuotas históricas (embudo depurativo).
+
+    `en_cola` es trabajo real pendiente (una fuente viva o Gemini le
+    debe el intento); `aplazados` solo esperan a fuentes aparcadas por
+    quota larga — vuelven solas cuando caducan las marcas o renueva
+    la suscripción. `agotados` los intentaron todas y nadie los tenía.
+    """
+
+    total: int
+    resueltos: int
+    en_cola: int
+    aplazados: int
+    agotados: int
+    por_fuente: dict[str, int]
+    gemini_pendientes: int
+    fuentes_en_pausa: dict[str, str]
+    ultima_pasada: dict | None = None
+
+
 class ProvidersStatus(BaseModel):
     """Snapshot de `provider_state.json`: quién está sin cuota hoy y
     cuántos "no encontrado" lleva registrados cada provider."""
@@ -44,6 +64,9 @@ class ProvidersStatus(BaseModel):
     odds_snapshots_by_provider: dict[str, int]
     odds_events_count: int
     odds_backfill_pending: int
+    # Embudo del backlog de cuotas (en_cola / aplazados / por fuente /
+    # última pasada). None si no hay fuentes de histórico configuradas.
+    odds_backfill: BackfillStatus | None = None
 
 
 @router.get("/providers", response_model=ProvidersStatus)
@@ -74,14 +97,19 @@ async def providers_status(
     ).one()
     # Import perezoso: tira de httpx/sqlmodel pesados y el endpoint de
     # picks no los necesita.
-    from app.services.odds.historical_backfill import count_pending_backfill
+    from app.services.odds.historical_backfill import (
+        backfill_breakdown,
+        count_pending_backfill,
+    )
 
+    breakdown = await backfill_breakdown(session)
     return ProvidersStatus(
         **results_base.providers_snapshot(),
         resolved_by_provider={str(name): n for name, n in rows},
         odds_snapshots_by_provider={str(name): n for name, n in odds_rows},
         odds_events_count=int(odds_events),
         odds_backfill_pending=await count_pending_backfill(session),
+        odds_backfill=BackfillStatus(**breakdown) if breakdown else None,
     )
 
 

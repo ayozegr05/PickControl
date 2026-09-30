@@ -263,6 +263,21 @@ export default function ParsedPicksScreen() {
     }
   }, [soloPendientes, loadOverview, loadChannel, selectedChannel, showAll]);
 
+  // Clasifica el bloqueo de rate_limited: timestamp con "T" cercano =
+  // cooldown por ritmo (minutos); fecha desnuda (quota del día) o
+  // timestamp lejano (>24h) = quota agotada (reset diario/mensual).
+  const clasificarBloqueo = (raw: string | null) => {
+    if (!raw) return { cooldownHasta: null, quotaHasta: null };
+    if (raw.includes("T")) {
+      const until = new Date(raw).getTime();
+      if (Number.isFinite(until) && until - Date.now() > 24 * 3600 * 1000) {
+        return { cooldownHasta: null, quotaHasta: raw };
+      }
+      return { cooldownHasta: raw, quotaHasta: null };
+    }
+    return { cooldownHasta: null, quotaHasta: raw };
+  };
+
   const providerRows = useMemo(() => {
     if (!providersStatus) return [];
     const names = new Set<string>([
@@ -283,8 +298,7 @@ export default function ParsedPicksScreen() {
         return {
           name,
           limitedSince,
-          // Timestamp ISO = cooldown corto por ritmo; fecha = sin cuota.
-          cooldown: limitedSince !== null && limitedSince.includes("T"),
+          ...clasificarBloqueo(limitedSince),
           misses: providersStatus.missed_by_provider[name] ?? 0,
           callsToday: providersStatus.calls_today?.[name] ?? 0,
           dailyLimit: providersStatus.daily_limits?.[name] ?? null,
@@ -329,7 +343,7 @@ export default function ParsedPicksScreen() {
         return {
           name,
           limitedSince,
-          cooldown: limitedSince !== null && limitedSince.includes("T"),
+          ...clasificarBloqueo(limitedSince),
           callsToday: providersStatus.calls_today?.[name] ?? 0,
           dailyLimit: providersStatus.daily_limits?.[name] ?? null,
           snapshots: providersStatus.odds_snapshots_by_provider?.[name] ?? 0,
@@ -649,44 +663,50 @@ export default function ParsedPicksScreen() {
                     <View
                       style={[
                         styles.providerBadge,
-                        row.limitedSince
-                          ? row.cooldown
+                        row.quotaHasta
+                          ? styles.providerBadgeBad
+                          : row.cooldownHasta
                             ? styles.providerBadgeWarn
-                            : styles.providerBadgeBad
-                          : styles.providerBadgeOk,
+                            : styles.providerBadgeOk,
                       ]}
                     >
                       <Text
                         style={
-                          row.limitedSince
-                            ? row.cooldown
+                          row.quotaHasta
+                            ? styles.providerBad
+                            : row.cooldownHasta
                               ? styles.providerWarn
-                              : styles.providerBad
-                            : styles.providerOk
+                              : styles.providerOk
                         }
                       >
-                        {row.limitedSince
-                          ? row.cooldown
-                            ? "EN PAUSA"
-                            : "SIN CUOTA"
-                          : "OK"}
+                        {row.quotaHasta
+                          ? row.quotaHasta.includes("T")
+                            ? `quota → ${row.quotaHasta.slice(8, 10)}/${row.quotaHasta.slice(5, 7)}`
+                            : "quota hoy"
+                          : row.cooldownHasta
+                            ? "cooldown"
+                            : "OK"}
                       </Text>
                     </View>
                   </View>
-                  {(row.callsToday > 0 || row.misses > 0 || row.resolved > 0 || row.cooldown) && (
+                  {(row.callsToday > 0 ||
+                    row.misses > 0 ||
+                    row.resolved > 0 ||
+                    row.cooldownHasta !== null) && (
                     <Text style={styles.providerMeta}>
-                      {row.cooldown && row.limitedSince
-                        ? `hasta ${row.limitedSince
+                      {row.cooldownHasta
+                        ? `hasta ${row.cooldownHasta
                             .slice(5, 16)
                             .replace("T", " ")} UTC`
                         : ""}
-                      {row.cooldown && row.callsToday > 0 ? " · " : ""}
+                      {row.cooldownHasta && row.callsToday > 0 ? " · " : ""}
                       {row.callsToday > 0
                         ? `${row.callsToday}${
                             row.dailyLimit ? `/${row.dailyLimit}` : ""
                           } llamada${row.callsToday !== 1 ? "s" : ""} hoy`
                         : ""}
-                      {(row.cooldown || row.callsToday > 0) && row.misses > 0
+                      {(row.cooldownHasta || row.callsToday > 0) &&
+                      row.misses > 0
                         ? " · "
                         : ""}
                       {row.misses > 0
@@ -694,7 +714,7 @@ export default function ParsedPicksScreen() {
                             row.misses !== 1 ? "s" : ""
                           } (en caché)`
                         : ""}
-                      {(row.callsToday > 0 || row.misses > 0 || row.cooldown) &&
+                      {(row.callsToday > 0 || row.misses > 0 || row.cooldownHasta) &&
                       row.resolved > 0
                         ? " · "
                         : ""}
@@ -726,29 +746,30 @@ export default function ParsedPicksScreen() {
                     <View
                       style={[
                         styles.providerBadge,
-                        row.limitedSince
-                          ? row.cooldown
+                        row.quotaHasta
+                          ? styles.providerBadgeBad
+                          : row.cooldownHasta
                             ? styles.providerBadgeWarn
-                            : styles.providerBadgeBad
-                          : styles.providerBadgeOk,
+                            : styles.providerBadgeOk,
                       ]}
                     >
                       <Text
                         style={
-                          row.limitedSince
-                            ? row.cooldown
+                          row.quotaHasta
+                            ? styles.providerBad
+                            : row.cooldownHasta
                               ? styles.providerWarn
-                              : styles.providerBad
-                            : styles.providerOk
+                              : styles.providerOk
                         }
                       >
-                        {row.limitedSince
-                          ? row.cooldown
-                            ? `EN PAUSA · hasta ${row.limitedSince
-                                .slice(5, 16)
-                                .replace("T", " ")}`
-                            : "SIN CUOTA"
-                          : "OK"}
+                        {row.quotaHasta
+                          ? row.quotaHasta.includes("T")
+                            ? `quota → ${row.quotaHasta.slice(8, 10)}/${row.quotaHasta.slice(5, 7)}`
+                            : "quota hoy"
+                          : row.cooldownHasta
+                            ? `cooldown · ${row.cooldownHasta
+                                .slice(11, 16)} UTC`
+                            : "OK"}
                       </Text>
                     </View>
                   </View>
@@ -771,10 +792,101 @@ export default function ParsedPicksScreen() {
               ))
             )}
             <Text style={styles.statSub}>
-              {providersStatus.odds_events_count ?? 0} eventos con cuota ·{" "}
-              {providersStatus.odds_backfill_pending ?? 0} pendientes de
-              backfill
+              {providersStatus.odds_events_count ?? 0} eventos con cuota
+              registrada
             </Text>
+            {providersStatus.odds_backfill && (
+              <View style={styles.funnel}>
+                <Text style={styles.funnelHint}>
+                  Un pick sale de la cola cuando todos los providers
+                  vivos lo han intentado (o su cuota ya está
+                  registrada).
+                </Text>
+                <View style={styles.providerRow}>
+                  <Text style={styles.statLabel}>Por auditar</Text>
+                  <Text style={styles.providerWarn}>
+                    {providersStatus.odds_backfill.total}
+                  </Text>
+                </View>
+                <View style={styles.providerRow}>
+                  <Text style={styles.statLabel}>· En cola</Text>
+                  <Text style={styles.providerBad}>
+                    {providersStatus.odds_backfill.en_cola}
+                  </Text>
+                </View>
+                <View style={styles.providerRow}>
+                  <Text style={styles.statLabel}>· Aplazados</Text>
+                  <Text style={styles.providerWarn}>
+                    {providersStatus.odds_backfill.aplazados}
+                  </Text>
+                </View>
+                {Object.entries(
+                  providersStatus.odds_backfill.fuentes_en_pausa
+                ).map(([name, until]) => (
+                  <Text key={name} style={styles.statSub}>
+                    {"   "}
+                    {name} en quota →{" "}
+                    {until.includes("T")
+                      ? `${until.slice(8, 10)}/${until.slice(5, 7)}`
+                      : until}{" "}
+                    (vuelven solos)
+                  </Text>
+                ))}
+                <View style={styles.providerRow}>
+                  <Text style={styles.statLabel}>· Cuota registrada</Text>
+                  <Text style={styles.providerOk}>
+                    {providersStatus.odds_backfill.resueltos}
+                  </Text>
+                </View>
+                {(providersStatus.odds_backfill.agotados ?? 0) > 0 && (
+                  <View style={styles.providerRow}>
+                    <Text style={styles.statLabel}>· Nadie los tenía</Text>
+                    <Text style={styles.statValue}>
+                      {providersStatus.odds_backfill.agotados}
+                    </Text>
+                  </View>
+                )}
+                {(() => {
+                  const deudas = [
+                    ...Object.entries(
+                      providersStatus.odds_backfill?.por_fuente ?? {}
+                    ).filter(([, n]) => n > 0),
+                    ...((
+                      providersStatus.odds_backfill?.gemini_pendientes ?? 0
+                    ) > 0
+                      ? ([
+                          [
+                            "gemini-odds",
+                            providersStatus.odds_backfill
+                              ?.gemini_pendientes ?? 0,
+                          ],
+                        ] as [string, number][])
+                      : []),
+                  ];
+                  return deudas.length > 0 ? (
+                    <Text style={styles.statSub}>
+                      Providers que aún les deben el intento:{" "}
+                      {deudas.map(([n, c]) => `${n} ${c}`).join(" · ")}
+                    </Text>
+                  ) : null;
+                })()}
+                {providersStatus.odds_backfill.ultima_pasada?.at && (
+                  <Text style={styles.statSub}>
+                    Última pasada{" "}
+                    {providersStatus.odds_backfill.ultima_pasada.at
+                      .slice(5, 16)
+                      .replace("T", " ")}{" "}
+                    UTC ·{" "}
+                    {providersStatus.odds_backfill.ultima_pasada
+                      .revisados ?? 0}{" "}
+                    revisados ·{" "}
+                    {providersStatus.odds_backfill.ultima_pasada.filas ??
+                      0}{" "}
+                    cuotas registradas
+                  </Text>
+                )}
+              </View>
+            )}
           </View>
         )}
 
@@ -1367,6 +1479,18 @@ const styles = StyleSheet.create({
     color: "#ddd",
     fontSize: 12,
     fontWeight: "600",
+  },
+  funnel: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#333",
+  },
+  funnelHint: {
+    color: "#777",
+    fontSize: 10,
+    fontStyle: "italic",
+    marginBottom: 6,
   },
   acertoSection: {
     marginTop: 10,

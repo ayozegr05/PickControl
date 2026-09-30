@@ -77,7 +77,13 @@ from app.services.odds.oddspapi import (
     match_fixture as oddspapi_match,
 )
 from app.services.odds.snapshotter import _canonical_sport, _lookup_hint
-from app.services.results.base import is_missed, mark_missed
+from app.services.results.base import (
+    is_missed,
+    loop_summary,
+    mark_missed,
+    rate_limited_until,
+    record_loop_summary,
+)
 from app.services.results.gemini_research import GeminiResearchProvider
 
 # La histórico del pick solo existe si el evento ya pasó (con margen
@@ -95,6 +101,17 @@ _FEED_MAX_CALLS_PER_RUN = 40
 # comparte el free tier con la investigación de resultados.
 _GEMINI_ODDS_PROVIDER = "gemini-odds"
 _GEMINI_MAX_PICKS_PER_RUN = 8
+# Una fuente aparcada por quota más allá de este horizonte (~1 día,
+# p. ej. el reset mensual de una suscripción) no bloquea el drenaje
+# del backlog ni se le llama: no es un cooldown de ritmo, no hay nada
+# que reintentar hasta que renueve (caso oddspapi, cuota mensual).
+_LONG_QUOTA_HORIZON = timedelta(hours=24)
+
+
+def _source_quota_parked(source: _HistorySource) -> bool:
+    """True si la fuente está aparcada por quota más allá de ~24 h."""
+    until = rate_limited_until(source.name)
+    return until is not None and until > utc_now() + _LONG_QUOTA_HORIZON
 
 
 @dataclass
@@ -380,16 +397,24 @@ def _gemini_done_key() -> str:
 
 
 def _pick_pending(pick: ParsedPick, done: set[str], settings) -> bool:
-    """El pick aún tiene alguna fuente que no lo ha resuelto.
+    """El pick aún tiene alguna fuente VIVA que no lo ha resuelto.
 
     Las fuentes API marcan "nofixture"; Gemini marca "done" cuando ya
     lo intentó (cubierto por filas existentes, sin cuota en la web o
-    no buscable). Mientras alguna fuente le deba algo, sigue pendiente.
+    no buscable). Una fuente aparcada por quota larga (>~24 h, p. ej.
+    reset mensual) cuenta como saldada: no hay nada que reintentar
+    hasta que renueve, y las marcas caducan solas si vuelve.
     """
+    # Cobertura ya escrita: el evento tiene filas de una fuente de
+    # backfill — resuelto, nada más que hacer (ni el barrido gratis
+    # de Gemini hace falta).
+    if pick.odds_event_id in done:
+        return False
     sources_missed = all(
-        is_missed(f"{s.name}|nofixture|{pick.id}") for s in _sources(settings)
+        is_missed(f"{s.name}|nofixture|{pick.id}") or _source_quota_parked(s)
+        for s in _sources(settings)
     )
-    if pick.odds_event_id not in done and not sources_missed:
+    if not sources_missed:
         return True
     if settings.google_api_key and not is_missed(_gemini_done_key().format(pick.id)):
         return True
@@ -408,6 +433,64 @@ async def count_pending_backfill(session) -> int:
     return sum(1 for p in picks if _pick_pending(p, done, settings))
 
 
+async def backfill_breakdown(session) -> dict:
+    """Desglose del backlog de cuotas históricas para la pantalla
+    depurativa — el embudo en números:
+
+    - `resueltos`: el evento ya tiene cuotas registradas.
+    - `en_cola`: alguna fuente VIVA le debe el intento (o Gemini) —
+      trabajo real que irá bajando con cada pasada.
+    - `aplazados`: solo le deben fuentes aparcadas por quota larga —
+      no hay nada que hacer hasta que renueven (vuelven solos: las
+      marcas `missed` caducan).
+    - `agotados`: todas las fuentes lo intentaron y nadie lo tenía.
+    """
+    settings = get_settings()
+    sources = _sources(settings)
+    if not sources:
+        return {}
+    picks = await _load_picks(session, None)
+    done = await _done_event_ids(session)
+    parked = {s.name for s in sources if _source_quota_parked(s)}
+    resueltos = en_cola = aplazados = agotados = 0
+    por_fuente = {s.name: 0 for s in sources}
+    gemini_pendientes = 0
+    for pick in picks:
+        if pick.odds_event_id in done:
+            resueltos += 1
+            continue
+        owing = [s for s in sources if not is_missed(f"{s.name}|nofixture|{pick.id}")]
+        live_owing = [s for s in owing if s.name not in parked]
+        for s in live_owing:
+            por_fuente[s.name] += 1
+        gemini_owes = bool(settings.google_api_key) and not is_missed(
+            _gemini_done_key().format(pick.id)
+        )
+        if gemini_owes:
+            gemini_pendientes += 1
+        if live_owing or gemini_owes:
+            en_cola += 1
+        elif owing:
+            aplazados += 1
+        else:
+            agotados += 1
+    return {
+        "total": len(picks),
+        "resueltos": resueltos,
+        "en_cola": en_cola,
+        "aplazados": aplazados,
+        "agotados": agotados,
+        "por_fuente": por_fuente,
+        "gemini_pendientes": gemini_pendientes,
+        "fuentes_en_pausa": {
+            s.name: rate_limited_until(s.name).isoformat()  # type: ignore[union-attr]
+            for s in sources
+            if s.name in parked
+        },
+        "ultima_pasada": loop_summary("odds_backfill"),
+    }
+
+
 async def _run_source(
     source: _HistorySource,
     picks: list[ParsedPick],
@@ -420,6 +503,13 @@ async def _run_source(
 ) -> None:
     """Pasa una fuente sobre los picks pendientes de SU cobertura
     deportiva. Añade a `done` los eventos que deja escritos."""
+    if _source_quota_parked(source):
+        report.detalles.append(
+            f"  ! [{source.name}] quota agotada hasta "
+            f"{rate_limited_until(source.name)} — pasada saltada, "
+            "sus pendientes no bloquean el drenaje"
+        )
+        return
     nofixture_key = f"{source.name}|nofixture|{{}}"
     hist_key = f"{source.name}|hist|{{}}"
 
@@ -816,5 +906,19 @@ async def run(apply: bool, limit: int | None) -> BackfillReport:
 
         if apply:
             await session.commit()
+            # Resumen visible en la pantalla depurativa (qué hizo la
+            # última pasada sin abrir logs del contenedor).
+            record_loop_summary(
+                "odds_backfill",
+                {
+                    "revisados": report.picks,
+                    "filas": report.filas,
+                    "con_fixture": report.con_fixture,
+                    "sin_fixture": report.sin_fixture,
+                    "sin_historial": report.sin_historial,
+                    "sin_opcion": report.sin_opcion,
+                    "mapeados": report.mapeados,
+                },
+            )
 
     return report

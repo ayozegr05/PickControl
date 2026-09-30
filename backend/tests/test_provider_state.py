@@ -6,7 +6,7 @@ escriben el mismo archivo — un dump ciego les borraría sus marcas.
 """
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import app.services.results.base as results_base
 
@@ -36,9 +36,11 @@ def test_save_state_fusiona_escrituras_de_otro_proceso():
     assert final["missed"]["gemini-odds|postponed|42"] == "2099-01-01T00:00:00"
 
 
-def test_save_state_prefiere_marca_mayor_en_conflicto():
-    """En conflicto por la misma clave gana el valor mayor: conserva
-    el cooldown/miss más largo y el contador de llamadas más alto."""
+def test_save_state_preserva_claves_ajenas_y_memoria_gana_conflicto():
+    """Claves que solo existen en disco se conservan (loops de otro
+    proceso, contadores mayores); pero si la MISMA clave está en ambos
+    lados gana la memoria — la escritura más reciente. Un max() ciego
+    resucitaría bloqueos que este proceso acaba de acortar."""
     today = datetime.now(UTC).date().isoformat()
     state_file = results_base._STATE_FILE
 
@@ -49,8 +51,19 @@ def test_save_state_prefiere_marca_mayor_en_conflicto():
     disk["loops"]["verifier"] = "2099-12-31T00:00:00"
     state_file.write_text(json.dumps(disk), encoding="utf-8")
 
-    results_base.count_provider_call("espn")
+    # Este proceso acorta un bloqueo: la copia vieja en disco (años)
+    # no debe resucitar.
+    results_base.mark_cooldown("prov_x", datetime.now(UTC) + timedelta(hours=1))
+    disk2 = json.loads(state_file.read_text(encoding="utf-8"))
+    disk2["rate_limited"]["prov_x"] = "2099-12-31T00:00:00"
+    state_file.write_text(json.dumps(disk2), encoding="utf-8")
+
+    results_base.count_provider_call("oddsfeed")
 
     final = json.loads(state_file.read_text(encoding="utf-8"))
+    # El contador ajeno se preserva (max por día/provider).
     assert final["calls"][today]["espn"] == 99
+    assert final["calls"][today]["oddsfeed"] == 1
     assert final["loops"]["verifier"] == "2099-12-31T00:00:00"
+    # La versión corta en memoria gana a la larga de disco.
+    assert final["rate_limited"]["prov_x"] < "2099-12-31T00:00:00"

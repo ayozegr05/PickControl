@@ -16,6 +16,7 @@ from sqlmodel import select
 from app.core.dates import utc_now
 from app.models.odds_snapshot import OddsEvent, OddsSnapshot
 from app.models.parsed_pick import ParsedPick
+from app.models.telegram_raw_message import TelegramRawMessage
 from app.services.odds import historical_backfill as hb
 from app.services.results import base as results_base
 from app.services.results.gemini_research import (
@@ -325,3 +326,134 @@ class TestPickPendingGemini:
         settings = SimpleNamespace(google_api_key="k", rapidapi_tennis_key=None)
         results_base.mark_missed("gemini-odds|done|7")
         assert not hb._pick_pending(pick, set(), settings)
+
+
+class TestQuotaLargaNoBloquea:
+    """Opción B: una fuente aparcada por quota larga (reset mensual de
+    la suscripción) no bloquea el drenaje ni se le llama — no es un
+    miss ("no lo tenía"), es "no hay nada que reintentar hasta que
+    renueve". Las marcas caducan solas si la fuente vuelve."""
+
+    def _settings(self, google: str | None = "k"):
+        return SimpleNamespace(
+            google_api_key=google,
+            rapidapi_tennis_key="k",
+            rapidapi_oddspapi_host="h",
+            rapidapi_oddsfeed_host="h",
+        )
+
+    def _pick(self, id_: int = 7) -> ParsedPick:
+        return ParsedPick(
+            id=id_,
+            es_apuesta=True,
+            deporte="fútbol",
+            fecha_evento=utc_now() - timedelta(days=1),
+        )
+
+    def test_quota_larga_no_bloquea_pending(self):
+        """oddsfeed ya lo intentó (nofixture) y oddspapi está aparcado
+        20 días por quota mensual: el pick sale del pendiente."""
+        pick = self._pick()
+        results_base.mark_missed("oddsfeed|nofixture|7")
+        results_base.mark_cooldown("oddspapi", utc_now() + timedelta(days=20))
+        assert not hb._pick_pending(pick, set(), self._settings(google=None))
+
+    def test_sin_quota_sigue_pendiente(self):
+        """Con oddspapi viva, su deuda sí bloquea aunque oddsfeed ya
+        haya marcado nofixture."""
+        pick = self._pick()
+        results_base.mark_missed("oddsfeed|nofixture|7")
+        assert hb._pick_pending(pick, set(), self._settings(google=None))
+
+    def test_cooldown_corto_si_bloquea(self):
+        """Un cooldown de ritmo (minutos) NO es quota: la fuente sigue
+        contando como viva y bloquea el drenaje."""
+        pick = self._pick()
+        results_base.mark_missed("oddsfeed|nofixture|7")
+        results_base.mark_cooldown("oddspapi", utc_now() + timedelta(minutes=20))
+        assert hb._pick_pending(pick, set(), self._settings(google=None))
+
+    async def test_run_source_salta_fuente_aparcada(self, session):
+        """Una fuente en quota larga ni se llama: cero fetch muertos."""
+        results_base.mark_cooldown("oddspapi", utc_now() + timedelta(days=20))
+        source = hb._OddsPapiSource(api_key="k", api_host="h")
+        report = hb.BackfillReport()
+        await hb._run_source(
+            source, [self._pick()], set(), set(), session, None, True, report
+        )
+        assert any("quota agotada" in d for d in report.detalles)
+
+
+@pytest.mark.asyncio
+class TestBackfillBreakdown:
+    """El desglose del embudo clasifica cada pick del backlog."""
+
+    def _settings(self):
+        return SimpleNamespace(
+            google_api_key="k",
+            rapidapi_tennis_key="k",
+            rapidapi_oddspapi_host="h",
+            rapidapi_oddsfeed_host="h",
+        )
+
+    async def _pick(self, session, message_id: int) -> ParsedPick:
+        raw = TelegramRawMessage(
+            channel_id=1,
+            message_id=message_id,
+            channel_name="Test",
+            text="pick",
+            processed=True,
+        )
+        session.add(raw)
+        await session.flush()
+        pick = ParsedPick(
+            raw_message_id=raw.id,
+            es_apuesta=True,
+            deporte="fútbol",
+            fecha_evento=utc_now() - timedelta(days=2),
+        )
+        session.add(pick)
+        await session.flush()
+        return pick
+
+    async def test_clasifica_en_cola_aplazado_agotado_resuelto(
+        self, session, monkeypatch
+    ):
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        results_base.mark_cooldown("oddspapi", utc_now() + timedelta(days=20))
+
+        await self._pick(session, 1)  # nadie lo intentó aún -> en cola
+        aplazado = await self._pick(session, 2)  # solo le debe oddspapi
+        results_base.mark_missed(f"oddsfeed|nofixture|{aplazado.id}")
+        results_base.mark_missed(f"gemini-odds|done|{aplazado.id}")
+        agotado = await self._pick(session, 3)  # todos intentaron
+        for src in ("oddsfeed", "oddspapi"):
+            results_base.mark_missed(f"{src}|nofixture|{agotado.id}")
+        results_base.mark_missed(f"gemini-odds|done|{agotado.id}")
+        resuelto = await self._pick(session, 4)  # ya tiene cuotas
+        resuelto.odds_event_id = "oddsfeed:99"
+        session.add(
+            OddsSnapshot(
+                provider="oddsfeed",
+                event_ext_id="oddsfeed:99",
+                market_name="Match goals",
+                choice_name="Over",
+                choice_group="2.5",
+                cuota=1.9,
+                captured_at=utc_now(),
+            )
+        )
+        await session.commit()
+
+        bd = await hb.backfill_breakdown(session)
+        assert bd["total"] == 4
+        assert bd["resueltos"] == 1
+        assert bd["en_cola"] == 1
+        assert bd["aplazados"] == 1
+        assert bd["agotados"] == 1
+        # En cola solo le debe oddsfeed (oddspapi está aparcada).
+        assert bd["por_fuente"] == {"oddspapi": 0, "oddsfeed": 1}
+        assert bd["gemini_pendientes"] == 1
+        assert "oddspapi" in bd["fuentes_en_pausa"]
+        # El contador del job diario solo mide trabajo real (en_cola).
+        assert await hb.count_pending_backfill(session) == 1
