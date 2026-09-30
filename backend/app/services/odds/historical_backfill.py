@@ -57,6 +57,7 @@ from app.models.telegram_raw_message import TelegramRawMessage  # noqa: F401
 from app.models.user import User  # noqa: F401  (FKs de TelegramRawMessage)
 from app.services.odds import oddsfeed, oddspapi
 from app.services.odds.compare import map_pick_choices
+from app.services.odds.event_rescue import looks_like_match_hint, rescue_evento
 from app.services.odds.oddsfeed import (
     FeedFixture,
     OddsFeedClient,
@@ -102,8 +103,10 @@ _FEED_MAX_CALLS_PER_RUN = 40
 _GEMINI_ODDS_PROVIDER = "gemini-odds"
 # Presupuesto por pasada en EVENTOS (no picks): varias patas del mismo
 # partido comparten una sola búsqueda web — el grupo entero se resuelve
-# con una extracción por página.
-_GEMINI_MAX_EVENTS_PER_RUN = 8
+# con una extracción por página. Es un techo de seguridad: el cooldown
+# del free tier corta antes la pasada, así que el ritmo real se
+# auto-regula solo.
+_GEMINI_MAX_EVENTS_PER_RUN = 32
 # Una fuente aparcada por quota más allá de este horizonte (~1 día,
 # p. ej. el reset mensual de una suscripción) no bloquea el drenaje
 # del backlog ni se le llama: no es un cooldown de ritmo, no hay nada
@@ -780,7 +783,34 @@ async def _run_gemini_pass(
         sport = _canonical_sport(pick.deporte)
         hint = (_lookup_hint(pick, sport) or "") if sport else ""
         desc = _market_desc(pick)
-        if sport not in GeminiResearchProvider.SUPPORTED_SPORTS or not hint or not desc:
+        if sport not in GeminiResearchProvider.SUPPORTED_SPORTS or not desc:
+            if apply:
+                mark_missed(done_key.format(pick.id))
+            continue
+        # En tenis el hint es el jugador (vale cualquier nombre); en
+        # los demás deportes hace falta un cruce "A vs B" — si el
+        # `evento` guardó la apuesta o basura OCR, la búsqueda es
+        # imposible y se intenta rescatar el partido del raw
+        # (texto -> mini-LLM -> imagen del slip) antes de rendirlo.
+        usable = bool(hint) and (sport == "tenis" or looks_like_match_hint(hint))
+        if not usable and sport != "tenis":
+            rescued = await rescue_evento(session, pick, settings)
+            if rescued:
+                # In-place: la mutación solo se persiste si `run()`
+                # hace commit al final (modo apply).
+                pick.evento = rescued
+                session.add(pick)
+                hint = rescued
+                usable = True
+                report.detalles.append(
+                    f"  ~ pick {pick.id}: evento rescatado del raw -> {rescued}"
+                )
+            else:
+                report.detalles.append(
+                    f"  - pick {pick.id}: evento no rescatable "
+                    f"(ni texto ni OCR ni imagen) [{_GEMINI_ODDS_PROVIDER}]"
+                )
+        if not usable:
             if apply:
                 mark_missed(done_key.format(pick.id))
             continue

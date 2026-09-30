@@ -362,6 +362,53 @@ class TestGeminiBackfillPass:
         assert results_base.is_missed("gemini-odds|done|20")
         assert results_base.is_missed("gemini-odds|done|21")
 
+    async def test_evento_feo_se_rescata_del_raw(self, session, monkeypatch):
+        """`evento` con la apuesta en vez del cruce: el rescate lo
+        repara in situ y el pick entra en la búsqueda con el evento
+        bueno."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        monkeypatch.setattr(
+            hb, "rescue_evento", AsyncMock(return_value="Parma vs Inter de Milán")
+        )
+        multi = AsyncMock(
+            return_value={
+                0: ClosingOdds(
+                    market_name="Match goals",
+                    choice_name="Over",
+                    choice_group="2.5",
+                    cuota=1.85,
+                    casa="bet365",
+                    source_url="https://oddspedia.com/x",
+                )
+            }
+        )
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        pick = self._pick(id=30, evento="9,5 córners en total")
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [pick], set(), set(), session, apply=True, report=report
+        )
+
+        assert pick.evento == "Parma vs Inter de Milán"  # reparado in situ
+        multi.assert_awaited_once()
+        assert report.mapeados == 1
+
+    async def test_evento_no_rescatable_marca_done(self, session, monkeypatch):
+        """Ni texto ni OCR ni imagen tienen el partido: se marca done
+        sin gastar ninguna búsqueda."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        monkeypatch.setattr(hb, "rescue_evento", AsyncMock(return_value=None))
+        multi = AsyncMock(return_value={})
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        pick = self._pick(id=31, evento="premiumpay.net/register")
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [pick], set(), set(), session, apply=True, report=report
+        )
+
+        multi.assert_not_awaited()
+        assert results_base.is_missed("gemini-odds|done|31")
+
 
 class TestPickPendingGemini:
     """La marca `gemini-odds|done` entra en el conteo de pendientes."""
