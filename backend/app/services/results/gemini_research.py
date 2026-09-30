@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Optional
 from urllib.parse import quote_plus, urlparse
@@ -137,6 +138,10 @@ _ALLOWED_DOMAINS = (
     # Nicho: ligas menores/reservas — oddspedia trae tabla de stats
     # ("Corners 3 3"), betsapi eventos ordinales, bsportsfan resultados.
     "oddspedia.com",
+    # Comparadores de cuotas: páginas de partido con marcador, stats y
+    # tabla de cuotas de cierre por casa (bet365, Stake, DraftKings).
+    # El fetcher de Google las lee aunque a nosotros nos den 403.
+    "oddschecker.com",
     "betsapi.com",
     "bsportsfan.com",
     "ceroacero.es",
@@ -334,6 +339,66 @@ Reglas:
   dobles, las dos parejas ("A / B vs C / D"). Usa los nombres tal como
   aparecen en la página.
 - null si la página no muestra ese partido — nunca inventes el cruce."""
+
+# Vocabulario canónico de `odds.compare` (map_pick_choices): el modelo
+# SOLO puede devolver estos nombres — en el backfill la propuesta se
+# revalida con map_pick_choices, así que una opción que no casa con el
+# pick se descarta sola.
+_ODDS_MARKET_NAMES = (
+    "Full time",
+    "Match goals",
+    "Total games won",
+    "Total sets",
+    "Asian handicap",
+    "Game handicap",
+    "Set handicap",
+    "Both teams to score",
+    "Corners 2-Way",
+    "Cards in match",
+    "Double chance",
+    "Draw no bet",
+    "First set winner",
+)
+
+_ODDS_PROMPT = """Texto extraído de una página web de apuestas
+deportivas (comparador de cuotas o casa):
+
+{text}
+
+Busco la cuota de cierre pre-partido de esta apuesta concreta:
+- Partido: {hint} ({sport}, {date})
+- Apuesta del tipster: {market_desc}
+
+Responde SOLO con JSON válido, sin markdown:
+{{"market_name": "<uno exacto de: {markets}>",
+ "choice_name": "<1|X|2|Over|Under|Yes|No o '(<línea>) <equipo>'>",
+ "choice_group": "<línea numérica como 9.5, o null>",
+ "cuota_decimal": <número como 2.05>,
+ "cuota_texto": "<la cuota EXACTAMENTE como aparece en el texto
+   (2.05, 2,05 o 21/20)>",
+ "casa": "<casa de apuestas o cadena vacía>"}}
+
+Reglas:
+- La cuota tiene que aparecer LITERALMENTE en el texto — nunca la
+  inventes ni la calcules de memoria.
+- Prefiere la cuota de bet365 si hay varias casas; si no, la de la
+  primera casa que muestre esa apuesta.
+- "1"/"X"/"2" = gana local/empate/visitante; "Over"/"Under" para
+  totales; "Yes"/"No" para ambos marcan; "(<línea>) <equipo>" para
+  hándicaps.
+- Si la página no muestra esa apuesta: {{"market_name": null}}."""
+
+
+@dataclass
+class ClosingOdds:
+    """Cuota de cierre de una apuesta, validada contra la página."""
+
+    market_name: str
+    choice_name: str
+    choice_group: Optional[str]
+    cuota: float
+    casa: str
+    source_url: str
 
 
 def _domains_of(urls: list[str]) -> set[str]:
@@ -958,3 +1023,119 @@ class GeminiResearchProvider:
                 )
                 return stats
         return None
+
+    async def find_closing_odds(
+        self, date: datetime, team_hint: str, market_desc: str
+    ) -> Optional[ClosingOdds]:
+        """Cuota de cierre de una apuesta leyendo comparadores web.
+
+        Último recurso del backfill de cuotas: para mercados que las
+        APIs deterministas no cubren (córners, tarjetas, props), el
+        modelo busca la página del partido en oddspedia/oddsportal y
+        extrae la cuota pre-partido. Doble anti-alucinación:
+
+        1. `cuota_texto` tiene que aparecer literalmente en el HTML
+           descargado y coincidir numéricamente con `cuota_decimal`
+           (fracciones UK "a/b" se traducen y comparan).
+        2. La tripleta (market, choice, group) devuelta pertenece al
+           vocabulario canónico y quien llama la revalida con
+           `map_pick_choices` — el modelo propone, lo determinista
+           decide.
+        """
+        if self._in_cooldown():
+            return None
+        hint = (team_hint or "").strip()
+        desc = (market_desc or "").strip()
+        if not hint or not desc:
+            return None
+        # Queries dirigidas a los comparadores que publican la tabla
+        # de cuotas pre-partido por casa — una crónica sin tabla no
+        # resuelve nada.
+        priority = ["oddspedia cuotas", "oddsportal odds", "betexplorer odds"]
+        urls = await self._search_urls(date, hint, priority_terms=priority)
+        for url in urls:
+            text = await self._fetch_page_text(url)
+            if not text:
+                continue
+            payload = await self._ask(
+                _ODDS_PROMPT.format(
+                    text=text[:_MAX_PAGE_CHARS],
+                    sport=self._sport_es(),
+                    hint=hint,
+                    date=date.strftime("%d de %B de %Y"),
+                    market_desc=desc,
+                    markets="|".join(_ODDS_MARKET_NAMES),
+                )
+            )
+            if payload is None:
+                continue
+            data = _extract_json(self._payload_text(payload))
+            if not data:
+                continue
+            found = self._closing_from_text(text, data, url)
+            if found is not None:
+                logger.info(
+                    "[GEMINI] cuota cierre '%s' %s/%s = %s (%s) en %s",
+                    hint,
+                    found.market_name,
+                    found.choice_name,
+                    found.cuota,
+                    found.casa or "?",
+                    url,
+                )
+                return found
+        return None
+
+    def _closing_from_text(
+        self, text: str, data: dict[str, Any], url: str
+    ) -> Optional[ClosingOdds]:
+        """Valida la respuesta del modelo contra el texto descargado."""
+        market = str(data.get("market_name") or "")
+        if market not in _ODDS_MARKET_NAMES:
+            return None
+        choice = str(data.get("choice_name") or "").strip()
+        if not choice:
+            return None
+        try:
+            cuota = float(data["cuota_decimal"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not 1.01 <= cuota <= 1000:
+            return None
+        group = data.get("choice_group")
+        group = str(group).strip() if group not in (None, "") else None
+        literal = str(data.get("cuota_texto") or "").strip()
+        if not self._odds_literal_ok(text, literal, cuota):
+            return None
+        return ClosingOdds(
+            market_name=market,
+            choice_name=choice,
+            choice_group=group,
+            cuota=cuota,
+            casa=str(data.get("casa") or "").strip(),
+            source_url=url,
+        )
+
+    @staticmethod
+    def _odds_literal_ok(text: str, literal: str, cuota: float) -> bool:
+        """La cuota existe en la página: el literal copiado aparece en
+        el texto y coincide numéricamente con el decimal devuelto
+        (fracción UK "a/b" -> a/b + 1)."""
+        variants = {f"{cuota:.2f}", f"{cuota:.2f}".replace(".", ",")}
+        if literal:
+            variants.add(literal)
+        found: Optional[str] = None
+        for v in variants:
+            if v and re.search(rf"(?<![\d.,/]){re.escape(v)}(?![\d.,/])", text):
+                found = v
+                break
+        if found is None:
+            return False
+        frac = re.fullmatch(r"(\d+)\s*/\s*(\d+)", found)
+        if frac:
+            num, den = int(frac.group(1)), int(frac.group(2))
+            return den > 0 and abs(num / den + 1 - cuota) <= 0.02
+        try:
+            return abs(float(found.replace(",", ".")) - cuota) <= 0.02
+        except ValueError:
+            return False
