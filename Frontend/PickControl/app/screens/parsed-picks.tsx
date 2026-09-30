@@ -88,6 +88,8 @@ export default function ParsedPicksScreen() {
   const [providersStatus, setProvidersStatus] =
     useState<ProvidersStatus | null>(null);
   const [picksStatus, setPicksStatus] = useState<PicksStatus | null>(null);
+  const [dupPicks, setDupPicks] = useState<ParsedPick[]>([]);
+  const [dupsOpen, setDupsOpen] = useState(false);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { isAdmin } = useAuth();
@@ -149,6 +151,10 @@ export default function ParsedPicksScreen() {
         getPicksStatus()
           .then(setPicksStatus)
           .catch(() => setPicksStatus(null));
+        // Reposteos anulados por dedup: van a su card, fuera del listado.
+        getParsedPicks({ soloDuplicados: true, limit: 200 })
+          .then(setDupPicks)
+          .catch(() => setDupPicks([]));
       }
       setError(null);
     } catch (err: any) {
@@ -301,6 +307,7 @@ export default function ParsedPicksScreen() {
       "sofascore_direct",
       "oddspapi",
       "oddsfeed",
+      "gemini-odds",
     ]);
     const names = new Set<string>([
       ...Object.keys(providersStatus.odds_snapshots_by_provider ?? {}),
@@ -893,6 +900,38 @@ export default function ParsedPicksScreen() {
                   )
                 )}
               </>
+            )}
+          </View>
+        )}
+
+        {isAdmin && dupPicks.length > 0 && (
+          <View style={styles.systemCard}>
+            <TouchableOpacity onPress={() => setDupsOpen((v) => !v)}>
+              <Text style={styles.systemTitle}>
+                Duplicadas detectadas · {dupPicks.length} {dupsOpen ? "▲" : "▼"}
+              </Text>
+            </TouchableOpacity>
+            {dupsOpen ? (
+              dupPicks.map((p) => (
+                <View key={p.id} style={styles.providerItem}>
+                  <Text style={styles.providerName} numberOfLines={2}>
+                    #{p.id} {p.seleccion || p.apuesta || "(sin selección)"}
+                  </Text>
+                  <Text style={styles.providerMeta}>
+                    {cleanChannel(p.informante)} ·{" "}
+                    {formatDate(p.fecha_evento ?? p.created_at)}
+                    {p.cuota != null ? ` · cuota ${p.cuota}` : ""}
+                    {p.es_combinada
+                      ? ` · combinada (${p.patas?.length ?? 0} patas)`
+                      : ""}
+                  </Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.statSub}>
+                Reposteos del mismo pick/boleto anulados por dedup: fuera
+                de stats y del listado. Pulsa para verlas.
+              </Text>
             )}
           </View>
         )}

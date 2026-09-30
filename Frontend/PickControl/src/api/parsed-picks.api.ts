@@ -56,6 +56,12 @@ export type ParsedPicksQuery = {
   /** Vista de revisión manual: solo picks sin liquidar
    * (acierto NULL, no anulados). Implica soloApuestas. */
   soloPendientes?: boolean;
+  /** Solo filas anulada·duplicado (reposteos detectados por dedup):
+   * alimenta la card "Duplicadas detectadas" de la vista depurativa. */
+  soloDuplicados?: boolean;
+  /** Incluye las anulada·duplicado mezcladas con el resto (por defecto
+   * el backend las oculta: son ruido de ingesta, no resultados). */
+  incluirDuplicados?: boolean;
   offset?: number;
   limit?: number;
 };
@@ -75,6 +81,12 @@ export async function getParsedPicks(
   }
   if (query.soloPendientes !== undefined) {
     params.push(`solo_pendientes=${query.soloPendientes}`);
+  }
+  if (query.soloDuplicados !== undefined) {
+    params.push(`solo_duplicados=${query.soloDuplicados}`);
+  }
+  if (query.incluirDuplicados !== undefined) {
+    params.push(`incluir_duplicados=${query.incluirDuplicados}`);
   }
   if (query.offset !== undefined) {
     params.push(`offset=${query.offset}`);

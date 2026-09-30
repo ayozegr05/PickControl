@@ -194,3 +194,33 @@ class TestFindMatchStats:
             datetime(2026, 9, 15, 22, 0), "Elche CF - Real Madrid"
         )
         assert stats is None
+
+
+class TestListTtl:
+    """El listado `/live/index?datum=` de un día ya jugado es estático:
+    caché de 24 h en vez de los 5 min de hoy/mañana."""
+
+    def test_dia_pasado_ttl_largo(self):
+        url = "https://www.transfermarkt.es/live/index?datum=2020-01-01"
+        assert tm._list_ttl_for(url) == tm._LIST_TTL_PAST
+
+    def test_hoy_ttl_corto(self):
+        url = (
+            "https://www.transfermarkt.es/live/index"
+            f"?datum={datetime.now():%Y-%m-%d}"
+        )
+        assert tm._list_ttl_for(url) == tm._LIST_TTL
+
+    def test_url_sin_datum_ttl_corto(self):
+        url = "https://www.transfermarkt.es/statistik/index/spielbericht/4909564"
+        assert tm._list_ttl_for(url) == tm._LIST_TTL
+
+    async def test_listado_pasado_sobrevive_al_ttl_corto(self):
+        # Entrada cacheada hace 10 min (> _LIST_TTL): un día pasado
+        # sigue sirviéndose de caché sin re-descargar.
+        import time
+
+        url = "https://www.transfermarkt.es/live/index?datum=2020-01-01"
+        tm._list_cache[url] = (time.monotonic() - 600, LIVE_PAGE)
+        provider = TransfermarktProvider()
+        assert await provider._fetch(url) == LIVE_PAGE

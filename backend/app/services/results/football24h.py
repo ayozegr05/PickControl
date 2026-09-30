@@ -133,6 +133,15 @@ _STAT_NAME_MAP = {
 _LIST_TTL = 300  # 5 min
 _list_cache: dict[str, tuple[float, str]] = {}
 
+# Un probe por slug que falló probando todas las ligas cuesta hasta
+# ~36 peticiones (candidatos × ±1 día × ligas). El miss-cache externo
+# de `_finished_page` recuerda el fallo, pero su TTL provisional (6 h)
+# re-lanza el probe completo aunque la web ya respondió que el fixture
+# no existe. Para fechas recientes el probe fallido se recuerda un día
+# (si el slug existe la página aparece con el partido, no horas
+# después); para fechas definitivas, el TTL normal de misses.
+_PROBE_MISS_TTL = timedelta(hours=24)
+
 
 def _translate_clubs(text: str) -> str:
     """Nombre actual -> nombre histórico de la web (palabra completa)."""
@@ -236,8 +245,19 @@ class Football24hProvider:
         ignorando el prefijo de liga. Los soft-404 (la web devuelve
         200 con otra página) se rechazan validando los nombres del
         marcador contra el hint."""
+        provisional = miss_is_provisional(date)
+        probe_key = (
+            f"{self.NAME}|probe|{date.strftime('%Y-%m-%d')}"
+            f"|{'+'.join(sorted(candidates))}"
+        )
+        if provisional:
+            probe_key += "|prov"
+        if is_missed(probe_key, _PROBE_MISS_TTL if provisional else None):
+            return None
+
         # El hint puede venir traducido por alias: probar todas las
         # variantes como origen del slug.
+        site_answered = False
         for hint in candidates:
             parts = split_team_hint(hint)
             if len(parts) < 2:
@@ -253,6 +273,7 @@ class Football24hProvider:
                     html = await self._fetch(f"{league}{slug}")
                     if html is None:
                         continue
+                    site_answered = True
                     names = _TEAM_LABEL.findall(html)
                     if len(names) < 2:
                         continue
@@ -266,6 +287,11 @@ class Football24hProvider:
                             names[0].strip(),
                             names[1].strip(),
                         )
+        if site_answered:
+            # La web respondió (no es una caída de red): el fixture
+            # simplemente no está — recuérdalo para no repetir las
+            # ~36 peticiones en la próxima pasada.
+            mark_missed(probe_key)
         return None
 
     def _parse_match(self, html: str) -> Optional[MatchResult]:

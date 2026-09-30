@@ -212,3 +212,44 @@ class TestFindMatchStats:
         )
         assert match is not None
         assert match.home_team == "HB Køge"
+
+
+class TestProbeMissCache:
+    """`_probe_slug` prueba hasta ~36 URLs por fixture ausente
+    (candidatos × ±1 día × ligas): si la web respondió pero el partido
+    no está, el fallo se recuerda (`_PROBE_MISS_TTL` para fechas
+    recientes, el definitivo para antiguas) en vez de repetir el
+    barrido en cada pasada del verifier."""
+
+    def _counting_fetch(self, provider: Football24hProvider, html):
+        calls: list[str] = []
+
+        async def fake_fetch(path: str):
+            calls.append(path)
+            return html
+
+        provider._fetch = fake_fetch  # type: ignore[method-assign]
+        return calls
+
+    async def test_probe_fallido_no_se_repite(self):
+        provider = Football24hProvider()
+        # La web responde pero sin los equipos del fixture (soft-404):
+        # miss real -> se cachea.
+        calls = self._counting_fetch(provider, "<html>otra página</html>")
+        date = datetime(2020, 1, 1, 10, 0)  # fecha definitiva
+        assert await provider._probe_slug(date, {"sevilla - betis"}) is None
+        first_pass = len(calls)
+        assert first_pass > 1  # sí probó las variantes de slug
+        assert await provider._probe_slug(date, {"sevilla - betis"}) is None
+        assert len(calls) == first_pass  # sin una sola petición extra
+
+    async def test_probe_sin_respuesta_no_se_marca(self):
+        # La web no respondió nada (caída/red): no es un miss — el
+        # siguiente intento debe volver a probar de verdad.
+        provider = Football24hProvider()
+        calls = self._counting_fetch(provider, None)
+        date = datetime(2020, 1, 1, 10, 0)
+        await provider._probe_slug(date, {"sevilla - betis"})
+        first_pass = len(calls)
+        await provider._probe_slug(date, {"sevilla - betis"})
+        assert len(calls) == 2 * first_pass

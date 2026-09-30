@@ -167,7 +167,14 @@ async def obtener_stats_informante(
             patas=patas_por_padre.get(parsed.id),
         )
         for parsed in parsed_picks
-        if parsed.es_apuesta and parsed.combinada_id is None
+        # Fuera del listado: patas (anidadas en su padre), descartes de
+        # extracción y duplicados de ingesta (anulada·duplicado = repost
+        # del mismo boleto/pick — ruido, no un resultado; siguen en BD
+        # para auditoría y en la vista depurativa). Las anuladas reales
+        # (aplazado/retirada/push) sí aparecen, etiquetadas.
+        if parsed.es_apuesta
+        and parsed.combinada_id is None
+        and parsed.motivo_anulada != "duplicado"
     ]
 
     return InformanteStats(

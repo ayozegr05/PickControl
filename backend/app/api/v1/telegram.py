@@ -59,6 +59,8 @@ async def listar_picks_extraidos(
     per_channel: int | None = Query(default=None, ge=1, le=50),
     solo_apuestas: bool = Query(default=False),
     solo_pendientes: bool = Query(default=False),
+    solo_duplicados: bool = Query(default=False),
+    incluir_duplicados: bool = Query(default=False),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
@@ -83,10 +85,23 @@ async def listar_picks_extraidos(
     ``acierto IS NULL AND anulada=False``: la vista de revisión manual
     solo muestra lo que queda por liquidar. Una combinada padre
     pendiente aparece aunque tenga patas ya resueltas (están anidadas).
+
+    Las ``anulada·duplicado`` (reposteos detectados por dedup de
+    ingesta) son ruido, no resultados: se excluyen del listado por
+    defecto. ``solo_duplicados`` devuelve solo esas filas — alimenta la
+    card "Duplicadas detectadas" de la vista depurativa — e
+    ``incluir_duplicados`` las devuelve mezcladas con el resto.
     """
     # Las patas de combinadas nunca salen como filas sueltas: solo
     # anidadas bajo su padre (`patas`), como componentes que son.
     filters = [ParsedPick.combinada_id.is_(None)]
+    if solo_duplicados:
+        filters.append(ParsedPick.motivo_anulada == "duplicado")
+    elif not incluir_duplicados:
+        filters.append(
+            (ParsedPick.motivo_anulada == None)  # noqa: E711
+            | (ParsedPick.motivo_anulada != "duplicado")
+        )
     if solo_apuestas or solo_pendientes:
         filters.append(ParsedPick.es_apuesta.is_(True))
     if solo_pendientes:

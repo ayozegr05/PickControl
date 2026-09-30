@@ -119,10 +119,30 @@ _STAT_NAME_MAP = {
 _SHOTS_OFF_LABELS = {"disparos fuera", "tiros fuera", "schüsse vorbei"}
 
 # Caché en memoria de los listados por fecha (una pasada del verifier
-# consulta varios picks del mismo día). TTL corto — la página se
-# actualiza en vivo.
+# consulta varios picks del mismo día). TTL corto para hoy/mañana — la
+# página se actualiza en vivo. Para fechas pasadas el listado es
+# estático (los resultados no se mueven), así que se conserva un día
+# entero: antes cada pasada del verifier re-descargaba `/live/index`
+# de días antiguos tras los 5 min.
 _LIST_TTL = 300  # 5 min
+_LIST_TTL_PAST = 86400  # 24 h
 _list_cache: dict[str, tuple[float, str]] = {}
+
+_DATUM = re.compile(r"datum=(\d{4}-\d{2}-\d{2})")
+
+
+def _list_ttl_for(url: str) -> float:
+    """TTL del caché para `url`: 24 h si el listado es de un día ya
+    pasado (estático), el corto normal en caso contrario."""
+    m = _DATUM.search(url)
+    if m:
+        try:
+            day = datetime.strptime(m.group(1), "%Y-%m-%d").date()
+        except ValueError:
+            return _LIST_TTL
+        if day < datetime.now().date():
+            return _LIST_TTL_PAST
+    return _LIST_TTL
 
 
 def _team_name(cell_html: str) -> str:
@@ -148,7 +168,7 @@ class TransfermarktProvider:
         """HTML de la URL, con caché TTL para los listados por fecha."""
         now = time.monotonic()
         cached = _list_cache.get(url)
-        if cached and now - cached[0] < _LIST_TTL:
+        if cached and now - cached[0] < _list_ttl_for(url):
             return cached[1]
         try:
             count_provider_call(self.NAME)

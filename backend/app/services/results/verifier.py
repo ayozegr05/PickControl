@@ -57,6 +57,8 @@ from app.services.results.base import (
     MatchStats,
     ResultsProvider,
     fold_name,
+    is_missed,
+    mark_missed,
     match_reversed,
     record_void_recheck,
 )
@@ -156,6 +158,14 @@ _RECENTLY_CREATED_GRACE = timedelta(hours=6)
 # tener mercados ya decididos que la casa paga igualmente — esos
 # siguen pendientes.
 _POSTPONED_VOID_AFTER = timedelta(hours=72)
+
+# Miss-cache de la investigación web de aplazados (último recurso en
+# `verify_pick`): cada consulta a Gemini cuesta una búsqueda real de
+# cuota muy limitada — un pick viejo que ya salió "sin constar
+# aplazado" no se re-pregunta hasta pasado este TTL. Antes se
+# reintentaba en cada pasada del verifier (~3 h): 119 llamadas/día
+# con 0 hits.
+_RESEARCH_MISS_TTL = timedelta(hours=48)
 
 
 def _should_attempt_verification(pick: ParsedPick, now: datetime) -> bool:
@@ -1991,20 +2001,38 @@ async def verify_pick(
             # puede encontrarlo fuera de las APIs estructuradas; si la
             # carrera normal hubiera resuelto, esta llamada no existiría.
             sport = _normalize_sport(pick.deporte)
+            state_hint = _postponed_state_hint(pick, sport)
             research = [
                 p
                 for p in _providers_for_sport(pick.deporte, providers)
                 if _is_research_provider(p)
             ]
-            if research:
-                state = await _find_postponed_across_providers(
-                    pick.fecha_evento,
-                    _postponed_state_hint(pick, sport),
-                    research,
-                    pick.id,
-                )
-                if state is not None:
-                    acierto, anulada = _void("aplazado")
+            if research and _lookup_hint_usable(state_hint, pick.id):
+                # Miss-cache por pick y provider: si esta misma consulta
+                # ya salió vacía hace < _RESEARCH_MISS_TTL, no se gasta
+                # otra búsqueda real (ver constante). Un pick sin id no
+                # puede tener clave estable — se consulta sin cachear.
+                fresh = [
+                    p
+                    for p in research
+                    if pick.id is None
+                    or not is_missed(
+                        f"{_provider_label(p)}|postponed|{pick.id}",
+                        _RESEARCH_MISS_TTL,
+                    )
+                ]
+                if fresh:
+                    state = await _find_postponed_across_providers(
+                        pick.fecha_evento,
+                        state_hint,
+                        fresh,
+                        pick.id,
+                    )
+                    if state is not None:
+                        acierto, anulada = _void("aplazado")
+                    elif pick.id is not None:
+                        for p in fresh:
+                            mark_missed(f"{_provider_label(p)}|postponed|{pick.id}")
         if acierto is not None or anulada:
             pick.verificado_provider = _LAST_PROVIDER_HIT.get()
             pick.motivo_anulada = _LAST_VOID_REASON.get() if anulada else None
@@ -2418,6 +2446,16 @@ async def _verify_pick_result(
     return _similar(predicted_team, winner) >= _MIN_TEAM_SIMILARITY, False
 
 
+# Motivos de anulada que una combinada NO puede re-derivar de sus
+# patas: vienen de decisiones externas a las APIs de resultados
+# ("duplicado" por dedup de ingesta/repost, "expired" por barrido de
+# residuos). Se respetan como `verificado_por='manual'`: el estado
+# queda bloqueado hasta una corrección manual (que limpia el motivo).
+# Un padre anulado "por patas" tiene `motivo_anulada` NULL y sí se
+# re-liquida si alguna pata cambia.
+_COMBINADA_LOCKED_MOTIVOS = ("duplicado", "expired")
+
+
 async def settle_combinada(session: AsyncSession, parent: ParsedPick) -> bool:
     """Liquida una combinada a partir del estado de sus patas.
 
@@ -2437,11 +2475,18 @@ async def settle_combinada(session: AsyncSession, parent: ParsedPick) -> bool:
 
     Si las patas ya no permiten resolver (p. ej. corrección manual que
     reabre una pata), una combinada resuelta automáticamente vuelve a
-    pendiente; un override MANUAL del padre se respeta siempre.
+    pendiente; un override MANUAL del padre se respeta siempre. Un
+    padre anulado por motivo determinista (`_COMBINADA_LOCKED_MOTIVOS`:
+    duplicado/expired) también es intocable — sus patas con veredicto
+    son dato histórico, no deben revivirlo.
 
     Devuelve True si el padre quedó actualizado.
     """
-    if parent.id is None or parent.verificado_por == "manual":
+    if (
+        parent.id is None
+        or parent.verificado_por == "manual"
+        or parent.motivo_anulada in _COMBINADA_LOCKED_MOTIVOS
+    ):
         return False
 
     legs = (
@@ -2535,6 +2580,12 @@ async def _settle_combinadas(session: AsyncSession) -> list[int]:
             .where(
                 (ParsedPick.verificado_por == None)  # noqa: E711
                 | (ParsedPick.verificado_por == "auto")
+            )
+            # Anuladas por motivo determinista (duplicado/expired):
+            # bloqueadas — no se re-derivan de las patas.
+            .where(
+                (ParsedPick.motivo_anulada == None)  # noqa: E711
+                | ParsedPick.motivo_anulada.not_in(_COMBINADA_LOCKED_MOTIVOS)
             )
         )
     ).all()

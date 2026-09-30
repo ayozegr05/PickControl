@@ -455,10 +455,19 @@ class GeminiResearchProvider:
     NAME = _PROVIDER_NAME
     SUPPORTED_SPORTS = frozenset({"futbol", "tenis", "baloncesto", "automovilismo"})
 
-    def __init__(self, sport: str, api_key: str) -> None:
+    def __init__(
+        self, sport: str, api_key: str, *, calls_as: str | None = None
+    ) -> None:
         self._sport = sport
         self._api_key = api_key
         self._cooldown_until: Optional[datetime] = None
+        # Nombre bajo el que se cuentan las llamadas en provider_state
+        # ("calls" -> tarjeta de sistema). La pasada de cuotas usa
+        # "gemini-odds" para que su gasto aparezca en "Sistema ·
+        # cuotas" y no mezclado con la investigación de resultados
+        # (es la misma suscripción free tier — el cooldown se marca
+        # en ambos nombres).
+        self._calls_as = calls_as or _PROVIDER_NAME
 
     def _in_cooldown(self) -> bool:
         """429 reciente (ritmo del free tier) o marca global del día."""
@@ -492,7 +501,7 @@ class GeminiResearchProvider:
                     json=body,
                     headers={"x-goog-api-key": self._api_key},
                 )
-            count_provider_call(_PROVIDER_NAME)
+            count_provider_call(self._calls_as)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
             if rate_limit_from(exc):
@@ -527,7 +536,12 @@ class GeminiResearchProvider:
             self._cooldown_until = utc_now() + _429_COOLDOWN
             # Visible en /providers como bloqueo activo (timestamp, no
             # aparcado de día: el cooldown propio de 20 min ya manda).
+            # Misma suscripción: se marca en el nombre compartido y en
+            # el alias de la pasada (gemini-odds) para que ambas
+            # tarjetas lo vean.
             mark_cooldown(_PROVIDER_NAME, self._cooldown_until)
+            if self._calls_as != _PROVIDER_NAME:
+                mark_cooldown(self._calls_as, self._cooldown_until)
             logger.warning(
                 "[GEMINI] 429 en %d modelos — cooldown %s min",
                 quota_hits,

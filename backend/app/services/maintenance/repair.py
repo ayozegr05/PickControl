@@ -39,6 +39,7 @@ from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.services.results.base import fold_name
+from app.services.results.verifier import _COMBINADA_LOCKED_MOTIVOS
 from app.services.telegram.pick_extractor import ExtractedPick, extract_pick
 from app.services.telegram.processor import _persist_patas
 
@@ -304,6 +305,14 @@ async def repair_pick(session, pick: ParsedPick, *, apply: bool) -> RepairReport
     if pick.combinada_id is not None:
         report.action = "skipped"
         report.detail = "pata de combinada: se repara vía el padre"
+        return report
+    if pick.motivo_anulada in _COMBINADA_LOCKED_MOTIVOS:
+        # Anulada por motivo determinista (duplicado/expired): repararla
+        # crearía patas nuevas huérfanas — el padre bloqueado nunca se
+        # re-liquida (settle_combinada). Para rescatarla hay que
+        # deshacer el motivo a mano primero.
+        report.action = "skipped"
+        report.detail = f"anulada·{pick.motivo_anulada}: fila bloqueada"
         return report
 
     report.old = _pick_snapshot(pick)

@@ -19,7 +19,7 @@ from app.services.pick_service import (
     calcular_stats_combinadas,
     calcular_stats_parsed,
 )
-from app.services.results.verifier import settle_combinada
+from app.services.results.verifier import _settle_combinadas, settle_combinada
 from app.services.telegram.pick_extractor import (
     ExtractedPick,
     _ensure_combinada_shape,
@@ -503,6 +503,94 @@ class TestSettleCombinada:
         session.add(parent)
         await session.flush()
         assert await settle_combinada(session, parent) is False
+
+    async def test_padre_duplicado_no_se_reliquida(self, session):
+        """Bug 30/09: un padre `anulada·duplicado` (dedup por firma) con
+        patas verdes se revivía a acierto — el motivo determinista
+        bloquea el settle igual que `verificado_por='manual'`."""
+        parent = await _crear_combinada(
+            session,
+            [_leg("A", acierto=True), _leg("B", acierto=True)],
+        )
+        parent.anulada = True
+        parent.motivo_anulada = "duplicado"
+        parent.verificado_por = "auto"
+        parent.cuota_efectiva = parent.cuota
+        session.add(parent)
+        await session.flush()
+
+        assert await settle_combinada(session, parent) is False
+        assert parent.anulada is True
+        assert parent.acierto is None
+        assert parent.motivo_anulada == "duplicado"
+        # La pasada global tampoco lo recoge.
+        assert await _settle_combinadas(session) == []
+
+    async def test_padre_expired_no_se_reliquida(self, session):
+        parent = await _crear_combinada(
+            session,
+            [_leg("A", acierto=True), _leg("B", acierto=True)],
+        )
+        parent.anulada = True
+        parent.motivo_anulada = "expired"
+        parent.verificado_por = "expired"
+        session.add(parent)
+        await session.flush()
+
+        assert await settle_combinada(session, parent) is False
+        assert parent.anulada is True
+
+    async def test_padre_anulado_por_patas_si_reliquida(self, session):
+        """La exclusión es por motivo, no por `anulada`: un padre
+        anulado porque todas sus patas cayeron (motivo NULL) sí se
+        re-liquida si una pata se corrige después."""
+        parent = await _crear_combinada(
+            session,
+            [_leg("A", anulada=True), _leg("B", anulada=True)],
+        )
+        assert await settle_combinada(session, parent) is True
+        assert parent.anulada is True
+        assert parent.motivo_anulada is None
+
+        # Corrección: la pata B sí se jugó y ganó.
+        legs = (
+            (
+                await session.exec(
+                    select(ParsedPick).where(ParsedPick.combinada_id == parent.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        legs[1].anulada = False
+        legs[1].acierto = True
+        legs[1].verificado_por = "auto"
+        session.add(legs[1])
+        await session.flush()
+
+        assert await settle_combinada(session, parent) is True
+        assert parent.anulada is False
+        assert parent.acierto is True
+
+    async def test_settle_global_omite_duplicados_y_liquida_normales(self, session):
+        dup = await _crear_combinada(
+            session,
+            [_leg("A", acierto=True), _leg("B", acierto=True)],
+        )
+        dup.anulada = True
+        dup.motivo_anulada = "duplicado"
+        dup.verificado_por = "auto"
+        session.add(dup)
+
+        normal = await _crear_combinada(
+            session,
+            [_leg("C", acierto=True), _leg("D", acierto=True)],
+        )
+        await session.flush()
+
+        settled = await _settle_combinadas(session)
+        assert settled == [normal.id]
+        assert dup.anulada is True
 
 
 # --------------------------------------------------------------------- stats

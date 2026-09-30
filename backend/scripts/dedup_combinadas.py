@@ -12,8 +12,11 @@ canal por FIRMA (patas normalizadas + cuota) y:
   pendiente junto con sus patas anuladas sin veredicto para que la
   cascada las re-verifique — el settle llega solo.
 - Marca el resto como `anulada · duplicado` (visibles en la lista de
-  depuración, fuera de las stats del tipster). Sus patas pendientes se
-  marcan igual; las que ya tienen veredicto se conservan (dato real).
+  depuración, fuera de las stats del tipster). TODAS sus patas se
+  marcan igual, tengan o no veredicto: el veredicto de una pata de un
+  boleto repetido es redundante (la canónica tiene el suyo) y un
+  `acierto=True` suelto alimentaba el bug del settle que revivía
+  padres duplicados.
 
 Dry-run por defecto; `--apply` escribe en BD.
 
@@ -61,6 +64,7 @@ def _mark_duplicate(p: ParsedPick, now) -> None:
     p.anulada = True
     p.acierto = None
     p.motivo_anulada = _DUP_REASON
+    p.cuota_efectiva = None
     p.verificado_por = "auto"
     p.verificado_provider = None
     p.verificado_at = now
@@ -127,10 +131,11 @@ async def main(apply: bool) -> None:
                     _mark_duplicate(dup, now)
                     session.add(dup)
                 for leg in legs_by_parent[dup.id]:
-                    # Las patas con veredicto conservan su dato real;
-                    # solo las que no resolvieron se marcan duplicado.
-                    if leg.acierto is not None:
-                        continue
+                    # TODAS las patas del boleto repetido se marcan
+                    # duplicado — una pata ya liquidada seguiría
+                    # "verde" y alimentaría el settle del padre.
+                    if leg.anulada and leg.motivo_anulada == _DUP_REASON:
+                        continue  # ya marcada
                     if apply:
                         _mark_duplicate(leg, now)
                         session.add(leg)

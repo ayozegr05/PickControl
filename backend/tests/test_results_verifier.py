@@ -3152,11 +3152,15 @@ class _StubResearchProvider:
     por aplazados (cada una le costaría una búsqueda real de cuota)."""
 
     NAME = "gemini-search"
-    SUPPORTED_SPORTS = frozenset({"tenis"})
 
-    def __init__(self, state: "MatchState | None" = None):
+    def __init__(
+        self,
+        state: "MatchState | None" = None,
+        sports: "frozenset[str]" = frozenset({"tenis"}),
+    ):
         self.calls = 0
         self._state = state
+        self.SUPPORTED_SPORTS = sports
 
     async def find_postponed_match(self, date, team_hint):
         self.calls += 1
@@ -3204,6 +3208,86 @@ class TestPostponedResearchLast:
         acierto, anulada = await verify_pick(pick, [det, research])
         assert (acierto, anulada) == (None, False)
         assert research.calls >= 1
+
+
+class TestResearchMissCache:
+    """La consulta de aplazados a providers de investigación (Gemini)
+    cuesta una búsqueda real: un miss se recuerda por pick durante
+    `_RESEARCH_MISS_TTL` en vez de repetirse en cada pasada (~3 h)."""
+
+    def _provider(self, state: "MatchState | None" = None):
+        return _StubResearchProvider(state, sports=frozenset({"futbol"}))
+
+    def _old_pick(self) -> ParsedPick:
+        pick = _pick(
+            "Levante gana",
+            "ganador",
+            fecha_evento=datetime(2020, 1, 1, 21, 0),
+        )
+        pick.id = 4242
+        return pick
+
+    async def test_miss_no_se_repite_dentro_del_ttl(self):
+        provider = self._provider()
+        pick = self._old_pick()
+        assert await verify_pick(pick, [provider]) == (None, False)
+        assert provider.calls == 1
+        # Pasadas siguientes del verifier: el miss está cacheado.
+        assert await verify_pick(pick, [provider]) == (None, False)
+        assert await verify_pick(pick, [provider]) == (None, False)
+        assert provider.calls == 1
+
+    async def test_miss_cacheado_es_por_pick(self):
+        provider = self._provider()
+        pick = self._old_pick()
+        otro = self._old_pick()
+        otro.id = 9999
+        await verify_pick(pick, [provider])
+        await verify_pick(otro, [provider])
+        assert provider.calls == 2
+
+    async def test_tras_el_ttl_se_reintenta_y_resuelve(self):
+        # El fixture aparece documentado como aplazado días después:
+        # al caducar el TTL la consulta se repite y esta vez anula.
+        provider = self._provider()
+        pick = self._old_pick()
+        await verify_pick(pick, [provider])
+        assert provider.calls == 1
+
+        from app.services.results import base as results_base
+
+        key = f"gemini-search|postponed|{pick.id}"
+        results_base._load_state()["missed"][key] = (
+            utc_now() - timedelta(hours=49)
+        ).isoformat()
+
+        provider._state = MatchState(
+            home_team="Levante", away_team="Real Betis", status="postponed"
+        )
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, True)
+        assert provider.calls == 2
+
+    async def test_hit_no_escribe_miss(self):
+        provider = self._provider(
+            MatchState(home_team="Levante", away_team="Real Betis", status="postponed")
+        )
+        pick = self._old_pick()
+        assert await verify_pick(pick, [provider]) == (None, True)
+
+        from app.services.results import base as results_base
+
+        key = f"gemini-search|postponed|{pick.id}"
+        assert key not in results_base._load_state()["missed"]
+
+    async def test_hint_inusable_no_consulta(self):
+        # Evento de extracción rota ("ab"): ninguna búsqueda web puede
+        # resolver eso — no se gasta cuota en la llamada.
+        provider = self._provider()
+        pick = self._old_pick()
+        pick.evento = "ab"
+        assert await verify_pick(pick, [provider]) == (None, False)
+        assert provider.calls == 0
 
 
 class TestVoidRecheck:

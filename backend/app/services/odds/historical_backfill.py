@@ -691,7 +691,9 @@ async def _run_gemini_pass(
         ext_id = pick.odds_event_id or f"{_GEMINI_ODDS_PROVIDER}:{pick.id}"
         event = events.get(ext_id) or _synthetic_event(pick, sport, ext_id)
 
-        provider = GeminiResearchProvider(sport, settings.google_api_key)
+        provider = GeminiResearchProvider(
+            sport, settings.google_api_key, calls_as=_GEMINI_ODDS_PROVIDER
+        )
         found = await provider.find_closing_odds(pick.fecha_evento, hint, desc)
         if found is None:
             if provider._in_cooldown():
