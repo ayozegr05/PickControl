@@ -301,6 +301,15 @@ def map_pick_choices(
         if matched is not None:
             return matched
 
+    # Set en juego ("gana el set actual/en curso"): el snapshotter guarda
+    # "Current set winner" con choices "1"/"2" como el primer set.
+    if re.search(r"set\s+actual|set\s+en\s+curso|este\s+set", text) and team:
+        matched = _match_side(
+            _rows_of_market(snapshots, ("Current set winner",)), event, team
+        )
+        if matched is not None:
+            return matched
+
     # 1X2 del descanso ("gana X la primera parte"): mercado "1st half"
     # de Sofascore. Y "marca primero" -> "First team to score" (choices
     # "1"/"2"/"X" = ninguno marca).

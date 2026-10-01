@@ -243,6 +243,18 @@ def test_map_marca_primero():
     assert (m.market_name, m.choice_name) == ("First team to score", "1")
 
 
+def test_map_set_actual():
+    snaps = [
+        _snap("Current set winner", "1", 1.5),
+        _snap("Current set winner", "2", 2.6),
+    ]
+    event = _event(sport="tenis", home="Alcaraz", away="Sinner")
+    pick = _pick("Alcaraz gana el set actual", deporte="tenis")
+    m = map_pick_choices(pick, event, snaps)
+    assert m is not None
+    assert (m.market_name, m.choice_name) == ("Current set winner", "1")
+
+
 # --- aliases de equipo en el hint de cuotas ----------------------------------
 
 

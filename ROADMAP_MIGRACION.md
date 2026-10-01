@@ -710,10 +710,12 @@ Pendiente:
             tenis (jugador) no se toca.
       - [x] **Mapeo de mercados ya guardados** (2026-10-01):
             `compare.py` ya reconoce "1st half" (ganador de la 1ª parte,
-            pata típica "ganan la primera parte") y "First team to score"
-            ("marca primero", "sin goles"→X). Protección añadida: un pick
-            de descanso sin filas "1st half" queda NULL — nunca cae al
-            mercado "Full time" por defecto.
+            pata típica "ganan la primera parte"), "First team to score"
+            ("marca primero", "sin goles"→X) y "Current set winner"
+            ("gana el set actual/en curso", tenis en vivo). Protección
+            añadida: un pick de descanso sin filas "1st half" queda NULL —
+            nunca cae al mercado "Full time" por defecto. Los 13 mercados
+            almacenados en prod quedan todos mapeados.
       - [ ] **Política de quota de OddsPapi al renovar (20/10)**: ~200
             req/mes se agotan rápido si va primero en todos los cubos.
             Valorar: reservarla a tenis (donde más aporta), orden por
