@@ -15,6 +15,8 @@ export interface BackfillPass {
   sin_historial?: number;
   sin_opcion?: number;
   mapeados?: number;
+  /** Picks que no se llegaron a intentar (presupuesto diario o error). */
+  sin_revisar?: number;
 }
 
 export interface BackfillStatus {

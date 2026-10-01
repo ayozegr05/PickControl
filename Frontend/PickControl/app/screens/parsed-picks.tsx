@@ -810,6 +810,12 @@ export default function ParsedPicksScreen() {
                   vivos lo han intentado (o su cuota ya está
                   registrada).
                 </Text>
+                <Text style={styles.funnelHint}>
+                  Fase A: listar partidos del día (~3 llamadas por día,
+                  más si hay muchas páginas) · Fase B: bajar la curva
+                  de cuotas (1 llamada por partido) · tope 40
+                  llamadas/pasada.
+                </Text>
                 <View style={styles.providerRow}>
                   <Text style={styles.statLabel}>Por auditar</Text>
                   <Text style={styles.providerWarn}>
@@ -896,6 +902,9 @@ export default function ParsedPicksScreen() {
                       {p.revisados ?? 0} revisados ·{" "}
                       {p.con_fixture ?? 0} con partido · {p.filas ?? 0}{" "}
                       cuotas registradas
+                      {(p.sin_revisar ?? 0) > 0
+                        ? ` · ${p.sin_revisar} sin revisar (paga diaria agotada)`
+                        : ""}
                     </Text>
                   ));
                 })()}

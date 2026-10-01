@@ -131,6 +131,10 @@ class BackfillReport:
     mapeados: int = 0
     sin_opcion: int = 0
     filas: int = 0
+    # Picks a los que no se llegó: la fuente se quedó sin presupuesto
+    # de llamadas o la API falló — quedan pendientes para mañana, sin
+    # marca (no son "nadie los tenía").
+    sin_revisar: int = 0
     detalles: list[str] = field(default_factory=list)
 
 
@@ -538,8 +542,11 @@ async def _run_source(
         ).append(pick)
 
     fixtures_picks: dict[str, tuple[object, str, list[ParsedPick]]] = {}
+    # Días más recientes primero: los picks frescos (los que más
+    # importan) se resuelven antes de que se agote la paga diaria.
     for (sport_id, day), day_picks in sorted(
-        buckets.items(), key=lambda item: (item[0][0], item[0][1])
+        buckets.items(),
+        key=lambda item: (item[0][0], -item[0][1].toordinal()),
     ):
         sport = _canonical_sport(day_picks[0].deporte)
         # Un día por llamada y la caché del cliente dedup los días
@@ -555,6 +562,7 @@ async def _run_source(
                 break
             fixtures += day_fixtures
         if api_error:
+            report.sin_revisar += len(day_picks)
             report.detalles.append(
                 f"  ! [{source.name}] error de API en eventos {sport} "
                 f"{day}: {len(day_picks)} picks sin revisar"
@@ -584,15 +592,19 @@ async def _run_source(
             report.con_fixture += 1
 
     # Una curva por fixture alimenta todos sus picks.
+    pendientes_curva = sum(len(picks_) for _, _, picks_ in fixtures_picks.values())
+    procesados_curva = 0
     for fixture, sport, event_picks in fixtures_picks.values():
         ext_id = source.ext_id(fixture)
         if is_missed(hist_key.format(source.fixture_key(fixture))):
+            procesados_curva += len(event_picks)
             report.sin_historial += len(event_picks)
             continue
         status, choices = await source.choices(http, fixture, sport, event_picks)
         if status == "miss":
             # El fixture nunca tuvo mercados en esta fuente.
             mark_missed(hist_key.format(source.fixture_key(fixture)))
+            procesados_curva += len(event_picks)
             report.sin_historial += len(event_picks)
             report.detalles.append(
                 f"  - {fixture.home_name} vs {fixture.away_name}: "
@@ -604,14 +616,17 @@ async def _run_source(
                 f"  ! [{source.name}] presupuesto de llamadas agotado "
                 f"({_FEED_MAX_CALLS_PER_RUN}/pasada) — sigue mañana"
             )
+            report.sin_revisar += pendientes_curva - procesados_curva
             return
         if status == "error":
             # Error/cuota: no se marca — reintenta en otra pasada.
+            report.sin_revisar += pendientes_curva - procesados_curva
             report.detalles.append(
                 f"  ! {fixture.home_name} vs {fixture.away_name}: "
                 f"error de API [{source.name}], se reintenta luego"
             )
             break
+        procesados_curva += len(event_picks)
 
         # Filas virtuales con el formato exacto que lee el comparador.
         virtual = [
@@ -989,6 +1004,7 @@ async def run(apply: bool, limit: int | None) -> BackfillReport:
                     "sin_historial": report.sin_historial,
                     "sin_opcion": report.sin_opcion,
                     "mapeados": report.mapeados,
+                    "sin_revisar": report.sin_revisar,
                 },
             )
 
