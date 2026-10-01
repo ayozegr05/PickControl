@@ -225,10 +225,18 @@ def map_pick_choices(
     """
     text = f"{pick.mercado or ''} {pick.seleccion or ''}".strip().lower()
     team = _extract_predicted_team(pick.seleccion or "", pick.mercado)
+    # Pick de descanso/primera parte: no puede caer en mercados de
+    # tiempo completo ("Full time", "Match goals") — sería comparar
+    # cuotas de mercados distintos.
+    ht_pick = re.search(
+        r"primer[ae]s?\s+parte|primera\s+mitad|descanso|media\s+parte|"
+        r"first\s+half|1[ªa]?\s*parte|primer\s+tiempo",
+        text,
+    )
 
     if "over" in text or "under" in text or "más de" in text or "menos" in text:
         matched = _map_over_under(event.sport, text, snapshots, pick)
-        if matched is not None:
+        if matched is not None and (not ht_pick or matched.market_name == "1st half"):
             return matched
 
     if re.search(r"h[aá]ndicap", text):
@@ -293,8 +301,47 @@ def map_pick_choices(
         if matched is not None:
             return matched
 
+    # 1X2 del descanso ("gana X la primera parte"): mercado "1st half"
+    # de Sofascore. Y "marca primero" -> "First team to score" (choices
+    # "1"/"2"/"X" = ninguno marca).
+    if ht_pick:
+        ht_rows = _rows_of_market(snapshots, ("1st half",))
+        if "empate" in text:
+            for row in ht_rows:
+                if row.choice_name == "X":
+                    return _group_rows(snapshots, row)
+        if team:
+            matched = _match_side(ht_rows, event, team)
+            if matched is not None:
+                return matched
+
+    if re.search(
+        r"marca\s+primero|primer\s+gol|anota\s+primero|"
+        r"primer\s+en\s+marcar|first\s+team\s+to\s+score",
+        text,
+    ):
+        fts_rows = _rows_of_market(snapshots, ("First team to score",))
+        if re.search(r"sin\s+goles|ninguno|nadie|no\s+goals", text):
+            for row in fts_rows:
+                if row.choice_name == "X":
+                    return _group_rows(snapshots, row)
+        # La frase del mercado no es el equipo: "Betis marca primero"
+        # -> "Betis" antes de casar el lado.
+        fts_team = re.sub(
+            r"marca\s+primero|primer\s+gol|anota\s+primero|"
+            r"primer\s+en\s+marcar|first\s+team\s+to\s+score",
+            " ",
+            pick.seleccion or "",
+            flags=re.IGNORECASE,
+        ).strip()
+        if fts_team:
+            matched = _match_side(fts_rows, event, fts_team)
+            if matched is not None:
+                return matched
+
     # Por defecto: mercado ganador ("Full time" en ambos deportes).
-    if team:
+    # Un pick de descanso nunca se compara con la cuota del FT.
+    if team and not ht_pick:
         if "empate" in (pick.seleccion or "").lower():
             for row in _rows_of_market(snapshots, _WIN_MARKETS):
                 if row.choice_name == "X":

@@ -689,17 +689,50 @@ Pendiente:
             (córners, tarjetas, BTTS, DC, DNB) se guardan bajo el
             `event_ext_id` del pick con `provider` del espejo
             (`snapshotter._fetch_cross_family_odds`).
-      - [ ] **Reutilizar aliases de equipo en el matching de odds**:
-            `_TEAM_ALIASES` de footapi7 ("depò", "psg", "barça"…) solo
-            aplica a resultados; el casado de fixtures en
-            `historical_backfill`/`snapshotter` usa el `evento` crudo y
-            genera `nofixture` falsos. Centralizar la normalización en
-            `results/base.py` en lugar de duplicar diccionarios.
+      - [x] **Rescate de `evento` corrupto antes de gastar búsquedas**
+            (`odds/event_rescue.py`, 2026-10-01): ~9% del backlog tenía
+            `evento` que no es un partido ("9,5 córners en total", links
+            de pago). Cascada: reglas sobre `raw.text`/`extracted_text`
+            → mini-LLM (solo el campo evento) → re-OCR dirigido sobre la
+            imagen propia o la del vecino del par foto-boleto (±10 min) →
+            `done` honesto si nada lo salva. La reparación actualiza
+            `pick.evento` IN SITU (sin filas nuevas ni duplicados) y la
+            salida LLM/OCR se revalida con las reglas deterministas.
+            Presupuesto Gemini adaptativo: techo 32 eventos/pasada, el
+            cooldown del free tier auto-regula.
+      - [x] **Aliases de equipo compartidos en el matching de odds**
+            (2026-10-01): `_TEAM_ALIASES` vive ahora en `results/base.py`
+            (`translate_team_aliases`); `footapi_stats` lo reusa y
+            `snapshotter._lookup_hint` expande el hint antes de casar
+            fixtures — beneficia a la vez la búsqueda Sofascore y el
+            `match_score` de OddsFeed/OddsPapi ("depò - barça" →
+            "deportivo - barcelona"). Solo deportes de equipo; el hint de
+            tenis (jugador) no se toca.
+      - [x] **Mapeo de mercados ya guardados** (2026-10-01):
+            `compare.py` ya reconoce "1st half" (ganador de la 1ª parte,
+            pata típica "ganan la primera parte") y "First team to score"
+            ("marca primero", "sin goles"→X). Protección añadida: un pick
+            de descanso sin filas "1st half" queda NULL — nunca cae al
+            mercado "Full time" por defecto.
       - [ ] **Política de quota de OddsPapi al renovar (20/10)**: ~200
             req/mes se agotan rápido si va primero en todos los cubos.
             Valorar: reservarla a tenis (donde más aporta), orden por
             deporte (oddsfeed primero en fútbol) o presupuesto por
             pasada tipo `_FEED_MAX_CALLS_PER_RUN`.
+      - [ ] **Props de jugador vía OddsPapi** (investigar con quota, 20/10):
+            `translate_history` solo lee `players["0"]`; el payload bet365
+            trae outcomes por jugador (`players["<id>"]`). Si el catálogo
+            `/markets` nombra jugadores, los ~20 picks `mercado=jugador`
+            podrían auditar cuota real.
+      - [ ] **Dedup semántico de patas de combinadas**: las patas se
+            comparan literalmente; "Isak marca gol" vs "marca anytime" o
+            basura OCR generan firmas distintas del mismo boleto. Huella
+            normalizada por pata (equipo/jugador + mercado canónico + línea).
+      - [ ] **Verificar el embudo tras una pasada `--apply` real**: OddsFeed
+            auditado OK (1100 fútbol + 173 tenis/día, ~380/500 req libres);
+            las 0 marcas eran dry-run. Confirmar que `en_cola` baja y los
+            `nofixture` se escriben — si no casan, el sospechoso es el
+            matching (los aliases ya aplicados deberían mejorarlo).
 
 ## Estado actual del entorno
 

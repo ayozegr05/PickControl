@@ -169,4 +169,9 @@ media en `backend/media/telegram/`.
   al terminar (ver `.windsurfrules`).
 - Windows: cuidado con CP1252 al imprimir emojis en consola
   (`sys.stdout.reconfigure(encoding='utf-8')`).
-- Los errores 429 de OpenAI (TPM) dejan raws sin OCR — el retry está en roadmap.
+- Los errores 429 de OpenAI (TPM) dejan raws sin OCR — cubierto:
+  `openai_retry.call_with_retry` (backoff largo guiado por el hint
+  "try again in Xs"; `credit_balance_exhausted` no reintenta) y el ciclo
+  de rescate (`maintenance/rescue.py`: `retry_pending_ocr` →
+  `reprocess_pending_raws` → `retry_incomplete_picks`, cada 6h en
+  `lifecycle.py`, ventana `rescue_max_age_days`).

@@ -58,6 +58,7 @@ from app.services.results.base import (
     match_score,
     miss_is_provisional,
     rate_limit_from,
+    translate_team_aliases,
 )
 from app.services.results.response_cache import (
     event_list_covers,
@@ -71,27 +72,9 @@ logger = get_logger("app.results.footapi")
 
 _MIN_SIMILARITY = 0.6
 
-# Acrónimos/apodos que el tipster usa y Sofascore no: se expanden antes
-# de comparar nombres. Lista conservadora — solo variantes sin
-# ambigüedad ("inter" queda fuera: puede ser Inter de Milán, Inter
-# Miami o Inter de Limeira).
-_TEAM_ALIASES = {
-    "psg": "paris saint germain",
-    "paris sg": "paris saint germain",
-    "paris fc femenino": "paris fc",
-    "man utd": "manchester united",
-    "man city": "manchester city",
-    "spurs": "tottenham",
-    "wolves": "wolverhampton",
-}
-
-
-def _translate_teams(text: str) -> str:
-    """'psg femenino' -> 'paris saint germain femenino' (palabra entera)."""
-    out = text.lower()
-    for alias, full in _TEAM_ALIASES.items():
-        out = re.sub(rf"\b{re.escape(alias)}\b", full, out)
-    return out
+# Los aliases de equipo viven en `results/base.py` (TEAM_ALIASES +
+# translate_team_aliases), compartidos con la capa de cuotas.
+_translate_teams = translate_team_aliases
 
 
 # El pick puede llevar el día de publicación, no el del partido.

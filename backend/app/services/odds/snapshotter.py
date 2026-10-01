@@ -60,7 +60,12 @@ from app.models.parsed_pick import ParsedPick
 from app.services.odds.base import EventRef, OddsProvider
 from app.services.odds.espn_odds import EspnOddsProvider
 from app.services.odds.sofascore import SofaScoreOddsProvider
-from app.services.results.base import is_missed, mark_missed, match_score
+from app.services.results.base import (
+    is_missed,
+    mark_missed,
+    match_score,
+    translate_team_aliases,
+)
 from app.services.results.sofascore_native import (
     SofaScoreNativeOddsProvider,
     direct_transport,
@@ -181,7 +186,11 @@ def _lookup_hint(pick: ParsedPick, sport: str) -> Optional[str]:
     if sport == "tenis":
         return _tennis_lookup_hint(pick, fallback)
     evento = (pick.evento or "").strip()
-    return evento or fallback or None
+    # Aliases del tipster -> nombre oficial ("depò - barça" ->
+    # "deportivo - barcelona"): mejora la búsqueda en la API y el
+    # match_score local (compartido con results/base.py).
+    hint = evento or fallback or None
+    return translate_team_aliases(hint) if hint else None
 
 
 async def _find_event_across_providers(

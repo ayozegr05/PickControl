@@ -21,6 +21,8 @@ from app.services.odds.compare import (
     compare_picks,
     map_pick_choices,
 )
+from app.services.odds.snapshotter import _lookup_hint
+from app.services.results.base import translate_team_aliases
 
 EVENT = "sofascore:123"
 
@@ -208,6 +210,69 @@ def test_map_mercado_sin_equivalente():
     """Mercados sin traducción (props de jugador) -> None."""
     pick = _pick("Mérlín marca", mercado="jugador")
     assert map_pick_choices(pick, _event(), _futbol_snaps()) is None
+
+
+def test_map_primera_parte_usa_1st_half():
+    snaps = _futbol_snaps() + [
+        _snap("1st half", "1", 2.2),
+        _snap("1st half", "X", 2.1),
+        _snap("1st half", "2", 4.5),
+    ]
+    pick = _pick("Betis gana la primera parte", mercado="ganador 1ª parte")
+    m = map_pick_choices(pick, _event(), snaps)
+    assert m is not None
+    assert (m.market_name, m.choice_name) == ("1st half", "1")
+
+
+def test_map_primera_parte_no_cae_en_fulltime():
+    """Un pick de descanso sin filas "1st half" queda NULL — nunca se
+    compara contra la cuota del tiempo completo (mercados distintos)."""
+    pick = _pick("Betis gana la primera parte")
+    assert map_pick_choices(pick, _event(), _futbol_snaps()) is None
+
+
+def test_map_marca_primero():
+    snaps = _futbol_snaps() + [
+        _snap("First team to score", "1", 1.7),
+        _snap("First team to score", "2", 2.9),
+        _snap("First team to score", "X", 9.0),
+    ]
+    pick = _pick("Betis marca primero", mercado="primer gol")
+    m = map_pick_choices(pick, _event(), snaps)
+    assert m is not None
+    assert (m.market_name, m.choice_name) == ("First team to score", "1")
+
+
+# --- aliases de equipo en el hint de cuotas ----------------------------------
+
+
+def test_translate_team_aliases_expande():
+    assert translate_team_aliases("depò - barça") == "deportivo - barcelona"
+    assert (
+        translate_team_aliases("psg vs man utd")
+        == "paris saint germain vs manchester united"
+    )
+
+
+def test_translate_team_aliases_sin_alias_no_toca():
+    assert translate_team_aliases("Sevilla vs Osasuna") == "sevilla vs osasuna"
+
+
+def test_lookup_hint_futbol_expande_aliases():
+    pick = ParsedPick(es_apuesta=True, deporte="fútbol", evento="depò - barça")
+    assert _lookup_hint(pick, "futbol") == "deportivo - barcelona"
+
+
+def test_lookup_hint_tenis_sin_aliases():
+    """En tenis el hint es el jugador: no aplica el diccionario de equipos."""
+    pick = ParsedPick(
+        es_apuesta=True,
+        deporte="tenis",
+        evento="ATP Shanghái",
+        seleccion="Alcaraz gana",
+    )
+    hint = _lookup_hint(pick, "tenis")
+    assert hint and "alcaraz" in hint.lower()
 
 
 def test_map_over_under_juegos_tenis():

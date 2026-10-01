@@ -107,6 +107,53 @@ def split_team_hint(team_hint: str) -> list[str]:
     return parts or [team_hint.strip()]
 
 
+# Acrónimos/apodos que el tipster usa y los providers no: se expanden
+# antes de comparar nombres. Lista conservadora — solo variantes sin
+# ambigüedad ("inter" queda fuera: puede ser Inter de Milán, Inter
+# Miami o Inter de Limeira). Compartido entre la capa de resultados
+# (`footapi_stats`) y la de cuotas (`snapshotter._lookup_hint`).
+TEAM_ALIASES = {
+    "psg": "paris saint germain",
+    "paris sg": "paris saint germain",
+    "paris fc femenino": "paris fc",
+    "man utd": "manchester united",
+    "man city": "manchester city",
+    "spurs": "tottenham",
+    "wolves": "wolverhampton",
+    "depò": "deportivo",
+    "depo": "deportivo",
+    "barça": "barcelona",
+    "barca": "barcelona",
+    "atm": "atletico madrid",
+    "atleti": "atletico madrid",
+    "betis": "real betis",
+    "sevilla fc": "sevilla",
+    "real madrid cf": "real madrid",
+    "inter milan": "inter",
+    "milan": "ac milan",
+    "river": "river plate",
+    "boca": "boca juniors",
+    "bayern": "bayern munich",
+    "dortmund": "borussia dortmund",
+    "napoles": "napoli",
+    "roma": "as roma",
+}
+
+
+def translate_team_aliases(text: str) -> str:
+    """Expande aliases de equipo en un hint: 'psg - barça' ->
+    'paris saint germain - barcelona' (palabra entera, en minúsculas).
+
+    Se aplica al HINT del pick (nunca al nombre del provider) antes de
+    `match_score` o de una búsqueda por nombre — un alias ambiguo no
+    casa por sí solo porque `match_score` sigue exigiendo 0.6 y ±1 día.
+    """
+    out = (text or "").lower()
+    for alias, full in TEAM_ALIASES.items():
+        out = re.sub(rf"\b{re.escape(alias)}\b", full, out)
+    return out
+
+
 def match_score(team_hint: str, home_team: str, away_team: str) -> float:
     """Confianza 0.0-1.0 de que el fixture (home vs away) es el del hint.
 
