@@ -240,10 +240,10 @@ async def _fetch_cross_family_odds(
     if not sofa_providers or start is None:
         return None, None
     ev = (
-        await session.execute(
+        await session.exec(
             select(OddsEvent).where(OddsEvent.event_ext_id == event_ext_id)
         )
-    ).scalar_one_or_none()
+    ).first()
     if ev is None or not ev.home_team or not ev.away_team:
         return None, None
     hint = f"{ev.home_team} vs {ev.away_team}"
@@ -307,9 +307,7 @@ async def _resolve_missing_event_ids(
     antes de existir la tabla) se re-resuelve con la misma búsqueda:
     cuesta una vez y luego el pick deja de entrar en esta consulta.
     """
-    registered = set(
-        (await session.execute(select(OddsEvent.event_ext_id))).scalars().all()
-    )
+    registered = set((await session.exec(select(OddsEvent.event_ext_id))).all())
     resolved = 0
     for pick in picks:
         if pick.odds_event_id and pick.odds_event_id in registered:
@@ -360,7 +358,7 @@ async def run_odds_snapshot_cycle() -> dict[str, int]:
 
     now = utc_now()
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
+        result = await session.exec(
             select(ParsedPick)
             .where(ParsedPick.es_apuesta == True)  # noqa: E712
             .where(ParsedPick.es_combinada == False)  # noqa: E712
@@ -371,7 +369,7 @@ async def run_odds_snapshot_cycle() -> dict[str, int]:
         )
         picks = [
             p
-            for p in result.scalars().all()
+            for p in result.all()
             if _canonical_sport(p.deporte) in ("tenis", "futbol", "baloncesto")
         ]
         stats["candidatos"] = len(picks)
@@ -395,12 +393,12 @@ async def run_odds_snapshot_cycle() -> dict[str, int]:
             slot["start"] = min(slot["start"], pick.fecha_evento)
 
         for event_ext_id, info in events.items():
-            last = await session.execute(
+            last = await session.exec(
                 select(func.max(OddsSnapshot.captured_at)).where(
                     OddsSnapshot.event_ext_id == event_ext_id
                 )
             )
-            last_capture = last.scalar_one_or_none()
+            last_capture = last.first()
             if not _needs_snapshot(last_capture, info["start"], now):
                 continue
             miss_key = f"odds|empty|{event_ext_id}"

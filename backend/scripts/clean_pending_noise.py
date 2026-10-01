@@ -75,31 +75,25 @@ def _tennis_salvageable(pick: ParsedPick) -> bool:
 async def run(apply: bool) -> None:
     async with AsyncSessionLocal() as session:
         pendientes = (
-            (
-                await session.execute(
-                    select(ParsedPick).where(
-                        ParsedPick.acierto.is_(None),  # type: ignore[union-attr]
-                        ParsedPick.anulada.is_(False),  # type: ignore[union-attr]
-                        ParsedPick.es_apuesta.is_(True),  # type: ignore[union-attr]
-                    )
+            await session.exec(
+                select(ParsedPick).where(
+                    ParsedPick.acierto.is_(None),  # type: ignore[union-attr]
+                    ParsedPick.anulada.is_(False),  # type: ignore[union-attr]
+                    ParsedPick.es_apuesta.is_(True),  # type: ignore[union-attr]
                 )
             )
-            .scalars()
-            .all()
-        )
+        ).all()
 
         # Padres combinada que tienen patas: su estado lo deriva
         # settle_combinada, nunca se anulan directamente por A/B.
         con_patas = set(
             (
-                await session.execute(
+                await session.exec(
                     select(ParsedPick.combinada_id)
                     .where(ParsedPick.combinada_id.is_not(None))  # type: ignore[union-attr]
                     .group_by(ParsedPick.combinada_id)
                 )
-            )
-            .scalars()
-            .all()
+            ).all()
         )
 
         anular: list[tuple[ParsedPick, str]] = []

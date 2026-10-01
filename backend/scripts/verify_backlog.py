@@ -53,7 +53,7 @@ async def main(apply: bool, delay: float) -> None:
     async with AsyncSessionLocal() as session:
         # Mismo conjunto que verify_pending_picks pero SIN el filtro de
         # edad: es justo lo que el ciclo normal ya no reintenta.
-        result = await session.execute(
+        result = await session.exec(
             select(ParsedPick)
             .where(ParsedPick.es_apuesta == True)  # noqa: E712
             .where(ParsedPick.acierto == None)  # noqa: E711
@@ -61,7 +61,7 @@ async def main(apply: bool, delay: float) -> None:
             .where(ParsedPick.es_combinada == False)  # noqa: E712
             .where(ParsedPick.fecha_evento != None)  # noqa: E711
         )
-        pending = list(result.scalars().all())
+        pending = list(result.all())
         # Recientes primero, igual que el ciclo normal.
         pending.sort(key=lambda p: p.fecha_evento, reverse=True)
         print(f"Pendientes totales a intentar: {len(pending)}")
