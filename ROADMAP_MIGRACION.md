@@ -723,6 +723,10 @@ Pendiente:
             histórico real vía OddsPapi, no sirve para medir escritura).
             La tarjeta "Sistema · cuotas" muestra cuotas guardadas por
             día y las últimas 5 pasadas (revisados/con partido/cuotas).
+            Además: los buckets se recorren de día reciente a antiguo
+            y el resumen cuenta `sin_revisar` (picks a los que no llegó
+            la paga diaria de 40 llamadas — antes parecía "0 filas"
+            sin explicación).
       - [ ] **Política de quota de OddsPapi al renovar (20/10)**: ~200
             req/mes se agotan rápido si va primero en todos los cubos.
             Valorar: reservarla a tenis (donde más aporta), orden por
