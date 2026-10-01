@@ -716,6 +716,13 @@ Pendiente:
             añadida: un pick de descanso sin filas "1st half" queda NULL —
             nunca cae al mercado "Full time" por defecto. Los 13 mercados
             almacenados en prod quedan todos mapeados.
+      - [x] **Visibilidad del embudo por pasada/día** (2026-10-01):
+            `record_loop_summary` acumula historial (`summaries_history`,
+            últimas 10) y `count_odds_rows_written` cuenta filas escritas
+            por día UTC (`odds_rows_by_day` — `captured_at` puede ser
+            histórico real vía OddsPapi, no sirve para medir escritura).
+            La tarjeta "Sistema · cuotas" muestra cuotas guardadas por
+            día y las últimas 5 pasadas (revisados/con partido/cuotas).
       - [ ] **Política de quota de OddsPapi al renovar (20/10)**: ~200
             req/mes se agotan rápido si va primero en todos los cubos.
             Valorar: reservarla a tenis (donde más aporta), orden por

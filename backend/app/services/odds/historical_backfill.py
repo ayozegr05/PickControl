@@ -79,7 +79,9 @@ from app.services.odds.oddspapi import (
 )
 from app.services.odds.snapshotter import _canonical_sport, _lookup_hint
 from app.services.results.base import (
+    count_odds_rows_written,
     is_missed,
+    loop_history,
     loop_summary,
     mark_missed,
     rate_limited_until,
@@ -494,6 +496,7 @@ async def backfill_breakdown(session) -> dict:
             if s.name in parked
         },
         "ultima_pasada": loop_summary("odds_backfill"),
+        "ultimas_pasadas": loop_history("odds_backfill"),
     }
 
 
@@ -973,6 +976,7 @@ async def run(apply: bool, limit: int | None) -> BackfillReport:
 
         if apply:
             await session.commit()
+            count_odds_rows_written(report.filas)
             # Resumen visible en la pantalla depurativa (qué hizo la
             # última pasada sin abrir logs del contenedor).
             record_loop_summary(

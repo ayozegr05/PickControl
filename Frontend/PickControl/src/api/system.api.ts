@@ -5,6 +5,18 @@ import { apiRequest } from "./client";
 /** Embudo del backlog de cuotas históricas (backend lo calcula por
  * pick cruzando marcas de fuentes). `en_cola` = trabajo real;
  * `aplazados` = solo esperan a providers en quota larga. */
+/** Resumen de una pasada del backfill (guardado en provider_state). */
+export interface BackfillPass {
+  at?: string;
+  revisados?: number;
+  filas?: number;
+  con_fixture?: number;
+  sin_fixture?: number;
+  sin_historial?: number;
+  sin_opcion?: number;
+  mapeados?: number;
+}
+
 export interface BackfillStatus {
   total: number;
   resueltos: number;
@@ -14,16 +26,9 @@ export interface BackfillStatus {
   por_fuente: Record<string, number>;
   gemini_pendientes: number;
   fuentes_en_pausa: Record<string, string>;
-  ultima_pasada?: {
-    at?: string;
-    revisados?: number;
-    filas?: number;
-    con_fixture?: number;
-    sin_fixture?: number;
-    sin_historial?: number;
-    sin_opcion?: number;
-    mapeados?: number;
-  } | null;
+  ultima_pasada?: BackfillPass | null;
+  /** Últimas ~10 pasadas (más reciente al final) — ritmo del robot. */
+  ultimas_pasadas?: BackfillPass[] | null;
 }
 
 export interface ProvidersStatus {
@@ -38,6 +43,8 @@ export interface ProvidersStatus {
   daily_limits: Record<string, number>;
   /** Snapshots de cuotas escritos por provider (capa de cuotas). */
   odds_snapshots_by_provider?: Record<string, number>;
+  /** Filas de cuotas escritas por día UTC ("YYYY-MM-DD" -> n). */
+  odds_snapshots_por_dia?: Record<string, number>;
   /** Eventos con cuotas registrados en odds_events. */
   odds_events_count?: number;
   /** Picks pendientes de backfill histórico de cuotas. */

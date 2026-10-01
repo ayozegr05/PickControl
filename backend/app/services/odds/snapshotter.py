@@ -61,6 +61,7 @@ from app.services.odds.base import EventRef, OddsProvider
 from app.services.odds.espn_odds import EspnOddsProvider
 from app.services.odds.sofascore import SofaScoreOddsProvider
 from app.services.results.base import (
+    count_odds_rows_written,
     is_missed,
     mark_missed,
     match_score,
@@ -472,6 +473,7 @@ async def run_odds_snapshot_cycle() -> dict[str, int]:
                 )
 
         await session.commit()
+        count_odds_rows_written(stats["filas"])
 
     logger.info(
         "[ODDS] ciclo: %d candidatos, %d eventos resueltos, %d capturas, %d filas",

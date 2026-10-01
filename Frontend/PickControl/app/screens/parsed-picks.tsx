@@ -795,6 +795,14 @@ export default function ParsedPicksScreen() {
               {providersStatus.odds_events_count ?? 0} eventos con cuota
               registrada
             </Text>
+            {Object.entries(
+              providersStatus.odds_snapshots_por_dia ?? {}
+            ).map(([dia, n]) => (
+              <Text key={dia} style={styles.statSub}>
+                {dia.slice(8, 10)}/{dia.slice(5, 7)} → {n} cuota
+                {n !== 1 ? "s" : ""} guardada{n !== 1 ? "s" : ""}
+              </Text>
+            ))}
             {providersStatus.odds_backfill && (
               <View style={styles.funnel}>
                 <Text style={styles.funnelHint}>
@@ -870,21 +878,27 @@ export default function ParsedPicksScreen() {
                     </Text>
                   ) : null;
                 })()}
-                {providersStatus.odds_backfill.ultima_pasada?.at && (
-                  <Text style={styles.statSub}>
-                    Última pasada{" "}
-                    {providersStatus.odds_backfill.ultima_pasada.at
-                      .slice(5, 16)
-                      .replace("T", " ")}{" "}
-                    UTC ·{" "}
-                    {providersStatus.odds_backfill.ultima_pasada
-                      .revisados ?? 0}{" "}
-                    revisados ·{" "}
-                    {providersStatus.odds_backfill.ultima_pasada.filas ??
-                      0}{" "}
-                    cuotas registradas
-                  </Text>
-                )}
+                {(() => {
+                  // Historial de pasadas (más reciente primero); si aún
+                  // no existe la lista, al menos la última suelta.
+                  const pasadas = (
+                    providersStatus.odds_backfill?.ultimas_pasadas ??
+                    (providersStatus.odds_backfill?.ultima_pasada
+                      ? [providersStatus.odds_backfill.ultima_pasada]
+                      : [])
+                  )
+                    .slice(-5)
+                    .reverse();
+                  return pasadas.map((p, i) => (
+                    <Text key={p.at ?? i} style={styles.statSub}>
+                      {i === 0 ? "Última pasada" : "Pasada anterior"}{" "}
+                      {(p.at ?? "").slice(5, 16).replace("T", " ")} UTC ·{" "}
+                      {p.revisados ?? 0} revisados ·{" "}
+                      {p.con_fixture ?? 0} con partido · {p.filas ?? 0}{" "}
+                      cuotas registradas
+                    </Text>
+                  ));
+                })()}
               </View>
             )}
           </View>

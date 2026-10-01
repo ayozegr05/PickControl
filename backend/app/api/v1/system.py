@@ -42,6 +42,9 @@ class BackfillStatus(BaseModel):
     gemini_pendientes: int
     fuentes_en_pausa: dict[str, str]
     ultima_pasada: dict | None = None
+    # Últimas pasadas del loop (más reciente al final) — permite
+    # comparar ritmo entre ejecuciones sin mirar logs.
+    ultimas_pasadas: list[dict] | None = None
 
 
 class ProvidersStatus(BaseModel):
@@ -62,6 +65,9 @@ class ProvidersStatus(BaseModel):
     # allsportsapi2, sofascore_direct, oddspapi, oddsfeed...), eventos
     # con cuota registrados y picks pendientes de backfill histórico.
     odds_snapshots_by_provider: dict[str, int]
+    # Filas de cuotas escritas por día ("YYYY-MM-DD" -> n), últimos
+    # 14 días — termómetro de si la capa produce datos o está parada.
+    odds_snapshots_por_dia: dict[str, int]
     odds_events_count: int
     odds_backfill_pending: int
     # Embudo del backlog de cuotas (en_cola / aplazados / por fuente /
@@ -107,6 +113,9 @@ async def providers_status(
         **results_base.providers_snapshot(),
         resolved_by_provider={str(name): n for name, n in rows},
         odds_snapshots_by_provider={str(name): n for name, n in odds_rows},
+        # captured_at puede ser histórico (curvas OddsPapi) — las filas
+        # escritas por día las cuenta el contador, no la tabla.
+        odds_snapshots_por_dia=results_base.odds_rows_by_day(),
         odds_events_count=int(odds_events),
         odds_backfill_pending=await count_pending_backfill(session),
         odds_backfill=BackfillStatus(**breakdown) if breakdown else None,

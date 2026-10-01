@@ -665,6 +665,38 @@ def providers_snapshot() -> dict:
     }
 
 
+_ODDS_ROWS_DAY_LIMIT = 14
+
+
+def count_odds_rows_written(n: int) -> None:
+    """Cuenta filas de cuotas escritas hoy (métrica por día).
+
+    `odds_snapshots.captured_at` puede ser un timestamp histórico
+    real (curvas de OddsPapi), así que no sirve para medir cuánto
+    escribió el sistema cada día — este contador sí: lo llaman el
+    snapshotter y el backfill una vez por pasada, tras el commit.
+    Persistido en `provider_state.json` bajo `odds_rows_by_day`
+    (últimos 14 días).
+    """
+    if n <= 0:
+        return
+    state = _load_state()
+    by_day = state.setdefault("odds_rows_by_day", {})
+    today = utc_now().date().isoformat()
+    by_day[today] = int(by_day.get(today, 0)) + n
+    # Poda: conservar solo los últimos N días.
+    if len(by_day) > _ODDS_ROWS_DAY_LIMIT:
+        for old in sorted(by_day)[:-_ODDS_ROWS_DAY_LIMIT]:
+            del by_day[old]
+    _save_state()
+
+
+def odds_rows_by_day() -> dict[str, int]:
+    """Filas de cuotas escritas por día UTC, más reciente primero."""
+    by_day = _load_state().get("odds_rows_by_day", {})
+    return dict(sorted(by_day.items(), reverse=True))
+
+
 def record_void_recheck(stats: dict[str, int]) -> None:
     """Registra el resumen de una pasada correctiva de anuladas.
 
@@ -717,23 +749,37 @@ def rate_limited_until(provider_name: str) -> datetime | None:
         return None
 
 
+_LOOP_HISTORY_MAX = 10
+
+
 def record_loop_summary(loop_name: str, summary: dict) -> None:
     """Guarda el mini-resumen de la última pasada de un loop
     (p. ej. el backfill de cuotas: revisados, filas, llamadas).
 
     Persistido en `provider_state.json` bajo `summaries` — la
     pantalla de depuración muestra qué hizo la última pasada sin
-    tener que abrir logs del contenedor."""
-    _load_state().setdefault("summaries", {})[loop_name] = {
-        "at": utc_now().isoformat(),
-        **summary,
-    }
+    tener que abrir logs del contenedor. Además acumula en
+    `summaries_history` las últimas `_LOOP_HISTORY_MAX` pasadas
+    (más reciente al final) para poder comparar ritmo de trabajo
+    entre ejecuciones."""
+    state = _load_state()
+    entry = {"at": utc_now().isoformat(), **summary}
+    state.setdefault("summaries", {})[loop_name] = entry
+    history = state.setdefault("summaries_history", {}).setdefault(loop_name, [])
+    history.append(entry)
+    del history[:-_LOOP_HISTORY_MAX]
     _save_state()
 
 
 def loop_summary(loop_name: str) -> dict | None:
     """Último resumen registrado para `loop_name`, o None."""
     return _load_state().get("summaries", {}).get(loop_name)
+
+
+def loop_history(loop_name: str) -> list[dict]:
+    """Últimas pasadas registradas para `loop_name` (más reciente al
+    final), o lista vacía si el loop aún no resumió ninguna."""
+    return _load_state().get("summaries_history", {}).get(loop_name, [])
 
 
 def mark_missed(key: str) -> None:
