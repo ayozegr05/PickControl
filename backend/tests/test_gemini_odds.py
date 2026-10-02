@@ -562,7 +562,7 @@ class TestBackfillBreakdown:
         assert bd["aplazados"] == 1
         assert bd["agotados"] == 1
         # En cola solo le debe oddsfeed (oddspapi está aparcada).
-        assert bd["por_fuente"] == {"oddspapi": 0, "oddsfeed": 1}
+        assert bd["por_fuente"] == {"tennisdata": 0, "oddspapi": 0, "oddsfeed": 1}
         assert bd["gemini_pendientes"] == 1
         assert "oddspapi" in bd["fuentes_en_pausa"]
         # El contador del job diario solo mide trabajo real (en_cola).

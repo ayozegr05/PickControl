@@ -7,6 +7,10 @@ en vivo.
 
 Fuentes en cascada (orden = prioridad, no volumen):
 
+0. `tennisdata` (tennis-data.co.uk): XLSX anuales GRATIS de cuotas de
+   ganador ATP/WTA (Pinnacle/B365). Sin key ni cuota — drena los picks
+   de tenis `mercado="ganador"` sin gastar una sola llamada de las
+   APIs de pago. No cubre Challengers/ITF ni mercados de juegos.
 1. `oddspapi` (bet36528): el rico — 33k mercados (córners, tarjetas,
    props...) pero BASIC son solo 200 req/mes.
 2. `oddsfeed` (odds-feed): solo mercados principales (1X2, O/U,
@@ -55,7 +59,7 @@ from app.models.odds_snapshot import OddsEvent, OddsSnapshot
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage  # noqa: F401
 from app.models.user import User  # noqa: F401  (FKs de TelegramRawMessage)
-from app.services.odds import oddsfeed, oddspapi
+from app.services.odds import oddsfeed, oddspapi, tennisdata
 from app.services.odds.compare import map_pick_choices
 from app.services.odds.event_rescue import looks_like_match_hint, rescue_evento
 from app.services.odds.oddsfeed import (
@@ -80,6 +84,7 @@ from app.services.odds.oddspapi import (
 from app.services.odds.snapshotter import _canonical_sport, _lookup_hint
 from app.services.results.base import (
     count_odds_rows_written,
+    count_provider_call,
     is_missed,
     loop_history,
     loop_summary,
@@ -347,6 +352,51 @@ class _OddsFeedSource:
         return "ok", choices
 
 
+class _TennisDataSource:
+    """tennis-data.co.uk: un XLSX anual por circuito, sin key ni cuota.
+
+    El "listado de eventos del día" es la fila del archivo con esa
+    fecha; el "histórico" son las cuotas de ganador que ya trae la
+    misma fila — cero llamadas extra por partido. El archivo se
+    descarga una vez por año y pasada (caché en memoria: puede
+    actualizarse durante la temporada)."""
+
+    name = tennisdata.NAME
+
+    def __init__(self) -> None:
+        self._years: dict[int, Optional[list[tennisdata.TennisMatch]]] = {}
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return {"tenis": 0}
+
+    async def _year_rows(self, http, year: int):
+        if year not in self._years:
+            self._years[year] = await tennisdata.fetch_year(http, year)
+            if self._years[year] is not None:
+                count_provider_call(self.name)
+        return self._years[year]
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        rows = await self._year_rows(http, day.year)
+        if rows is None:
+            return None
+        return [row for row in rows if row.day == day]
+
+    def match(self, fixtures, hint, dt, sofascore_id):
+        return tennisdata.match_row(fixtures, hint)
+
+    def ext_id(self, fixture: tennisdata.TennisMatch) -> str:
+        return tennisdata.event_ext_id(fixture)
+
+    def fixture_key(self, fixture: tennisdata.TennisMatch) -> str:
+        return self.ext_id(fixture)
+
+    async def choices(self, http, fixture: tennisdata.TennisMatch, sport, picks):
+        choices = tennisdata.row_choices(fixture)
+        return ("ok", choices) if choices else ("miss", [])
+
+
 def _book_defs(books, book) -> list:
     """Las (idx, choice_name, choice_group) del market_book dado."""
     for candidate, defs in books:
@@ -355,7 +405,12 @@ def _book_defs(books, book) -> list:
     return []
 
 
-_BACKFILL_PROVIDERS = (oddspapi.NAME, oddsfeed.NAME, _GEMINI_ODDS_PROVIDER)
+_BACKFILL_PROVIDERS = (
+    tennisdata.NAME,
+    oddspapi.NAME,
+    oddsfeed.NAME,
+    _GEMINI_ODDS_PROVIDER,
+)
 
 
 async def _load_picks(session, limit: int | None) -> list[ParsedPick]:
@@ -386,7 +441,7 @@ async def _done_event_ids(session) -> set[str]:
 
 def _sources(settings) -> list[_HistorySource]:
     """Fuentes disponibles según la configuración, en orden de uso."""
-    sources: list[_HistorySource] = []
+    sources: list[_HistorySource] = [_TennisDataSource()]
     if settings.rapidapi_tennis_key:
         sources.append(
             _OddsPapiSource(
@@ -422,9 +477,14 @@ def _pick_pending(pick: ParsedPick, done: set[str], settings) -> bool:
     # de Gemini hace falta).
     if pick.odds_event_id in done:
         return False
+    # Solo cuentan las fuentes que cubren el deporte del pick — un
+    # fútbol nunca lo intenta tennisdata y no debe quedar "en cola"
+    # suyo para siempre.
+    sport = _canonical_sport(pick.deporte)
+    covering = [s for s in _sources(settings) if sport in s.sport_ids]
     sources_missed = all(
         is_missed(f"{s.name}|nofixture|{pick.id}") or _source_quota_parked(s)
-        for s in _sources(settings)
+        for s in covering
     )
     if not sources_missed:
         return True
@@ -471,7 +531,12 @@ async def backfill_breakdown(session) -> dict:
         if pick.odds_event_id in done:
             resueltos += 1
             continue
-        owing = [s for s in sources if not is_missed(f"{s.name}|nofixture|{pick.id}")]
+        sport = _canonical_sport(pick.deporte)
+        owing = [
+            s
+            for s in sources
+            if sport in s.sport_ids and not is_missed(f"{s.name}|nofixture|{pick.id}")
+        ]
         live_owing = [s for s in owing if s.name not in parked]
         for s in live_owing:
             por_fuente[s.name] += 1
@@ -967,8 +1032,8 @@ async def run(apply: bool, limit: int | None) -> BackfillReport:
     settings = get_settings()
     report = BackfillReport()
     sources = _sources(settings)
-    if not sources:
-        report.detalles.append("Sin RAPIDAPI_TENNIS_KEY configurada.")
+    if not sources:  # imposible hoy: tennisdata no pide key
+        report.detalles.append("Sin fuentes de histórico disponibles.")
         return report
 
     async with AsyncSessionLocal() as session, httpx.AsyncClient(timeout=60) as http:

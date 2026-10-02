@@ -30,3 +30,6 @@ telethon>=1.44,<2.0
 # API nativa de Sofascore: atraviesa el fingerprinting TLS de Cloudflare
 # (httpx/curl reciben 403). Usado por sofascore_native — cuota ilimitada.
 curl-cffi>=0.8,<1.0
+
+# XLSX de tennis-data.co.uk (backfill de cuotas ATP/WTA, gratis).
+openpyxl>=3.1,<4.0
