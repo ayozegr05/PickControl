@@ -727,6 +727,31 @@ Pendiente:
             y el resumen cuenta `sin_revisar` (picks a los que no llegó
             la paga diaria de 40 llamadas — antes parecía "0 filas"
             sin explicación).
+      - [x] **Fuente gratis tennis-data.co.uk** (2026-10-02): XLSX anual
+            por circuito (ATP/WTA, ~4400 partidos/año) con cuotas de
+            ganador Pinnacle/B365/Max/Avg del día del partido — sin key
+            ni cuota. `odds/tennisdata.py` + `_TennisDataSource` primera
+            en la cascada de backfill: casa pick por fecha + apellido
+            (`_pair_similar` entiende "Apellido I." y dobles) y escribe
+            "Full time" 1/2 con el punto Pinnacle (fallback B365→Avg).
+            Solo tour principal: Challengers/ITF y mercados de juegos
+            siguen a las fuentes de pago (marca `nofixture` propia).
+            El archivo se actualiza con ~3 días de lag. Bug arreglado
+            de paso: el embudo ya no cuenta fuentes que no cubren el
+            deporte del pick (`_pick_pending`/`backfill_breakdown`).
+      - [ ] **Backfill vía Sofascore (allsportsapi2)**: descubierto que
+            `/api/match/{id}/odds` devuelve 18 mercados de partidos YA
+            JUGADOS (ruta: search → `team/{id}/matches/previous/{page}`
+            30 ev/pág → odds). Cobertura total Sofascore: selecciones,
+            femenino, ligas minúsculas — justo el backlog de fútbol.
+            ~3 llamadas/pick (cacheables por equipo); pendiente saber
+            si el límite (~50 restantes) es diario o mensual. Pro plan
+            $19.99/mo = ilimitado si hace falta.
+      - [ ] **football-data.co.uk CSVs para fútbol** (gratis, ilimitado):
+            ya integrado para stats (`backfill_stats_csv.py`); las mismas
+            filas traen B365/Pinnacle cierre 1X2 + O/U 2.5 + AH. Cobertura
+            baja del backlog actual (solo ligas grandes de clubes, no
+            selecciones/femenino/minúsculas) pero gratis para siempre.
       - [ ] **Política de quota de OddsPapi al renovar (20/10)**: ~200
             req/mes se agotan rápido si va primero en todos los cubos.
             Valorar: reservarla a tenis (donde más aporta), orden por
