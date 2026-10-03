@@ -3695,3 +3695,62 @@ class TestEventoFeoRescate:
         await verify_pick(pick, [provider])
 
         assert pick.evento == "Alcaraz - Sinner"
+
+
+class TestAmbosRecibenTarjeta:
+    """ "Ambos equipos recibirán una tarjeta": BTTS de tarjetas, se
+    resuelve con stats por equipo (amarillas + rojas >= 1 por lado)."""
+
+    async def test_ambos_tarjeteados_acierta(self):
+        stats = _stats(
+            {"Yellow Cards": 1, "Red Cards": 0},
+            {"Yellow Cards": 3, "Red Cards": 0},
+        )
+        pick = _pick("Ambos equipos recibirán una tarjeta", "over/under")
+        acierto, _ = await verify_pick(pick, [_StubStatsProvider(stats)])
+        assert acierto is True
+
+    async def test_uno_sin_tarjeta_falla(self):
+        stats = _stats(
+            {"Yellow Cards": 0, "Red Cards": 0},
+            {"Yellow Cards": 3, "Red Cards": 0},
+        )
+        pick = _pick("Ambos equipos recibirán una tarjeta", "over/under")
+        acierto, _ = await verify_pick(pick, [_StubStatsProvider(stats)])
+        assert acierto is False
+
+    async def test_roja_tambien_cuenta(self):
+        stats = _stats(
+            {"Yellow Cards": 0, "Red Cards": 1},
+            {"Yellow Cards": 2, "Red Cards": 0},
+        )
+        pick = _pick("Ambos equipos recibirán una tarjeta", "over/under")
+        acierto, _ = await verify_pick(pick, [_StubStatsProvider(stats)])
+        assert acierto is True
+
+    async def test_sin_stats_pendiente(self):
+        pick = _pick("Ambos equipos recibirán una tarjeta", "over/under")
+        acierto, anulada = await verify_pick(pick, [_StubStatsProvider(None)])
+        assert (acierto, anulada) == (None, False)
+
+
+class TestAmonestacionJugador:
+    """ "Recibe amonestación X" es el mismo mercado "booked" que "recibe
+    tarjeta X" — la variante del slip no debe perderse."""
+
+    async def test_amonestacion_acierta(self):
+        provider = _StubEventsProvider(
+            _events(scorers=[], booked=["Alexis Mac Allister"])
+        )
+        pick = _pick("Recibe amonestación Alexis Mac Allister", "ganador")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_amonestacion_falla_si_jugo_sin_tarjeta(self):
+        provider = _StubEventsProvider(
+            _events(scorers=[], booked=["Otro Jugador"]),
+            players=_players(played=["Alexis Mac Allister"]),
+        )
+        pick = _pick("Recibe amonestación Alexis Mac Allister", "ganador")
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False

@@ -303,6 +303,13 @@ _BTTS_NO_PATTERN = re.compile(
     r"al\s+menos\s+un\s+equipo\s+no\s+(?:marca|anota)",
     re.IGNORECASE,
 )
+# "Ambos equipos recibirán una tarjeta": el BTTS de tarjetas. Se
+# resuelve con las stats por equipo (amarillas+rojas >= 1 en cada
+# lado); sin datos de tarjetas queda pendiente — nunca se infiere
+# del marcador.
+_BOTH_CARDED_PATTERN = re.compile(
+    r"ambos\s+(?:equipos?|conjuntos)\b[^.\n]*\btarjeta", re.IGNORECASE
+)
 _DRAW_NO_BET_PATTERN = re.compile(
     r"resultado\s+sin\s+empate|empate\s+no\s+v[aá]lido|draw\s+no\s+bet|"
     r"empate.{0,10}apuesta\s+no\s+v[aá]lida",
@@ -686,8 +693,8 @@ _PLAYER_SCORER_PATTERN = re.compile(
 )
 _PLAYER_ASSIST_PATTERN = re.compile(r"\basist", re.IGNORECASE)
 _PLAYER_CARD_PATTERN = re.compile(
-    r"recibe\s+(?:una\s+)?tarjeta|recibir[aá]\s+(?:una\s+)?tarjeta|"
-    r"amonestad|sancionad|"
+    r"recibe\s+(?:una\s+)?tarjeta|recibir\w*\s+(?:una\s+)?tarjeta|"
+    r"amonesta|sanciona|"
     r"ver[aá]\s+tarjeta|se\s+le\s+muestra\s+tarjeta|\bcarded\b",
     re.IGNORECASE,
 )
@@ -695,8 +702,8 @@ _PLAYER_CARD_PATTERN = re.compile(
 _PLAYER_MARKET_NOISE = re.compile(
     r"jugador\s+que|marca\s+o\s+asiste|marca\s+en\s+cualquier\s+momento|"
     r"marca\s+gol(?:es)?|\bmarca\b|\banotar?[áa]?\b|goleador|scorer|"
-    r"anytime|primer|segundo|[úu]ltimo|recibe|recibir[aá]|amonestad[oa]?|"
-    r"sancionad[oa]?|ver[aá]|se\s+le\s+muestra|\btarjeta\b|en\s+cualquier\s+momento",
+    r"anytime|primer|segundo|[úu]ltimo|recibe|recibi\w*|amonesta\w*|"
+    r"sanciona\w*|ver[aá]|se\s+le\s+muestra|\btarjeta\b|en\s+cualquier\s+momento",
     re.IGNORECASE,
 )
 
@@ -2290,6 +2297,30 @@ async def _verify_pick_result(
                 if not match:
                     return None, False
             return _resolve_btts(match, yes=bool(btts_yes) and not btts_no)
+
+        # "Ambos equipos recibirán una tarjeta": BTTS de tarjetas —
+        # necesita las stats por equipo (amarillas + rojas >= 1 en cada
+        # lado). Si solo hay un tipo de tarjeta y algún equipo quedó en
+        # 0 no se puede descartar el otro tipo: pendiente.
+        if _BOTH_CARDED_PATTERN.search(combined):
+            if not pick.evento:
+                return None, False
+            stats = await _find_stats_across_providers(
+                pick.fecha_evento, pick.evento, providers_for_sport, pick.id
+            )
+            if not stats:
+                return None, False
+            yellow = stats.values.get("Yellow Cards")
+            red = stats.values.get("Red Cards")
+            if not yellow and not red:
+                return None, False
+            home_cards = sum(v[0] for v in (yellow, red) if v)
+            away_cards = sum(v[1] for v in (yellow, red) if v)
+            if home_cards >= 1 and away_cards >= 1:
+                return True, False
+            if yellow and red:
+                return False, False
+            return None, False
 
         # "Empate" / "X" / "Tablas" (también "al descanso" con 1ª parte):
         # la selección no nombra equipo — el cruce viene de `evento`.
