@@ -14,7 +14,11 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.services.maintenance.backlog import run_backlog_verification
 from app.services.maintenance.rescue import run_rescue_cycle
-from app.services.odds.historical_backfill import count_pending_backfill, run
+from app.services.odds.historical_backfill import (
+    count_pending_backfill,
+    run,
+    run_gemini_odds_pass,
+)
 from app.services.odds.snapshotter import run_odds_snapshot_cycle
 from app.services.results.base import loop_due, mark_loop_ran
 from app.services.results.verifier import (
@@ -38,6 +42,11 @@ _VOID_RECHECK_INTERVAL_SECONDS = 24 * 3600
 # combinadas viejas sobre todo) también una vez al día — antes era
 # solo script manual y los padres se quedaban abiertos para siempre.
 _BACKLOG_INTERVAL_SECONDS = 24 * 3600
+# Goteo de cuotas vía Gemini: el cooldown del free tier dura ~20 min,
+# así que esperar al backfill diario dejaba el grifo cerrado todo el
+# día. Cada 25 min se reintenta; sin candidatos o en cooldown la
+# pasada sale gratis (early-exit, ni una llamada al modelo).
+_GEMINI_ODDS_INTERVAL_SECONDS = 25 * 60
 
 
 async def _run_telegram_listener() -> None:
@@ -171,6 +180,30 @@ async def _run_odds_backfill_loop() -> None:
         await asyncio.sleep(interval_seconds)
 
 
+async def _run_gemini_odds_loop() -> None:
+    """Drenaje a goteo de la cola de cuotas históricas vía Gemini.
+
+    Corre independiente del backfill diario: procesa hasta
+    `_GEMINI_MAX_EVENTS_PER_RUN` eventos por pasada y se corta solo
+    cuando el free tier entra en cooldown — retomando a los 25 min,
+    no al día siguiente.
+    """
+    while True:
+        try:
+            if loop_due("gemini_odds", _GEMINI_ODDS_INTERVAL_SECONDS):
+                report = await run_gemini_odds_pass(apply=True)
+                if report is not None:
+                    mark_loop_ran("gemini_odds")
+                    logger.info(
+                        "[GEMINI_ODDS] Goteo: %s mapeados, %s filas.",
+                        report.mapeados,
+                        report.filas,
+                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[GEMINI_ODDS] Error en el goteo de cuotas: %s", exc)
+        await asyncio.sleep(_GEMINI_ODDS_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown de FastAPI: arranca el listener de Telegram como
@@ -229,6 +262,15 @@ async def lifespan(app: FastAPI):
             settings.odds_backfill_interval_hours,
         )
 
+    gemini_odds_task: asyncio.Task | None = None
+    if settings.google_api_key:
+        gemini_odds_task = asyncio.create_task(_run_gemini_odds_loop())
+        logger.info(
+            "[LIFECYCLE] Goteo de cuotas Gemini iniciado en segundo plano "
+            "(cada %s min).",
+            _GEMINI_ODDS_INTERVAL_SECONDS // 60,
+        )
+
     try:
         yield
     finally:
@@ -265,6 +307,7 @@ async def lifespan(app: FastAPI):
         for task, name in (
             (rescue_task, "Rescate OCR/reproceso"),
             (backfill_task, "Backfill de cuotas"),
+            (gemini_odds_task, "Goteo de cuotas Gemini"),
         ):
             if task is not None:
                 task.cancel()

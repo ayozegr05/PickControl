@@ -637,3 +637,111 @@ class TestBackfillBreakdown:
         bd = await hb.backfill_breakdown(session)
         assert bd["resueltos"] == 0
         assert bd["en_cola"] == 1
+
+
+class TestGeminiPassGuards:
+    """Guardas del pass de Gemini: rescate validado, orden de grupos
+    y early-exit en cooldown (sin quemar rescates de OpenAI)."""
+
+    def _pick(self, **kwargs) -> ParsedPick:
+        kwargs.setdefault("id", 42)
+        kwargs.setdefault("raw_message_id", 1)
+        kwargs.setdefault("es_apuesta", True)
+        kwargs.setdefault("es_combinada", False)
+        kwargs.setdefault("deporte", "fútbol")
+        kwargs.setdefault("evento", "Parma vs Inter de Milán")
+        kwargs.setdefault("mercado", "más/menos goles")
+        kwargs.setdefault("seleccion", "Más de 2.5 goles")
+        kwargs.setdefault("linea", 2.5)
+        kwargs.setdefault("cuota", 1.90)
+        kwargs.setdefault("fecha_evento", utc_now() - timedelta(days=2))
+        return ParsedPick(**kwargs)
+
+    def _settings(self):
+        return SimpleNamespace(google_api_key="test-key")
+
+    async def test_rescate_sin_forma_de_partido_marca_done(self, session, monkeypatch):
+        """El rescate devolvió basura ("Sáb - sep"): no vale como cruce,
+        el pick se marca done y no se gasta ninguna búsqueda."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        monkeypatch.setattr(hb, "rescue_evento", AsyncMock(return_value="Sáb - sep"))
+        multi = AsyncMock(return_value={})
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        pick = self._pick(id=50, evento="9,5 córners en total")
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [pick], set(), set(), session, apply=True, report=report
+        )
+
+        multi.assert_not_awaited()
+        assert pick.evento == "9,5 córners en total"  # no se ensucia
+        assert results_base.is_missed("gemini-odds|done|50")
+
+    async def test_grupos_limpios_antes_que_rescatados(self, session, monkeypatch):
+        """Los eventos con cruce bueno de origen se buscan antes que
+        los que necesitaron rescate — la cuota escasa va a lo fiable."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        monkeypatch.setattr(
+            hb, "rescue_evento", AsyncMock(return_value="Alavés vs Valencia")
+        )
+        order: list[str] = []
+
+        async def multi(self, date, hint, descs):
+            order.append(hint)
+            return {}
+
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        # El rescatado va PRIMERO en la lista de candidatos (fecha más
+        # vieja) — la prioridad tiene que poner el limpio delante.
+        rescued_pick = self._pick(
+            id=51,
+            evento="9,5 córners en total",
+            fecha_evento=utc_now() - timedelta(days=5),
+        )
+        clean_pick = self._pick(id=52, evento="Sevilla vs Betis")
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [rescued_pick, clean_pick],
+            set(),
+            set(),
+            session,
+            apply=True,
+            report=report,
+        )
+
+        # El hint que se busca es el canónico (alias traducidos).
+        assert order == ["sevilla vs real betis", "alavés vs valencia"]
+
+    async def test_cooldown_no_quema_rescates(self, session, monkeypatch):
+        """En cooldown del free tier la pasada sale al principio: ni
+        un rescate de OpenAI ni una búsqueda."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        results_base.mark_cooldown("gemini-odds", utc_now() + timedelta(minutes=20))
+        rescue = AsyncMock(return_value="Alavés vs Valencia")
+        monkeypatch.setattr(hb, "rescue_evento", rescue)
+        multi = AsyncMock(return_value={})
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        pick = self._pick(id=53, evento="9,5 córners en total")
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [pick], set(), set(), session, apply=True, report=report
+        )
+
+        rescue.assert_not_awaited()
+        multi.assert_not_awaited()
+        # No marcada: se retoma cuando el cooldown expire.
+        assert not results_base.is_missed("gemini-odds|done|53")
+
+    async def test_run_gemini_odds_pass_en_cooldown_devuelve_none(self, monkeypatch):
+        """El drenaje a goteo sale gratis si el provider está aparcado."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        results_base.mark_cooldown("gemini-odds", utc_now() + timedelta(minutes=20))
+        assert await hb.run_gemini_odds_pass(apply=True) is None
+
+    async def test_run_gemini_odds_pass_sin_key_devuelve_none(self, monkeypatch):
+        monkeypatch.setattr(
+            hb,
+            "get_settings",
+            lambda: SimpleNamespace(google_api_key=None),
+        )
+        assert await hb.run_gemini_odds_pass(apply=True) is None

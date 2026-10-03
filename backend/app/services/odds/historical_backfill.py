@@ -95,6 +95,7 @@ from app.services.results.base import (
     count_odds_rows_written,
     count_provider_call,
     is_missed,
+    is_rate_limited,
     loop_history,
     loop_summary,
     mark_missed,
@@ -123,6 +124,9 @@ _GEMINI_ODDS_PROVIDER = "gemini-odds"
 # del free tier corta antes la pasada, así que el ritmo real se
 # auto-regula solo.
 _GEMINI_MAX_EVENTS_PER_RUN = 32
+# La pasada diaria y el loop de goteo comparten el pass de Gemini:
+# el candado evita que se pisen (mismo proceso, mismo candidatos).
+_gemini_pass_lock = asyncio.Lock()
 # Una fuente aparcada por quota más allá de este horizonte (~1 día,
 # p. ej. el reset mensual de una suscripción) no bloquea el drenaje
 # del backlog ni se le llama: no es un cooldown de ritmo, no hay nada
@@ -977,7 +981,10 @@ async def _run_gemini_pass(
     con el pick vía `map_pick_choices` (autocheck determinista).
     """
     settings = get_settings()
-    if not settings.google_api_key:
+    if not settings.google_api_key or is_rate_limited(_GEMINI_ODDS_PROVIDER):
+        # Sin key no hay nada que hacer; en cooldown tampoco — salir
+        # aquí evita quemar rescates de OpenAI para picks que no se
+        # van a buscar en esta pasada.
         return
     done_key = _gemini_done_key()
     resolved = resolved_picks or set()
@@ -1028,6 +1035,10 @@ async def _run_gemini_pass(
     # página del comparador — una búsqueda + una extracción por página
     # resuelven el grupo entero en vez de un ciclo por pick.
     groups: dict[tuple[str, date, str], list[ParsedPick]] = {}
+    # Los grupos cuyo cruce ya venía bien en el pick gastan las
+    # búsquedas antes que los que necesitaron rescate del raw (hint
+    # más fiable = búsqueda más útil con la cuota escasa).
+    group_rank: dict[tuple[str, date, str], int] = {}
     for pick in pending:
         sport = _canonical_sport(pick.deporte)
         hint = (_lookup_hint(pick, sport) or "") if sport else ""
@@ -1042,17 +1053,26 @@ async def _run_gemini_pass(
         # imposible y se intenta rescatar el partido del raw
         # (texto -> mini-LLM -> imagen del slip) antes de rendirlo.
         usable = bool(hint) and (sport == "tenis" or looks_like_match_hint(hint))
+        rescued_ok = False
         if not usable and sport != "tenis":
             rescued = await rescue_evento(session, pick, settings)
-            if rescued:
+            # El rescate también tiene que tener forma de cruce:
+            # basura tipo "Sáb - sep" haría una búsqueda imposible.
+            if rescued and looks_like_match_hint(rescued):
                 # In-place: la mutación solo se persiste si `run()`
                 # hace commit al final (modo apply).
                 pick.evento = rescued
                 session.add(pick)
                 hint = rescued
                 usable = True
+                rescued_ok = True
                 report.detalles.append(
                     f"  ~ pick {pick.id}: evento rescatado del raw -> {rescued}"
+                )
+            elif rescued:
+                report.detalles.append(
+                    f"  - pick {pick.id}: rescate sin forma de partido "
+                    f"({rescued}) [{_GEMINI_ODDS_PROVIDER}]"
                 )
             else:
                 report.detalles.append(
@@ -1064,11 +1084,13 @@ async def _run_gemini_pass(
                 mark_missed(done_key.format(pick.id))
             continue
         evento = re.sub(r"\s+", " ", (pick.evento or hint).strip().lower())
-        groups.setdefault((sport, pick.fecha_evento.date(), evento), []).append(pick)
+        key = (sport, pick.fecha_evento.date(), evento)
+        groups.setdefault(key, []).append(pick)
+        group_rank[key] = min(group_rank.get(key, 1), 1 if rescued_ok else 0)
 
-    for (sport, _day, _evento), group in list(groups.items())[
-        :_GEMINI_MAX_EVENTS_PER_RUN
-    ]:
+    for (sport, _day, _evento), group in sorted(
+        groups.items(), key=lambda kv: group_rank[kv[0]]
+    )[:_GEMINI_MAX_EVENTS_PER_RUN]:
         provider = GeminiResearchProvider(
             sport, settings.google_api_key, calls_as=_GEMINI_ODDS_PROVIDER
         )
@@ -1230,9 +1252,15 @@ async def run(apply: bool, limit: int | None) -> BackfillReport:
                 report,
                 resolved,
             )
-        await _run_gemini_pass(
-            picks, done, registered, session, apply, report, resolved
-        )
+        if _gemini_pass_lock.locked():
+            report.detalles.append(
+                "  ! [gemini-odds] pasada de goteo en curso — se omite"
+            )
+        else:
+            async with _gemini_pass_lock:
+                await _run_gemini_pass(
+                    picks, done, registered, session, apply, report, resolved
+                )
 
         if apply:
             await session.commit()
@@ -1256,3 +1284,54 @@ async def run(apply: bool, limit: int | None) -> BackfillReport:
             )
 
     return report
+
+
+async def run_gemini_odds_pass(apply: bool) -> Optional[BackfillReport]:
+    """Solo el tramo Gemini del backfill histórico (drenaje a goteo).
+
+    El cooldown del free tier dura ~20 min — esperar a la pasada
+    diaria dejaba el grifo cerrado 24 h. Este drenaje se engancha a
+    un loop corto propio (`_run_gemini_odds_loop` en lifecycle):
+
+    - sin key, provider aparcado o sin candidatos: sale gratis (unas
+      consultas a la BD y nada más);
+    - si la pasada diaria ya tiene el pass en curso: se omite para
+      no duplicar búsquedas sobre los mismos candidatos.
+
+    Devuelve el reporte si la pasada corrió, None si salió antes.
+    """
+    settings = get_settings()
+    if not settings.google_api_key or is_rate_limited(_GEMINI_ODDS_PROVIDER):
+        return None
+    if _gemini_pass_lock.locked():
+        return None
+    async with _gemini_pass_lock, AsyncSessionLocal() as session:
+        picks = await _load_picks(session, None)
+        done = await _done_event_ids(session)
+        resolved = await _resolved_pick_ids(session)
+        done_key = _gemini_done_key()
+        if not any(
+            p.id is not None
+            and p.id not in resolved
+            and not is_missed(done_key.format(p.id))
+            for p in picks
+        ):
+            return None
+        registered = set((await session.exec(select(OddsEvent.event_ext_id))).all())
+        report = BackfillReport()
+        await _run_gemini_pass(
+            picks, done, registered, session, apply, report, resolved
+        )
+        if apply:
+            await session.commit()
+            # Visible en la pantalla depurativa como "gemini_odds":
+            # qué hizo el último goteo sin abrir logs del contenedor.
+            record_loop_summary(
+                "gemini_odds",
+                {
+                    "mapeados": report.mapeados,
+                    "filas": report.filas,
+                    "detalles": report.detalles[:20],
+                },
+            )
+        return report
