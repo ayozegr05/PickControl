@@ -58,7 +58,7 @@ async def main(pick_id: int, apply: bool) -> None:
             session.add(pick)
             settled = await _settle_combinadas(session)
             await session.commit()
-            print(f"  aplicado; padres liquidados: {[p.id for p in settled]}")
+            print(f"  aplicado; padres liquidados: {settled}")
 
 
 if __name__ == "__main__":
