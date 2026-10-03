@@ -40,7 +40,11 @@ from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.services.results.base import fold_name
 from app.services.results.verifier import _COMBINADA_LOCKED_MOTIVOS
-from app.services.telegram.pick_extractor import ExtractedPick, extract_pick
+from app.services.telegram.pick_extractor import (
+    ExtractedPick,
+    _is_settled_ticket,
+    extract_pick,
+)
 from app.services.telegram.processor import _persist_patas
 
 logger = get_logger("app.maintenance.repair")
@@ -320,6 +324,20 @@ async def repair_pick(session, pick: ParsedPick, *, apply: bool) -> RepairReport
     if not source:
         report.action = "skipped"
         report.detail = "raw sin texto ni OCR"
+        return report
+
+    if _is_settled_ticket(source):
+        # Boleto ya liquidado (sello/payout): no es un pick abierto y no
+        # merece re-extracción — el fallback de reglas rescataría la
+        # palabra "GANADOR" del sello como si fuera la selección (caso
+        # real: pick 5158, slip del par ya cobrado).
+        report.action = "rejected"
+        report.detail = "el material es un boleto ya liquidado"
+        if apply:
+            pick.es_apuesta = False
+            pick.metodo = "rejected+reext"
+            await _supersede_legs(session, pick)
+            session.add(pick)
         return report
 
     settings = get_settings()

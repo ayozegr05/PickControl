@@ -429,6 +429,19 @@ async def retry_incomplete_picks(
 _DETERMINISTIC_REJECTS = (_is_settled_ticket,)
 
 
+async def _retriage_source(session, pick: ParsedPick, raw: TelegramRawMessage) -> str:
+    """Material del pick igual que lo ve `repair._source_text`: texto +
+    OCR propio y, si el raw no lo trae, el OCR del slip emparejado en
+    ventana de 10 min (par foto+texto). Sin él, un "texto de pick +
+    foto del boleto ya cobrado" (caso 5158) nunca sería detectable."""
+    from app.services.maintenance.repair import _source_text  # noqa: PLC0415
+
+    source, _ = await _source_text(session, pick)
+    if source:
+        return source
+    return (raw.extracted_text or raw.text or "").strip()
+
+
 async def retriage_pending_picks(
     max_age_days: Optional[float] = None,
 ) -> dict[str, int]:
@@ -461,7 +474,7 @@ async def retriage_pending_picks(
         resumen["candidatos"] = len(rows)
 
         for pick, raw in rows:
-            text = (raw.extracted_text or raw.text or "").strip()
+            text = await _retriage_source(session, pick, raw)
             if not text:
                 continue
             if any(reject(text) for reject in _DETERMINISTIC_REJECTS):

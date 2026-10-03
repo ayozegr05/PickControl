@@ -619,3 +619,72 @@ class TestRetriagePendingPicks:
         assert resumen["descartados"] == 0
         await session.refresh(pick)
         assert pick.es_apuesta is True
+
+    async def test_par_slip_liquidado_descarta_el_texto(self, session, monkeypatch):
+        """Par foto+texto (caso 5158): el pick nació del mensaje de
+        texto pero el slip emparejado en ±10 min era un boleto ya
+        cobrado — el material combinado manda y el pick se descarta."""
+        now = utc_now()
+        slip = await _raw(
+            session,
+            extracted_text=_SETTLED_SLIP,
+            received_at=now - timedelta(minutes=1),
+            processed=True,
+        )
+        raw = await _raw(
+            session,
+            text="STAKE 3\nNATIONS LEAGUE\nMÁS DE 6.0 CÓRNERS",
+            received_at=now,
+            processed=True,
+        )
+        pick = await self._pick(session, raw)
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+
+        resumen = await rescue.retriage_pending_picks()
+
+        assert resumen["descartados"] == 1
+        await session.refresh(pick)
+        assert pick.es_apuesta is False
+        _ = slip
+
+
+class TestRepairSettledSlip:
+    """`repair_pick`: el material liquidado se rechaza sin llegar al
+    fallback de reglas — si no, "GANADOR" del sello acababa como
+    selección rescatada (caso 5158)."""
+
+    async def test_par_liquidado_rechaza_sin_fallback(self, session):
+        from app.services.maintenance import repair
+
+        now = utc_now()
+        await _raw(
+            session,
+            extracted_text=_SETTLED_SLIP,
+            received_at=now - timedelta(minutes=1),
+            processed=True,
+        )
+        raw = await _raw(
+            session,
+            text="STAKE 3\nNATIONS LEAGUE\nMÁS DE 6.0 CÓRNERS",
+            received_at=now,
+            processed=True,
+        )
+        pick = ParsedPick(
+            raw_message_id=raw.id,
+            es_apuesta=True,
+            seleccion="GANADOR",
+            deporte="fútbol",
+            evento="Chipre v Armenia",
+            metodo="llm",
+        )
+        session.add(pick)
+        await session.commit()
+        await session.refresh(pick)
+
+        report = await repair.repair_pick(session, pick, apply=True)
+
+        assert report.action == "rejected"
+        await session.refresh(pick)
+        assert pick.es_apuesta is False
+        assert pick.metodo == "rejected+reext"
