@@ -579,6 +579,28 @@ def mark_rate_limited(
     )
 
 
+_RETRY_HINT = re.compile(r"(?:retry|try again) in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?")
+
+
+def retry_hint_seconds(resp: httpx.Response) -> Optional[float]:
+    """Segundos que pide esperar un 429 ("retry/try again in XhYmZs"
+    en el cuerpo o header Retry-After), o None si no trae hint."""
+    raw = (getattr(resp, "headers", None) or {}).get("retry-after")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    match = _RETRY_HINT.search(resp.text or "")
+    if not match or not any(match.groups()):
+        return None
+    hours, minutes, seconds = (
+        float(group) if group else 0.0 for group in match.groups()
+    )
+    total = hours * 3600 + minutes * 60 + seconds
+    return total or None
+
+
 def mark_cooldown(provider_name: str, until: datetime) -> None:
     """Registra un cooldown ya calculado por el provider para la vista
     de sistema (p. ej. el de 20 min de Gemini por RPM del free tier).

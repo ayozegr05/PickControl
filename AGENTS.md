@@ -62,8 +62,11 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     fetch propio (cae a FlareSolverr ante challenge) + parseo de
     enlaces — `url_context` solo queda como plan B cuando la página de
     resultados es ilegible. Los saltos 2/3 descargan esas páginas
-    nosotros y el modelo extrae JSON sobre su texto — así la cuota del
-    free tier casi solo se gasta en extracción. Fases:
+    nosotros y la extracción texto→JSON va PRIMERO por `compat_llm.py`
+    (cascada OpenAI-compatible gratis: Groq `llama-3.3-70b` → Cerebras →
+    OpenRouter `:free`, keys `GROQ_API_KEY`/`CEREBRAS_API_KEY`/
+    `OPENROUTER_API_KEY`, cooldown por endpoint con hint del 429) —
+    Gemini solo extrae cuando toda la cascada está seca. Fases:
     `find_postponed_match` devuelve SOLO estados no jugados
     (cancelled/postponed/walkover) con cita obligatoria; `find_match`
     liquida marcadores solo con fuente leída + doble lectura que debe

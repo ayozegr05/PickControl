@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     # OpenAI (opcional, para OCR de imágenes de Telegram).
     openai_api_key: str | None = None
 
+    # Extractores texto→JSON gratis (API OpenAI-compatible, sin
+    # tarjeta): cascada Groq -> Cerebras -> OpenRouter antes de gastar
+    # la cuota mínima de Gemini. Cada key activa su endpoint.
+    groq_api_key: str | None = None
+    cerebras_api_key: str | None = None
+    openrouter_api_key: str | None = None
+
     # Verificación automática de resultados (opcional).
     # football-data.org: ligas top (La Liga, Champions, Premier...), gratis.
     football_data_api_key: str | None = None

@@ -36,6 +36,7 @@ import httpx
 from app.core.config import get_settings
 from app.core.dates import utc_now
 from app.core.logging import get_logger
+from app.services.results import compat_llm
 from app.services.results.base import (
     MatchResult,
     MatchState,
@@ -45,6 +46,7 @@ from app.services.results.base import (
     is_rate_limited,
     mark_cooldown,
     rate_limit_from,
+    retry_hint_seconds,
 )
 
 logger = get_logger("app.results.gemini_research")
@@ -76,20 +78,6 @@ _429_COOLDOWN = timedelta(minutes=20)
 # una llamada redescubriendo que sigue seco — mientras los demás
 # siguen trabajando con su propia cuota independiente.
 _MODEL_QUOTA_UNTIL: dict[str, datetime] = {}
-_RETRY_HINT = re.compile(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?")
-
-
-def _retry_hint_seconds(resp: httpx.Response) -> Optional[float]:
-    """Segundos que pide esperar un 429 del free tier ("retry in XhYmZs"),
-    o None si la respuesta no trae hint — cooldown de ritmo entonces."""
-    match = _RETRY_HINT.search(resp.text or "")
-    if not match or not any(match.groups()):
-        return None
-    hours, minutes, seconds = (
-        float(group) if group else 0.0 for group in match.groups()
-    )
-    total = hours * 3600 + minutes * 60 + seconds
-    return total or None
 
 
 # Dominios de resultados que validan una respuesta (allowlist anti-
@@ -547,7 +535,14 @@ class GeminiResearchProvider:
         self._calls_as = calls_as or _PROVIDER_NAME
 
     def _in_cooldown(self) -> bool:
-        """429 reciente (ritmo del free tier) o marca global del día."""
+        """429 reciente (ritmo del free tier) o marca global del día.
+
+        Con un endpoint compat vivo la extracción no depende de la
+        cuota de Gemini: la búsqueda va por fetch propio y extraer
+        sale por Groq/Cerebras/OpenRouter, así que el cooldown del
+        free tier no debe parar el pipeline."""
+        if compat_llm.has_live_endpoint():
+            return False
         if self._cooldown_until and self._cooldown_until > utc_now():
             return True
         return is_rate_limited(_PROVIDER_NAME)
@@ -613,7 +608,7 @@ class GeminiResearchProvider:
                 # La cuota del free tier es por modelo: un 429 no
                 # implica que los demás estén secos — se prueban.
                 quota_hits += 1
-                hint = _retry_hint_seconds(quota_resp)
+                hint = retry_hint_seconds(quota_resp)
                 _MODEL_QUOTA_UNTIL[model] = utc_now() + (
                     timedelta(seconds=hint) if hint else _429_COOLDOWN
                 )
@@ -643,6 +638,21 @@ class GeminiResearchProvider:
                 self._cooldown_until.strftime("%H:%M"),
             )
         return None
+
+    async def _extract_text(self, prompt: str) -> Optional[tuple[str, list[str]]]:
+        """Extracción texto→JSON: primero los endpoints OpenAI-compat
+        gratuitos (Groq/Cerebras/OpenRouter — cuota diaria grande y
+        modelos 70B); Gemini solo si ninguno responde — su cuota es la
+        más pequeña. Devuelve (texto, urls_leídas_por_el_modelo) —
+        la lista solo es no-vacía cuando respondió Gemini con tool —
+        y el texto lo valida siempre quien llama contra la página."""
+        text = await compat_llm.extract_text(prompt)
+        if text:
+            return text, []
+        payload = await self._ask(prompt)
+        if payload is None:
+            return None
+        return self._payload_text(payload), self._payload_urls(payload)
 
     def _payload_text(self, payload: dict[str, Any]) -> str:
         candidates = payload.get("candidates") or []
@@ -785,7 +795,7 @@ class GeminiResearchProvider:
             pages.append(f"PÁGINA: {url}\n{text[:_PAGE_CHARS_PER_URL]}")
         if not fetched:
             return None
-        payload = await self._ask(
+        result = await self._extract_text(
             _VERIFY_PROMPT.format(
                 pages="\n\n".join(pages),
                 sport=self._sport_es(),
@@ -793,14 +803,15 @@ class GeminiResearchProvider:
                 date=date.strftime("%d de %B de %Y"),
             )
         )
-        if payload is None:
+        if not result:
             return None
-        data = _extract_json(self._payload_text(payload))
+        out, model_read = result
+        data = _extract_json(out)
         if not data:
             return None
         # Anti-alucinación: la cita debe ser una de las páginas que
         # descargamos (o que el modelo confirma haber leído).
-        read_urls = set(fetched) | set(self._payload_urls(payload))
+        read_urls = set(fetched) | set(model_read)
         sources = [str(s) for s in (data.get("sources") or []) if str(s) in read_urls]
         if not sources or not _trusted_domains(_domains_of(sources)):
             logger.info(
@@ -1097,7 +1108,7 @@ class GeminiResearchProvider:
             text = await self._fetch_page_text(url)
             if not text:
                 continue
-            payload = await self._ask(
+            result = await self._extract_text(
                 _FIXTURE_PROMPT.format(
                     text=text[:_PAGE_CHARS_PER_URL],
                     sport=self._sport_es(),
@@ -1106,9 +1117,9 @@ class GeminiResearchProvider:
                     date=date.strftime("%d de %B de %Y"),
                 )
             )
-            if payload is None:
+            if not result:
                 continue
-            data = _extract_json(self._payload_text(payload))
+            data = _extract_json(result[0])
             if not data:
                 continue
             fixture = str(data.get("fixture") or "").strip()
@@ -1161,7 +1172,7 @@ class GeminiResearchProvider:
             text = await self._fetch_page_text(url)
             if not text:
                 continue
-            payload = await self._ask(
+            result = await self._extract_text(
                 _STATS_PROMPT.format(
                     text=text,
                     sport=self._sport_es(),
@@ -1169,9 +1180,9 @@ class GeminiResearchProvider:
                     date=date.strftime("%d de %B de %Y"),
                 )
             )
-            if payload is None:
+            if not result:
                 continue
-            data = _extract_json(self._payload_text(payload))
+            data = _extract_json(result[0])
             if not data:
                 continue
             stats = self._stats_from_text(text, data)
@@ -1218,7 +1229,7 @@ class GeminiResearchProvider:
             text = await self._fetch_page_text(url)
             if not text:
                 continue
-            payload = await self._ask(
+            result = await self._extract_text(
                 _ODDS_PROMPT.format(
                     text=text[:_MAX_PAGE_CHARS],
                     sport=self._sport_es(),
@@ -1228,9 +1239,9 @@ class GeminiResearchProvider:
                     markets="|".join(_ODDS_MARKET_NAMES),
                 )
             )
-            if payload is None:
+            if not result:
                 continue
-            data = _extract_json(self._payload_text(payload))
+            data = _extract_json(result[0])
             if not data:
                 continue
             found = self._closing_from_text(text, data, url)
@@ -1278,7 +1289,7 @@ class GeminiResearchProvider:
             text = await self._fetch_page_text(url)
             if not text:
                 continue
-            payload = await self._ask(
+            result = await self._extract_text(
                 _ODDS_MULTI_PROMPT.format(
                     text=text[:_MAX_PAGE_CHARS],
                     sport=self._sport_es(),
@@ -1288,9 +1299,9 @@ class GeminiResearchProvider:
                     markets="|".join(_ODDS_MARKET_NAMES),
                 )
             )
-            if payload is None:
+            if not result:
                 continue
-            for entry in _extract_json_array(self._payload_text(payload)):
+            for entry in _extract_json_array(result[0]):
                 try:
                     idx = int(entry.get("n")) - 1
                 except (TypeError, ValueError):

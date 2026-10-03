@@ -90,6 +90,7 @@ from app.services.odds.oddspapi import (
     match_fixture as oddspapi_match,
 )
 from app.services.odds.snapshotter import _canonical_sport, _lookup_hint
+from app.services.results import compat_llm
 from app.services.results.base import (
     clear_missed,
     count_odds_rows_written,
@@ -118,6 +119,24 @@ _FEED_MAX_CALLS_PER_RUN = 40
 # intentado cuesta 2-4 llamadas al modelo; el presupuesto por pasada
 # comparte el free tier con la investigación de resultados.
 _GEMINI_ODDS_PROVIDER = "gemini-odds"
+
+
+def _llm_odds_configured(settings) -> bool:
+    """Extractor de cuotas configurado: Gemini o la cascada compat
+    (Groq/Cerebras/OpenRouter — los endpoints gratis dan más cuota
+    que el free tier de Google)."""
+    return bool(settings.google_api_key) or compat_llm.configured(settings)
+
+
+def _llm_odds_ready(settings) -> bool:
+    """Camino de extracción vivo AHORA: endpoint compat libre o
+    Gemini fuera de cooldown. Sin él, correr la pasada solo quema
+    rescates para picks que nadie va a extraer."""
+    if compat_llm.has_live_endpoint(settings):
+        return True
+    return bool(settings.google_api_key) and not is_rate_limited(_GEMINI_ODDS_PROVIDER)
+
+
 # Presupuesto por pasada en EVENTOS (no picks): varias patas del mismo
 # partido comparten una sola búsqueda web — el grupo entero se resuelve
 # con una extracción por página. Es un techo de seguridad: el cooldown
@@ -597,7 +616,9 @@ def _pick_pending(
     )
     if not sources_missed:
         return True
-    if settings.google_api_key and not is_missed(_gemini_done_key().format(pick.id)):
+    if _llm_odds_configured(settings) and not is_missed(
+        _gemini_done_key().format(pick.id)
+    ):
         return True
     return False
 
@@ -651,7 +672,7 @@ async def backfill_breakdown(session) -> dict:
         live_owing = [s for s in owing if s.name not in parked]
         for s in live_owing:
             por_fuente[s.name] += 1
-        gemini_owes = bool(settings.google_api_key) and not is_missed(
+        gemini_owes = _llm_odds_configured(settings) and not is_missed(
             _gemini_done_key().format(pick.id)
         )
         if gemini_owes:
@@ -981,7 +1002,7 @@ async def _run_gemini_pass(
     con el pick vía `map_pick_choices` (autocheck determinista).
     """
     settings = get_settings()
-    if not settings.google_api_key or is_rate_limited(_GEMINI_ODDS_PROVIDER):
+    if not _llm_odds_ready(settings):
         # Sin key no hay nada que hacer; en cooldown tampoco — salir
         # aquí evita quemar rescates de OpenAI para picks que no se
         # van a buscar en esta pasada.
@@ -1311,7 +1332,7 @@ async def run_gemini_odds_pass(apply: bool) -> Optional[BackfillReport]:
     Devuelve el reporte si la pasada corrió, None si salió antes.
     """
     settings = get_settings()
-    if not settings.google_api_key or is_rate_limited(_GEMINI_ODDS_PROVIDER):
+    if not _llm_odds_ready(settings):
         return None
     if _gemini_pass_lock.locked():
         return None

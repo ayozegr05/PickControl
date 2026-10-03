@@ -20,6 +20,7 @@ from app.services.odds.historical_backfill import (
     run_gemini_odds_pass,
 )
 from app.services.odds.snapshotter import run_odds_snapshot_cycle
+from app.services.results import compat_llm
 from app.services.results.base import loop_due, mark_loop_ran
 from app.services.results.verifier import (
     recheck_suspicious_voids,
@@ -263,7 +264,7 @@ async def lifespan(app: FastAPI):
         )
 
     gemini_odds_task: asyncio.Task | None = None
-    if settings.google_api_key:
+    if settings.google_api_key or compat_llm.configured(settings):
         gemini_odds_task = asyncio.create_task(_run_gemini_odds_loop())
         logger.info(
             "[LIFECYCLE] Goteo de cuotas Gemini iniciado en segundo plano "

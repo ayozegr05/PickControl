@@ -699,17 +699,17 @@ class TestModelQuotaCooldown:
         )
 
     def test_retry_hint_parsea_horas_minutos_segundos(self):
-        from app.services.results.gemini_research import _retry_hint_seconds
+        from app.services.results.base import retry_hint_seconds
 
         resp = SimpleNamespace(text="Please retry in 3h45m1.219278153s.")
-        assert _retry_hint_seconds(resp) == pytest.approx(
+        assert retry_hint_seconds(resp) == pytest.approx(
             3 * 3600 + 45 * 60 + 1.219278153
         )
 
     def test_retry_hint_sin_hint_devuelve_none(self):
-        from app.services.results.gemini_research import _retry_hint_seconds
+        from app.services.results.base import retry_hint_seconds
 
-        assert _retry_hint_seconds(SimpleNamespace(text="rate limit")) is None
+        assert retry_hint_seconds(SimpleNamespace(text="rate limit")) is None
 
     async def test_modelo_agotado_se_aparca_hasta_el_hint(self, provider, monkeypatch):
         from app.services.results import gemini_research as gr
