@@ -16,7 +16,7 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 
 | # | Pendiente | Qué falta | Esfuerzo | Ver |
 |---|---|---|---|---|
-| A1 | Barrido de backlog | Automatizado vía cron VM a las 00:30 UTC (`deploy/verify_backlog_cron.sh`, log en `verify_backlog.log`). Primera manual 2026-09-25: 126 intentados, 1 resuelto (providers RapidAPI sin cuota). Vigilar hasta que «backlog >14d» del panel converja | Hecho — queda vigilar | Bugs·ACCIÓN + P.4 |
+| A1 | Barrido de backlog | Automatizado dentro del loop del verifier (`run_backlog_verification` en `services/maintenance/backlog.py`, `loop_due` 24 h, delay 2 s) — sustituye al cron VM (`deploy/verify_backlog_cron.sh`, desinstalado 2026-10-03 para no duplicar). Primera manual 2026-09-25: 126 intentados, 1 resuelto (providers RapidAPI sin cuota). Vigilar hasta que «backlog >14d» del panel converja | Hecho — queda vigilar | Bugs·ACCIÓN + P.4 |
 
 > **A2 (`verify_now.py`) descartado**: el script solo llama a
 > `verify_pending_picks()` — la misma función que el verificador corre
