@@ -43,11 +43,15 @@ _VOID_RECHECK_INTERVAL_SECONDS = 24 * 3600
 # combinadas viejas sobre todo) también una vez al día — antes era
 # solo script manual y los padres se quedaban abiertos para siempre.
 _BACKLOG_INTERVAL_SECONDS = 24 * 3600
-# Goteo de cuotas vía Gemini: el cooldown del free tier dura ~20 min,
-# así que esperar al backfill diario dejaba el grifo cerrado todo el
-# día. Cada 25 min se reintenta; sin candidatos o en cooldown la
-# pasada sale gratis (early-exit, ni una llamada al modelo).
-_GEMINI_ODDS_INTERVAL_SECONDS = 25 * 60
+# Goteo de cuotas históricas: esperar al backfill diario dejaba el
+# grifo cerrado todo el día. Sin candidatos o en cooldown la pasada
+# sale gratis (early-exit, ni una llamada al modelo).
+# Con un extractor compat vivo (Groq/Cerebras/OpenRouter) el goteo
+# corre cada 3 min — sus cooldowns duran segundos-minutos. Cuando
+# solo queda Gemini, la cadencia vuelve a ~20 min: su free tier no
+# da para más y así no se machaca el fallback.
+_GEMINI_ODDS_INTERVAL_SECONDS = 3 * 60
+_GEMINI_ONLY_INTERVAL_SECONDS = 20 * 60
 
 
 async def _run_telegram_listener() -> None:
@@ -186,12 +190,18 @@ async def _run_gemini_odds_loop() -> None:
 
     Corre independiente del backfill diario: procesa hasta
     `_GEMINI_MAX_EVENTS_PER_RUN` eventos por pasada y se corta solo
-    cuando el free tier entra en cooldown — retomando a los 25 min,
-    no al día siguiente.
+    cuando toda la cascada entra en cooldown. El intervalo es
+    dinámico: 3 min con extractor compat vivo, ~20 si solo queda
+    Gemini — su cuota mínima manda el ritmo del fallback.
     """
     while True:
         try:
-            if loop_due("gemini_odds", _GEMINI_ODDS_INTERVAL_SECONDS):
+            interval = (
+                _GEMINI_ODDS_INTERVAL_SECONDS
+                if compat_llm.has_live_endpoint()
+                else _GEMINI_ONLY_INTERVAL_SECONDS
+            )
+            if loop_due("gemini_odds", interval):
                 report = await run_gemini_odds_pass(apply=True)
                 if report is not None:
                     mark_loop_ran("gemini_odds")
@@ -268,8 +278,9 @@ async def lifespan(app: FastAPI):
         gemini_odds_task = asyncio.create_task(_run_gemini_odds_loop())
         logger.info(
             "[LIFECYCLE] Goteo de cuotas Gemini iniciado en segundo plano "
-            "(cada %s min).",
+            "(cada %s min con extractor vivo; %s si solo queda Gemini).",
             _GEMINI_ODDS_INTERVAL_SECONDS // 60,
+            _GEMINI_ONLY_INTERVAL_SECONDS // 60,
         )
 
     try:
