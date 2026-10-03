@@ -572,9 +572,20 @@ class TestTennisMarkets:
         acierto, _ = await verify_pick(pick, [provider])
         assert acierto is False
 
-    async def test_handicap_sin_sujeto_zona_ambigua_pendiente(self):
-        # |línea| entre 2 y 3 sin sujeto: ambiguo sets/juegos.
+    async def test_handicap_zona_ambigua_bo3_es_juegos(self):
+        # |línea| 2.5 sin sujeto: si el partido solo jugó 2 sets es bo3
+        # y un hándicap de sets de -2.5 es imposible -> juegos.
+        # Alcaraz 6-4 6-4 = 12-8 juegos: -2.5 cubre.
         provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])
+        pick = _pick_tenis("Alcaraz -2.5", "hándicap")
+        pick.linea = -2.5
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_handicap_zona_ambigua_bo5_sigue_pendiente(self):
+        # Con 3+ sets jugados podría ser bo5 y un "-2.5 sets" sería un
+        # mercado real -> la ambigüedad se mantiene.
+        provider = _StubTennisProvider(3, 0, sets=[(6, 4), (6, 4), (6, 4)])
         pick = _pick_tenis("Alcaraz -2.5", "hándicap")
         pick.linea = -2.5
         acierto, anulada = await verify_pick(pick, [provider])

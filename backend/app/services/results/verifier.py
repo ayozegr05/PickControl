@@ -1413,16 +1413,19 @@ async def _verify_tennis_pick(
         return None, False
     # Sujeto del hándicap: explícito ("sets"/"juegos") o por magnitud
     # siguiendo la convención de las casas — |línea| <= 1.5 suele ser
-    # sets, >= 3.5 juegos. El rango intermedio es ambiguo -> pendiente.
+    # sets, >= 3.5 juegos. El rango intermedio no se decide a ciegas:
+    # se mira el partido real y, si solo se jugaron 2 sets, es bo3 y
+    # una línea > 2.0 no puede ser de sets -> es de juegos (caso real:
+    # slips bet365 "Shelton -2.5" sin la palabra "juegos" en mercado).
     player = _extract_tennis_player_name(seleccion)
     subject = _tennis_subject(text)
+    magnitude = abs(linea)
     if subject is None:
-        magnitude = abs(linea)
         if magnitude <= 1.5:
             subject = "sets"
         elif magnitude >= 3.5:
             subject = "games"
-    if not player or subject is None:
+    if not player:
         return None, False
     match = await _find_match_across_providers(
         pick.fecha_evento, _tennis_lookup_hint(pick, player), providers, pick.id
@@ -1433,6 +1436,16 @@ async def _verify_tennis_pick(
         return _void("retirada")
     if await _rearranged_fixture_void(pick, match, player, providers):
         return None, True
+    if subject is None:
+        # bo3 confirmado cuando el ganador se llevó <= 2 sets: ahí una
+        # línea > 2.0 no puede ser de sets -> juegos. Si el ganador
+        # hizo 3+ sets es bo5 y un "-2.5 sets" es un mercado real
+        # (Grand Slam) -> la ambigüedad se mantiene, pendiente.
+        ganador_sets = max(match.home_score or 0, match.away_score or 0)
+        if ganador_sets <= 2 and magnitude > 2.0:
+            subject = "games"
+        else:
+            return None, False
     if set_idx is not None:
         # Hándicap de juegos dentro de un set ("-1.5 juegos 1er set").
         in_set = _player_games_in_set(match, player, set_idx)
