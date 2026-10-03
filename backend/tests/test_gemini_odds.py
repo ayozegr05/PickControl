@@ -68,6 +68,40 @@ class TestOddsLiteralOk:
         text = "la cuota era 21.85"
         assert not GeminiResearchProvider._odds_literal_ok(text, "1.85", 1.85)
 
+    def test_ancla_lejos_rechaza(self):
+        # Caso real pick 1966: "11.00" era el precio del 1X2 rival,
+        # lejos de cualquier "Under"/"4" — colaba antes de las anclas.
+        lejos = "partido disputado en Anoeta " * 20
+        text = f"Espanyol gana a 11.00. {lejos} Menos de 4 goles a 1.05"
+        assert not GeminiResearchProvider._odds_literal_ok(
+            text, "11.00", 11.0, ["Under", "4"]
+        )
+
+    def test_ancla_cerca_acepta(self):
+        lejos = "partido disputado en Anoeta " * 20
+        text = f"Espanyol gana a 11.00. {lejos} Menos de 4 goles a 1.05"
+        assert GeminiResearchProvider._odds_literal_ok(
+            text, "1.05", 1.05, ["Under", "4"]
+        )
+
+    def test_ancla_numerica_no_mata_parciales(self):
+        # La línea "4" no casa dentro de "5.40" ni "14.5".
+        text = "Empate 5.40, corneres 14.5, nada mas"
+        assert not GeminiResearchProvider._odds_literal_ok(
+            text, "5.40", 5.40, ["Under", "4"]
+        )
+
+
+class TestLiteralAnchors:
+    def test_eleccion_1x2_sin_linea_no_ancla(self):
+        # "1"/"X"/"2" sueltas no son ancla útil: chequeo global.
+        from app.services.results.gemini_research import _literal_anchors
+
+        assert _literal_anchors("1", None) == []
+        assert _literal_anchors("2", None) == []
+        assert _literal_anchors("Over", "4.0") == ["Over", "4"]
+        assert _literal_anchors("Real Sociedad", None) == ["Real Sociedad"]
+
 
 class TestClosingFromText:
     def test_happy_path(self):

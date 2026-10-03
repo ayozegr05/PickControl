@@ -24,6 +24,7 @@ from app.core.config import Settings, get_settings
 from app.core.dates import utc_now
 from app.core.logging import get_logger
 from app.services.results.base import (
+    count_provider_call,
     is_rate_limited,
     mark_cooldown,
     retry_hint_seconds,
@@ -117,6 +118,7 @@ async def extract_text(
 
 async def _call(endpoint: Endpoint, key: str, prompt: str) -> Optional[str]:
     try:
+        count_provider_call(_mark(endpoint))
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.post(
                 f"{endpoint.base_url}/chat/completions",

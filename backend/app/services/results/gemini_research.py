@@ -483,6 +483,22 @@ def _comparator_variants(urls: list[str], descs: list[str]) -> list[str]:
     return [v for v in dict.fromkeys(variants) if v not in urls]
 
 
+def _literal_anchors(choice: str, group: Optional[str]) -> list[str]:
+    """Anclas de proximidad para la cuota literal: el nombre de la
+    selección ("Under", "Over", nombre de equipo) y/o la línea
+    ("4.0"). Las elecciones "1"/"X"/"2" no son ancla útil por sí
+    solas — sin línea caen al chequeo global de siempre."""
+    anchors: list[str] = []
+    if len(choice) > 2:
+        anchors.append(choice)
+    if group:
+        try:
+            anchors.append(f"{float(group):g}")
+        except (TypeError, ValueError):
+            anchors.append(group)
+    return anchors
+
+
 _ODDS_PROMPT = """Texto extraído de una página web de apuestas
 deportivas (comparador de cuotas o casa):
 
@@ -1461,7 +1477,8 @@ class GeminiResearchProvider:
         group = data.get("choice_group")
         group = str(group).strip() if group not in (None, "") else None
         literal = str(data.get("cuota_texto") or "").strip()
-        if not self._odds_literal_ok(text, literal, cuota):
+        anchors = _literal_anchors(choice, group)
+        if not self._odds_literal_ok(text, literal, cuota, anchors):
             return None
         return ClosingOdds(
             market_name=market,
@@ -1473,10 +1490,17 @@ class GeminiResearchProvider:
         )
 
     @staticmethod
-    def _odds_literal_ok(text: str, literal: str, cuota: float) -> bool:
+    def _odds_literal_ok(
+        text: str,
+        literal: str,
+        cuota: float,
+        anchors: Optional[list[str]] = None,
+    ) -> bool:
         """La cuota existe en la página: el literal copiado aparece en
         el texto y coincide numéricamente con el decimal devuelto
-        (fracción UK "a/b" -> a/b + 1)."""
+        (fracción UK "a/b" -> a/b + 1). Con `anchors`, además el literal
+        tiene que aparecer ~al lado de la selección/línea — sin eso un
+        precio de OTRO mercado de la misma tabla colaba."""
         variants = {f"{cuota:.2f}", f"{cuota:.2f}".replace(".", ",")}
         if literal:
             variants.add(literal)
@@ -1487,6 +1511,10 @@ class GeminiResearchProvider:
                 break
         if found is None:
             return False
+        if anchors and not GeminiResearchProvider._literal_near_anchor(
+            text, found, anchors
+        ):
+            return False
         frac = re.fullmatch(r"(\d+)\s*/\s*(\d+)", found)
         if frac:
             num, den = int(frac.group(1)), int(frac.group(2))
@@ -1495,3 +1523,26 @@ class GeminiResearchProvider:
             return abs(float(found.replace(",", ".")) - cuota) <= 0.02
         except ValueError:
             return False
+
+    @staticmethod
+    def _literal_near_anchor(text: str, literal: str, anchors: list[str]) -> bool:
+        """Alguna aparición del literal cae a ~150 chars de un ancla
+        (nombre de selección o línea): la cuota es de ESA selección,
+        no de otro mercado de la misma tabla."""
+        anchor_res = [
+            re.compile(
+                (
+                    rf"(?<![\d.,]){re.escape(a)}(?![\d.,])"
+                    if re.fullmatch(r"[\d.,]+", a)
+                    else re.escape(a)
+                ),
+                re.I,
+            )
+            for a in anchors
+            if a
+        ]
+        for m in re.finditer(re.escape(literal), text):
+            window = text[max(0, m.start() - 150) : m.end() + 150]
+            if any(ar.search(window) for ar in anchor_res):
+                return True
+        return False
