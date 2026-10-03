@@ -456,6 +456,11 @@ def _comparator_variants(urls: list[str], descs: list[str]) -> list[str]:
     for url in urls:
         if not any("oddsportal" in d for d in _domains_of([url])):
             continue
+        # Solo páginas de partido: en /h2h/ (historial entre equipos)
+        # o /team/ el fragmento no selecciona ninguna tabla de
+        # mercado — sería un render regalado.
+        if "/h2h/" in url or "/team/" in url:
+            continue
         base = url.split("#")[0].rstrip("/")
         if want_ou:
             line = next(

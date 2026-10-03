@@ -831,3 +831,11 @@ class TestMarketTargeting:
 
     def test_variants_sin_oddsportal_vacio(self):
         assert _comparator_variants(["https://x.io/y"], ["más de 2.5"]) == []
+
+    def test_variants_ignora_h2h_y_team(self):
+        """En páginas h2h/team el fragmento no selecciona tabla."""
+        urls = [
+            "https://www.oddsportal.com/football/h2h/a-x/b-y/",
+            "https://www.oddsportal.com/football/team/a/x/",
+        ]
+        assert _comparator_variants(urls, ["más de 2.5 goles"]) == []
