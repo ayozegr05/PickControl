@@ -249,6 +249,7 @@ class RapidApiTennisProvider:
                             home_score=0,
                             away_score=0,
                             status="retired",
+                            event_date=played,
                         )
                     continue
                 best_score = score
@@ -260,6 +261,7 @@ class RapidApiTennisProvider:
                     # Juegos por set (perspectiva del ganador) para
                     # mercados de juegos.
                     sets=_parse_set_games(result_str),
+                    event_date=played,
                 )
 
         if not best_match or best_score < _MIN_PLAYER_SIMILARITY:

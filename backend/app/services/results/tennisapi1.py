@@ -97,6 +97,10 @@ def _parse_event(event: dict) -> Optional[MatchResult]:
     status = (event.get("status") or {}).get("type")
     home = (event.get("homeTeam") or {}).get("name") or ""
     away = (event.get("awayTeam") or {}).get("name") or ""
+    ts = event.get("startTimestamp")
+    event_date = (
+        datetime.fromtimestamp(ts, timezone.utc).replace(tzinfo=None) if ts else None
+    )
     # Los dobles ya no se descartan aquí: `_pair_similar` exige que la
     # pista case con TODOS los miembros de la pareja, así que un pick
     # individual nunca se resuelve contra un dobles (ni al revés).
@@ -116,6 +120,7 @@ def _parse_event(event: dict) -> Optional[MatchResult]:
             home_score=ret_home,
             away_score=ret_away,
             status=status,
+            event_date=event_date,
         )
     if status != "finished":
         return None
@@ -142,6 +147,7 @@ def _parse_event(event: dict) -> Optional[MatchResult]:
         home_score=home_sets,
         away_score=away_sets,
         sets=sets or None,
+        event_date=event_date,
     )
 
 

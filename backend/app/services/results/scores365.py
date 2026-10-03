@@ -175,6 +175,11 @@ def _to_match_result(game: dict, sport: str) -> Optional[MatchResult]:
         status = "retired"
     else:
         status = "walkover" if status_text == "walkover" else None
+    raw_start = game.get("startTime") or ""
+    try:
+        event_date = datetime.fromisoformat(raw_start)
+    except ValueError:
+        event_date = None
     return MatchResult(
         home_team=home,
         away_team=away,
@@ -182,6 +187,7 @@ def _to_match_result(game: dict, sport: str) -> Optional[MatchResult]:
         away_score=int(away_score),
         sets=_tennis_sets(game) if sport == "tenis" else None,
         status=status,
+        event_date=event_date,
     )
 
 

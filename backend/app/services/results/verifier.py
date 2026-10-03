@@ -1960,7 +1960,10 @@ async def probe_event_date(
             probe_date, evento, deterministic, pick.id
         )
         if match and _fixture_confirms(sides, match):
-            return probe_date
+            # El listado del día sondeado puede traer un partido de
+            # otra fecha ("eventos cercanos"): se escribe la fecha real
+            # que reporta el provider, no la de la sonda que acertó.
+            return match.event_date or probe_date
     return None
 
 

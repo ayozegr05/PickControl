@@ -350,6 +350,9 @@ class Football24hProvider:
         match = self._parse_match(html)
         if match is None:
             return None  # aún no jugado o en vivo: reintentable, no miss
+        # El slug es `DD-MM-YYYY-...` del día consultado: la fecha real
+        # del fixture es la del listado.
+        match.event_date = date
         return html, match
 
     async def find_match(self, date: datetime, team_hint: str) -> Optional[MatchResult]:

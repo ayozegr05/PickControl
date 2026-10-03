@@ -109,6 +109,25 @@ def _pair_similar(hint: str, api_name: str) -> float:
     return min(max(_player_similar(h, m) for h in hint_members) for m in members)
 
 
+def _event_date(event: dict) -> Optional[datetime]:
+    """Fecha real del evento TheSportsDB (`dateEvent` o `strTimestamp`)."""
+    raw = str(event.get("strTimestamp") or "")
+    if raw:
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(
+                tzinfo=None
+            )
+        except ValueError:
+            pass
+    raw = str(event.get("dateEvent") or "")
+    if raw:
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            pass
+    return None
+
+
 def _parse_result(event: dict) -> Optional[MatchResult]:
     """Extrae ganador/perdedor/sets de `strResult`. None si no terminó.
 
@@ -147,6 +166,7 @@ def _parse_result(event: dict) -> Optional[MatchResult]:
             home_score=w_sets,
             away_score=l_sets,
             status=status,
+            event_date=_event_date(event),
         )
 
     if not m:
@@ -183,6 +203,7 @@ def _parse_result(event: dict) -> Optional[MatchResult]:
         home_score=int(m.group("w")),
         away_score=int(m.group("l")),
         sets=sets,
+        event_date=_event_date(event),
     )
 
 

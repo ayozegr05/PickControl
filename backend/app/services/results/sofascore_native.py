@@ -543,6 +543,7 @@ def _finished_result(sport: str, event: dict) -> Optional[MatchResult]:
         away_team=(event.get("awayTeam") or {}).get("name") or "",
         home_score=home_score,
         away_score=away_score,
+        event_date=_event_date(event),
     )
 
 

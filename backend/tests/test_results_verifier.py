@@ -3768,11 +3768,16 @@ class _ProbeStubProvider:
         home: str = "Ipswich Town",
         away: str = "Liverpool",
         always: bool = False,
+        event_date: datetime | None = None,
     ):
         self._real = real_date
         self._always = always
         self._match = MatchResult(
-            home_team=home, away_team=away, home_score=1, away_score=0
+            home_team=home,
+            away_team=away,
+            home_score=1,
+            away_score=0,
+            event_date=event_date,
         )
         self.dates = []
 
@@ -3828,6 +3833,24 @@ class TestProbeEventDate:
         found = await verifier_mod.probe_event_date(pick, [provider])
         assert found is None
         assert provider.dates == []
+
+    async def test_devuelve_fecha_real_del_evento(self):
+        # El listado del día sondeado (1/sep) trajo un partido del
+        # 30/ago: se escribe la fecha real del provider, no la sonda.
+        pick = _pick(
+            "x",
+            "ganador",
+            evento="Carreno vs Lehecka",
+            fecha_evento=datetime(2026, 9, 2, 12, 0),
+        )
+        provider = _ProbeStubProvider(
+            datetime(2026, 9, 1),
+            home="Pablo Carreno Busta",
+            away="Jiri Lehecka",
+            event_date=datetime(2026, 8, 30, 19, 30),
+        )
+        found = await verifier_mod.probe_event_date(pick, [provider])
+        assert found == datetime(2026, 8, 30, 19, 30)
 
     async def test_solo_lado_que_casa_no_basta(self):
         # "Carreno" casa con "Pablo Carreno Busta" pero "Lehecka" no

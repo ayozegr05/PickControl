@@ -226,6 +226,12 @@ class ApiBasketballProvider:
             ht_home = home_q["quarter_1"] + home_q["quarter_2"]
             ht_away = away_q["quarter_1"] + away_q["quarter_2"]
 
+        raw_date = game.get("date") or ""
+        try:
+            event_date = datetime.fromisoformat(str(raw_date).replace("Z", "+00:00"))
+        except ValueError:
+            event_date = None
+
         return MatchResult(
             home_team=game["teams"]["home"]["name"],
             away_team=game["teams"]["away"]["name"],
@@ -233,6 +239,7 @@ class ApiBasketballProvider:
             away_score=away_score,
             ht_home_score=ht_home,
             ht_away_score=ht_away,
+            event_date=event_date,
         )
 
     async def find_postponed_match(

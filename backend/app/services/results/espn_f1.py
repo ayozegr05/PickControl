@@ -333,7 +333,11 @@ class EspnF1Provider(EspnCoreProvider):
             return None
         winner, runner_up = result
         return MatchResult(
-            home_team=winner, away_team=runner_up, home_score=1, away_score=0
+            home_team=winner,
+            away_team=runner_up,
+            home_score=1,
+            away_score=0,
+            event_date=self._race_date(race),
         )
 
     async def find_match_stats(

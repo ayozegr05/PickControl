@@ -214,6 +214,10 @@ class MatchResult:
     status: Optional[str] = None
     ht_home_score: Optional[int] = None
     ht_away_score: Optional[int] = None
+    # Fecha real del evento según el proveedor: los que responden con
+    # listados de "días cercanos" pueden devolver un partido de otra
+    # fecha — con esto el sondeo de fecha escribe la exacta.
+    event_date: Optional[datetime] = None
 
 
 @dataclass

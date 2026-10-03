@@ -136,6 +136,11 @@ class FootballDataProvider:
         if home_score is None or away_score is None:
             return None
         half_time = score.get("halfTime", {})
+        raw_date = match.get("utcDate") or ""
+        try:
+            event_date = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+        except ValueError:
+            event_date = None
 
         return MatchResult(
             home_team=home,
@@ -144,6 +149,7 @@ class FootballDataProvider:
             away_score=away_score,
             ht_home_score=half_time.get("home"),
             ht_away_score=half_time.get("away"),
+            event_date=event_date,
         )
 
     async def find_postponed_match(

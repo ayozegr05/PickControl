@@ -307,6 +307,11 @@ class ApiFootballProvider:
         if home_score is None or away_score is None:
             return None
         halftime = fixture.get("score", {}).get("halftime", {})
+        raw_date = (fixture.get("fixture") or {}).get("date") or ""
+        try:
+            event_date = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+        except ValueError:
+            event_date = None
 
         return MatchResult(
             home_team=fixture["teams"]["home"]["name"],
@@ -315,6 +320,7 @@ class ApiFootballProvider:
             away_score=away_score,
             ht_home_score=halftime.get("home"),
             ht_away_score=halftime.get("away"),
+            event_date=event_date,
         )
 
     async def find_match_stats(

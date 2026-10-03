@@ -388,6 +388,7 @@ class FootApiStatsProvider:
         if home_score is None or away_score is None:
             return None
         ht_home, ht_away = self._ht_scores(event)
+        ts = event.get("startTimestamp")
         return MatchResult(
             home_team=(event.get("homeTeam") or {}).get("name") or "",
             away_team=(event.get("awayTeam") or {}).get("name") or "",
@@ -395,6 +396,11 @@ class FootApiStatsProvider:
             away_score=away_score,
             ht_home_score=ht_home,
             ht_away_score=ht_away,
+            event_date=(
+                datetime.fromtimestamp(ts, timezone.utc).replace(tzinfo=None)
+                if ts
+                else None
+            ),
         )
 
     async def find_postponed_match(

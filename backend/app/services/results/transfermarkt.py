@@ -292,7 +292,11 @@ class TransfermarktProvider:
         if score is None:
             return None  # aún no jugado o en vivo: reintentable, no miss
         return match_id, MatchResult(
-            home_team=home, away_team=away, home_score=score[0], away_score=score[1]
+            home_team=home,
+            away_team=away,
+            home_score=score[0],
+            away_score=score[1],
+            event_date=date,
         )
 
     def _parse_stats(

@@ -763,6 +763,7 @@ class EspnProvider(EspnCoreProvider):
             away_score=away_score,
             ht_home_score=ht_home,
             ht_away_score=ht_away,
+            event_date=_competition_date(competition),
         )
 
     async def find_match_stats(
@@ -999,6 +1000,7 @@ class EspnTennisProvider(EspnCoreProvider):
             home_score=home_score,
             away_score=away_score,
             sets=sets or None,
+            event_date=_competition_date(competition),
         )
 
 
@@ -1036,4 +1038,5 @@ class EspnBasketballProvider(EspnCoreProvider):
             away_score=away_score,
             ht_home_score=ht_home,
             ht_away_score=ht_away,
+            event_date=_competition_date(competition),
         )
