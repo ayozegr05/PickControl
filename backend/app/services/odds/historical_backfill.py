@@ -443,6 +443,23 @@ async def _done_event_ids(session) -> set[str]:
     return set(result.all())
 
 
+async def _resolved_pick_ids(session) -> set[int]:
+    """Picks con filas de backfill a su nombre (`parsed_pick_id`).
+
+    Complementa `_done_event_ids`: un pick cuyo `odds_event_id`
+    apunta a un evento de otra familia ("sofascore:..." del
+    snapshotter en vivo) sigue teniendo su cuota auditada si una
+    fuente de backfill le escribió filas — sin esta comprobación el
+    embudo lo cuenta "en cola" para siempre."""
+    result = await session.exec(
+        select(OddsSnapshot.parsed_pick_id)
+        .where(OddsSnapshot.provider.in_(_BACKFILL_PROVIDERS))
+        .where(OddsSnapshot.parsed_pick_id != None)  # noqa: E711
+        .distinct()
+    )
+    return set(result.all())
+
+
 def _sources(settings) -> list[_HistorySource]:
     """Fuentes disponibles según la configuración, en orden de uso."""
     sources: list[_HistorySource] = [_TennisDataSource()]
@@ -467,7 +484,12 @@ def _gemini_done_key() -> str:
     return f"{_GEMINI_ODDS_PROVIDER}|done|{{}}"
 
 
-def _pick_pending(pick: ParsedPick, done: set[str], settings) -> bool:
+def _pick_pending(
+    pick: ParsedPick,
+    done: set[str],
+    settings,
+    resolved_picks: set[int] | None = None,
+) -> bool:
     """El pick aún tiene alguna fuente VIVA que no lo ha resuelto.
 
     Las fuentes API marcan "nofixture"; Gemini marca "done" cuando ya
@@ -478,8 +500,11 @@ def _pick_pending(pick: ParsedPick, done: set[str], settings) -> bool:
     """
     # Cobertura ya escrita: el evento tiene filas de una fuente de
     # backfill — resuelto, nada más que hacer (ni el barrido gratis
-    # de Gemini hace falta).
-    if pick.odds_event_id in done:
+    # de Gemini hace falta). O el pick tiene filas a su nombre aunque
+    # su odds_event_id apunte a otra familia (snapshotter en vivo).
+    if pick.odds_event_id in done or (
+        resolved_picks is not None and pick.id in resolved_picks
+    ):
         return False
     # Solo cuentan las fuentes que cubren el deporte del pick — un
     # fútbol nunca lo intenta tennisdata y no debe quedar "en cola"
@@ -506,7 +531,8 @@ async def count_pending_backfill(session) -> int:
         return 0
     picks = await _load_picks(session, None)
     done = await _done_event_ids(session)
-    return sum(1 for p in picks if _pick_pending(p, done, settings))
+    resolved = await _resolved_pick_ids(session)
+    return sum(1 for p in picks if _pick_pending(p, done, settings, resolved))
 
 
 async def backfill_breakdown(session) -> dict:
@@ -527,12 +553,13 @@ async def backfill_breakdown(session) -> dict:
         return {}
     picks = await _load_picks(session, None)
     done = await _done_event_ids(session)
+    resolved_picks = await _resolved_pick_ids(session)
     parked = {s.name for s in sources if _source_quota_parked(s)}
     resueltos = en_cola = aplazados = agotados = 0
     por_fuente = {s.name: 0 for s in sources}
     gemini_pendientes = 0
     for pick in picks:
-        if pick.odds_event_id in done:
+        if pick.odds_event_id in done or pick.id in resolved_picks:
             resueltos += 1
             continue
         sport = _canonical_sport(pick.deporte)
@@ -600,6 +627,7 @@ async def _run_source(
     http: httpx.AsyncClient,
     apply: bool,
     report: BackfillReport,
+    resolved_picks: set[int] | None = None,
 ) -> None:
     """Pasa una fuente sobre los picks pendientes de SU cobertura
     deportiva. Añade a `done` los eventos que deja escritos."""
@@ -621,6 +649,8 @@ async def _run_source(
         if sport not in source.sport_ids:
             continue
         if pick.odds_event_id in done:
+            continue
+        if resolved_picks is not None and pick.id in resolved_picks:
             continue
         if is_missed(nofixture_key.format(pick.id)):
             continue
@@ -741,6 +771,7 @@ async def _run_source(
         by_key = {(c.market_name, c.choice_name, c.choice_group): c for c in choices}
 
         matched_keys: set[tuple] = set()
+        matched_pick_ids: set[int] = set()
         trigger_pick = event_picks[0]
         for pick in event_picks:
             matched = map_pick_choices(pick, event, virtual)
@@ -753,6 +784,7 @@ async def _run_source(
                 continue
             key = (matched.market_name, matched.choice_name, matched.choice_group)
             matched_keys.add(key)
+            matched_pick_ids.add(pick.id)
             report.mapeados += 1
             choice = by_key[key]
             precio_pub = _nearest_price(choice.points, pick.created_at)
@@ -791,6 +823,8 @@ async def _run_source(
                         report.filas_por_fuente.get(source.name, 0) + 1
                     )
             done.add(ext_id)
+            if resolved_picks is not None:
+                resolved_picks |= matched_pick_ids
         elif matched_keys:
             n = sum(len(downsample(by_key[k].points)) for k in matched_keys)
             report.filas += n
@@ -835,6 +869,7 @@ async def _run_gemini_pass(
     session,
     apply: bool,
     report: BackfillReport,
+    resolved_picks: set[int] | None = None,
 ) -> None:
     """Última fuente de la cascada: Gemini lee comparadores web.
 
@@ -848,8 +883,13 @@ async def _run_gemini_pass(
     if not settings.google_api_key:
         return
     done_key = _gemini_done_key()
+    resolved = resolved_picks or set()
     candidates = [
-        p for p in picks if p.id is not None and not is_missed(done_key.format(p.id))
+        p
+        for p in picks
+        if p.id is not None
+        and p.id not in resolved
+        and not is_missed(done_key.format(p.id))
     ]
     if not candidates:
         return
@@ -1072,9 +1112,10 @@ async def run(apply: bool, limit: int | None) -> BackfillReport:
         picks = await _load_picks(session, limit)
         report.picks = len(picks)
         done = await _done_event_ids(session)
+        resolved = await _resolved_pick_ids(session)
         # Early-exit antes de tocar la API: si no hay backlog pendiente
         # el job diario no gasta ni una llamada.
-        if not any(_pick_pending(p, done, settings) for p in picks):
+        if not any(_pick_pending(p, done, settings, resolved) for p in picks):
             report.detalles.append("Sin backlog pendiente; no se llama a la API.")
             return report
 
@@ -1082,9 +1123,19 @@ async def run(apply: bool, limit: int | None) -> BackfillReport:
 
         for source in sources:
             await _run_source(
-                source, picks, done, registered, session, http, apply, report
+                source,
+                picks,
+                done,
+                registered,
+                session,
+                http,
+                apply,
+                report,
+                resolved,
             )
-        await _run_gemini_pass(picks, done, registered, session, apply, report)
+        await _run_gemini_pass(
+            picks, done, registered, session, apply, report, resolved
+        )
 
         if apply:
             await session.commit()

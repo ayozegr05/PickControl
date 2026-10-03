@@ -12,6 +12,7 @@ from fastapi import FastAPI
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.services.maintenance.backlog import run_backlog_verification
 from app.services.maintenance.rescue import run_rescue_cycle
 from app.services.odds.historical_backfill import count_pending_backfill, run
 from app.services.odds.snapshotter import run_odds_snapshot_cycle
@@ -33,6 +34,10 @@ logger = get_logger("app.lifecycle")
 # El barrido correctivo de anuladas corre una vez al día dentro del
 # loop del verifier (usa los mismos providers y misma puerta de keys).
 _VOID_RECHECK_INTERVAL_SECONDS = 24 * 3600
+# El barrido de pendientes fuera de ventana (>14 días, patas de
+# combinadas viejas sobre todo) también una vez al día — antes era
+# solo script manual y los padres se quedaban abiertos para siempre.
+_BACKLOG_INTERVAL_SECONDS = 24 * 3600
 
 
 async def _run_telegram_listener() -> None:
@@ -69,6 +74,21 @@ async def _run_results_verifier_loop() -> None:
             if loop_due("void_recheck", _VOID_RECHECK_INTERVAL_SECONDS):
                 await recheck_suspicious_voids()
                 mark_loop_ran("void_recheck")
+            # Backlog: pendientes fuera de la ventana de 14 días que el
+            # ciclo normal ya no reintenta (patas de combinadas viejas).
+            if loop_due("verify_backlog", _BACKLOG_INTERVAL_SECONDS):
+                stats = await run_backlog_verification(
+                    apply=True, delay=2.0, log=logger.info
+                )
+                mark_loop_ran("verify_backlog")
+                if stats["intentados"]:
+                    logger.info(
+                        "[VERIFY_BACKLOG] %s intentados, %s resueltos, "
+                        "%s padres liquidados",
+                        stats["intentados"],
+                        stats["resueltos"],
+                        stats["padres_liquidados"],
+                    )
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "[RESULTS_VERIFIER] Error verificando picks pendientes: %s", exc

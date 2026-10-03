@@ -28,73 +28,28 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding="utf-8")
 
-from sqlalchemy import select
+from datetime import timedelta
 
-from app.core.dates import utc_now
-from app.db.postgres import AsyncSessionLocal
-from app.models.informante import Informante  # noqa: F401
-from app.models.parsed_pick import ParsedPick
-from app.models.pick import Pick  # noqa: F401
-from app.models.telegram_raw_message import TelegramRawMessage  # noqa: F401
-from app.models.user import User  # noqa: F401
-from app.services.results.verifier import (
-    _get_providers,
-    _settle_combinadas,
-    verify_pick,
-)
+from app.services.maintenance.backlog import run_backlog_verification
 
 
-async def main(apply: bool, delay: float) -> None:
-    providers = await _get_providers()
-    if not providers:
-        print("Sin API keys de resultados configuradas.")
-        return
-
-    async with AsyncSessionLocal() as session:
-        # Mismo conjunto que verify_pending_picks pero SIN el filtro de
-        # edad: es justo lo que el ciclo normal ya no reintenta.
-        result = await session.exec(
-            select(ParsedPick)
-            .where(ParsedPick.es_apuesta == True)  # noqa: E712
-            .where(ParsedPick.acierto == None)  # noqa: E711
-            .where(ParsedPick.anulada == False)  # noqa: E712
-            .where(ParsedPick.es_combinada == False)  # noqa: E712
-            .where(ParsedPick.fecha_evento != None)  # noqa: E711
+async def main(apply: bool, delay: float, older_than_days: float | None) -> None:
+    stats = await run_backlog_verification(
+        apply=apply,
+        delay=delay,
+        older_than=(
+            timedelta(days=older_than_days) if older_than_days is not None else None
+        ),
+    )
+    if not apply:
+        print(
+            f"\nDRY-RUN: {stats['resueltos']} se resolverían. Usa --apply para escribir."
         )
-        pending = list(result.all())
-        # Recientes primero, igual que el ciclo normal.
-        pending.sort(key=lambda p: p.fecha_evento, reverse=True)
-        print(f"Pendientes totales a intentar: {len(pending)}")
-
-        resolved = 0
-        for i, pick in enumerate(pending):
-            if i:
-                # Ritmo suave: un barrido de ~80 picks a toda velocidad
-                # dispara los límites por minuto de las APIs gratuitas
-                # (TheSportsDB ~30 req/min, football-data ~10 req/min).
-                await asyncio.sleep(delay)
-            acierto, anulada = await verify_pick(pick, providers)
-            if acierto is None and not anulada:
-                continue
-            resolved += 1
-            tag = "ANULADA" if anulada else ("ACIERTO" if acierto else "FALLO")
-            print(f"  id={pick.id} '{pick.seleccion}' -> {tag}")
-            if apply:
-                pick.acierto = acierto
-                pick.anulada = anulada
-                pick.verificado_por = "auto"
-                pick.verificado_at = utc_now()
-                session.add(pick)
-
-        if apply:
-            settled = await _settle_combinadas(session)
-            await session.commit()
-            print(
-                f"\nResueltos: {resolved}. "
-                f"Padres de combinadas re-liquidados: {len(settled)}."
-            )
-        else:
-            print(f"\nDRY-RUN: {resolved} se resolverían. Usa --apply para escribir.")
+    else:
+        print(
+            f"\nResueltos: {stats['resueltos']}. "
+            f"Padres de combinadas re-liquidados: {stats['padres_liquidados']}."
+        )
 
 
 if __name__ == "__main__":
@@ -106,5 +61,17 @@ if __name__ == "__main__":
         default=2.0,
         help="Segundos entre picks (ritmo suave para límites por minuto).",
     )
+    parser.add_argument(
+        "--older-than-days",
+        type=float,
+        default=14.0,
+        help="Solo pendientes más viejos que N días (0 = todos).",
+    )
     args = parser.parse_args()
-    asyncio.run(main(args.apply, args.delay))
+    asyncio.run(
+        main(
+            args.apply,
+            args.delay,
+            args.older_than_days or None,
+        )
+    )

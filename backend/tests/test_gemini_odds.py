@@ -567,3 +567,57 @@ class TestBackfillBreakdown:
         assert "oddspapi" in bd["fuentes_en_pausa"]
         # El contador del job diario solo mide trabajo real (en_cola).
         assert await hb.count_pending_backfill(session) == 1
+
+    async def test_filas_por_pick_resuelven_aunque_event_id_sea_otro(
+        self, session, monkeypatch
+    ):
+        """Pick con `odds_event_id` del snapshotter en vivo ("sofascore:")
+        pero con filas de backfill a su nombre (parsed_pick_id): el embudo
+        lo cuenta resuelto — la cuota ya está, solo cambia el contador."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        pick = await self._pick(session, 10)
+        pick.odds_event_id = "sofascore:77"
+        session.add(
+            OddsSnapshot(
+                provider="tennisdata",
+                event_ext_id="tennisdata:2026-09-20:sinner|alcaraz",
+                parsed_pick_id=pick.id,
+                market_name="Full time",
+                choice_name="1",
+                choice_group="",
+                cuota=1.5,
+                captured_at=utc_now(),
+            )
+        )
+        await session.commit()
+
+        bd = await hb.backfill_breakdown(session)
+        assert bd["resueltos"] == 1
+        assert bd["en_cola"] == 0
+        assert bd["resueltos_por_fuente"] == {"tennisdata": 1}
+        assert await hb.count_pending_backfill(session) == 0
+
+    async def test_filas_solo_en_vivo_no_cuentan_como_backfill(
+        self, session, monkeypatch
+    ):
+        """Un snapshot del snapshotter en vivo (provider no-backfill)
+        con parsed_pick_id NO resuelve el backlog histórico."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        pick = await self._pick(session, 11)
+        session.add(
+            OddsSnapshot(
+                provider="allsportsapi2",
+                event_ext_id="sofascore:88",
+                parsed_pick_id=pick.id,
+                market_name="Full time",
+                choice_name="1",
+                choice_group="",
+                cuota=1.5,
+                captured_at=utc_now(),
+            )
+        )
+        await session.commit()
+
+        bd = await hb.backfill_breakdown(session)
+        assert bd["resueltos"] == 0
+        assert bd["en_cola"] == 1
