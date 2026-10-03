@@ -1886,6 +1886,84 @@ async def _find_match_across_providers(
     return None
 
 
+# Sondeo de fecha para picks cuyo `fecha_evento` puede estar mal (bug
+# del extractor: a veces guarda la fecha del mensaje, no la del
+# partido — casos 410 y 2304/2306). Se prueba ±7 días con el `evento`
+# como pista y solo se acepta la fecha si AMBOS lados casan con el
+# encuentro — evita "corregir" a un fixture equivocado.
+_PROBE_DATE_OFFSETS = (1, -1, 2, -2, 3, -3, 5, -5, 7, -7)
+# Palabras que no son un equipo/jugador: un evento basura como
+# "Lun - sep" se parte en dos "lados" pero ninguno es un nombre —
+# sondear con eso solo quemaría llamadas.
+_PROBE_SIDE_NOISE = re.compile(
+    r"^(?:lun|mar|mi[eé]|jue|vie|s[aá]b|dom|mon|tue|wed|thu|fri|sat|sun|"
+    r"ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic|"
+    r"jan|apr|aug|sept?|dec)\b\.?$",
+    re.IGNORECASE,
+)
+
+
+def _fixture_confirms(sides: list[str], match: MatchResult) -> bool:
+    """Ambos lados del evento aparecen en el partido (cualquier orden):
+    la confirmación exige doble-match para no aceptar fixtures
+    equivocados del listado del día."""
+    names = (fold_name(match.home_team or ""), fold_name(match.away_team or ""))
+    token_sets = [set(re.findall(r"\w+", n)) for n in names]
+    for side in sides:
+        folded = fold_name(side.strip())
+        tokens = set(re.findall(r"\w+", folded))
+        if not tokens:
+            return False
+        ok = any(
+            _similar(folded, name) >= _MIN_TEAM_SIMILARITY
+            or tokens <= toks
+            or (toks and toks <= tokens)
+            for name, toks in zip(names, token_sets)
+        )
+        if not ok:
+            return False
+    return True
+
+
+async def probe_event_date(
+    pick: ParsedPick, providers: list[ResultsProvider]
+) -> Optional[datetime]:
+    """Fecha alternativa del fixture cuando el evento aparece jugado
+    cerca de `fecha_evento`; None si no hay candidato fiable.
+
+    Solo providers deterministas (el investigador web cuesta una
+    búsqueda real por fecha sondeada). `evento` debe ser un
+    enfrentamiento "A vs B"/"A - B": sin dos lados no hay doble-match
+    que confirme la corrección."""
+    evento = (pick.evento or "").strip()
+    sides = [
+        s
+        for s in re.split(r"\s+vs\.?\s+|\s+[–-]\s+", evento, flags=re.IGNORECASE)
+        if s.strip()
+    ]
+    if len(sides) != 2 or pick.fecha_evento is None:
+        return None
+    for side in sides:
+        tokens = [
+            t
+            for t in re.findall(r"\w+", side)
+            if len(t) >= 3 and not _PROBE_SIDE_NOISE.match(t)
+        ]
+        if not tokens:
+            return None
+    deterministic = [p for p in providers if not _is_research_provider(p)]
+    for delta in _PROBE_DATE_OFFSETS:
+        probe_date = pick.fecha_evento + timedelta(days=delta)
+        if probe_date > utc_now():
+            continue
+        match = await _find_match_across_providers(
+            probe_date, evento, deterministic, pick.id
+        )
+        if match and _fixture_confirms(sides, match):
+            return probe_date
+    return None
+
+
 async def _find_stats_across_providers(
     date: datetime,
     team_hint: str,

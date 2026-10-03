@@ -31,6 +31,7 @@ from app.services.results.verifier import (
     _MAX_VERIFICATION_AGE,
     _get_providers,
     _settle_combinadas,
+    probe_event_date,
     verify_pick,
 )
 
@@ -51,6 +52,7 @@ async def run_backlog_verification(
             "intentados": 0,
             "resueltos": 0,
             "errores": 0,
+            "fechas_corregidas": 0,
             "padres_liquidados": 0,
         }
 
@@ -73,6 +75,7 @@ async def run_backlog_verification(
 
         resolved = 0
         errores = 0
+        fechas_corregidas = 0
         for i, pick in enumerate(pending):
             if i:
                 await asyncio.sleep(delay)
@@ -83,7 +86,25 @@ async def run_backlog_verification(
                 log(f"  id={pick.id} error: {exc}")
                 continue
             if acierto is None and not anulada:
-                continue
+                # La fecha guardada puede estar mal (el extractor a
+                # veces toma la del mensaje, no la del partido): sondeo
+                # ±7 días; si el fixture aparece con ambos lados claros
+                # se corrige fecha_evento y se reintenta una vez.
+                new_date = await probe_event_date(pick, providers)
+                if new_date is None:
+                    continue
+                pick.fecha_evento = new_date
+                session.add(pick)
+                fechas_corregidas += 1
+                log(f"  id={pick.id} fecha corregida -> {new_date.date()}")
+                try:
+                    acierto, anulada = await verify_pick(pick, providers)
+                except Exception as exc:  # noqa: BLE001
+                    errores += 1
+                    log(f"  id={pick.id} error tras corregir fecha: {exc}")
+                    continue
+                if acierto is None and not anulada:
+                    continue
             resolved += 1
             tag = "ANULADA" if anulada else ("ACIERTO" if acierto else "FALLO")
             log(f"  id={pick.id} '{pick.seleccion}' -> {tag}")
@@ -103,6 +124,7 @@ async def run_backlog_verification(
         "intentados": len(pending),
         "resueltos": resolved,
         "errores": errores,
+        "fechas_corregidas": fechas_corregidas,
         "padres_liquidados": len(settled),
     }
     if apply:

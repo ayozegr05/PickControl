@@ -159,6 +159,7 @@ class TestRunBacklogVerification:
             "intentados": 0,
             "resueltos": 0,
             "errores": 0,
+            "fechas_corregidas": 0,
             "padres_liquidados": 0,
         }
 
@@ -173,3 +174,50 @@ class TestRunBacklogVerification:
 
         assert stats["intentados"] == 1
         assert stats["resueltos"] == 0
+
+    async def test_fecha_mal_se_sondea_y_reintenta(self, db, providers, monkeypatch):
+        # Pick con fecha equivocada: verify falla, el sondeo encuentra
+        # el fixture en otra fecha -> se corrige y se resuelve.
+        pick = await _make_pick(db, 1, 20, evento="Ipswich - Liverpool")
+        fecha_mala = pick.fecha_evento
+        fecha_real = fecha_mala - timedelta(days=7)
+        await db.commit()
+
+        fechas_vistas = []
+
+        async def verify_solo_con_fecha_buena(p, providers):
+            fechas_vistas.append(p.fecha_evento)
+            return (True, False) if p.fecha_evento == fecha_real else (None, False)
+
+        async def fake_probe(p, providers):
+            return fecha_real
+
+        monkeypatch.setattr(backlog, "verify_pick", verify_solo_con_fecha_buena)
+        monkeypatch.setattr(backlog, "probe_event_date", fake_probe)
+
+        stats = await backlog.run_backlog_verification(apply=True, delay=0, log=_NO_LOG)
+
+        assert stats["fechas_corregidas"] == 1
+        assert stats["resueltos"] == 1
+        await db.refresh(pick)
+        assert pick.fecha_evento == fecha_real
+        assert pick.acierto is True
+        assert len(fechas_vistas) == 2  # intento + reintento corregido
+
+    async def test_sondeo_sin_candidato_no_toca_fecha(self, db, providers, monkeypatch):
+        pick = await _make_pick(db, 1, 20, evento="Ipswich - Liverpool")
+        fecha_mala = pick.fecha_evento
+        await db.commit()
+
+        async def fake_probe(p, providers):
+            return None
+
+        monkeypatch.setattr(backlog, "verify_pick", _fake_verify((None, False)))
+        monkeypatch.setattr(backlog, "probe_event_date", fake_probe)
+
+        stats = await backlog.run_backlog_verification(apply=True, delay=0, log=_NO_LOG)
+
+        assert stats["fechas_corregidas"] == 0
+        await db.refresh(pick)
+        assert pick.fecha_evento == fecha_mala
+        assert pick.acierto is None

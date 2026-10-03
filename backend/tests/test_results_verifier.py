@@ -3754,3 +3754,95 @@ class TestAmonestacionJugador:
         pick = _pick("Recibe amonestación Alexis Mac Allister", "ganador")
         acierto, _ = await verify_pick(pick, [provider])
         assert acierto is False
+
+
+class _ProbeStubProvider:
+    """find_match solo encuentra el partido cuando le preguntan por la
+    fecha real del fixture; en el resto de fechas devuelve None."""
+
+    SUPPORTED_SPORTS = frozenset({"futbol"})
+
+    def __init__(
+        self,
+        real_date: datetime,
+        home: str = "Ipswich Town",
+        away: str = "Liverpool",
+        always: bool = False,
+    ):
+        self._real = real_date
+        self._always = always
+        self._match = MatchResult(
+            home_team=home, away_team=away, home_score=1, away_score=0
+        )
+        self.dates = []
+
+    async def find_match(self, date, team_hint):
+        self.dates.append(date)
+        if self._always or date.date() == self._real.date():
+            return self._match
+        return None
+
+
+class TestProbeEventDate:
+    """Sondeo de fecha para picks cuyo `fecha_evento` está mal: prueba
+    ±7 días y solo acepta la fecha si AMBOS lados del evento casan."""
+
+    async def test_encuentra_fixture_en_otra_fecha(self):
+        pick = _pick(
+            "x",
+            "ganador",
+            evento="Ipswich - Liverpool",
+            fecha_evento=datetime(2026, 9, 11, 14, 0),
+        )
+        provider = _ProbeStubProvider(datetime(2026, 9, 4))
+        found = await verifier_mod.probe_event_date(pick, [provider])
+        assert found is not None
+        assert found.date() == datetime(2026, 9, 4).date()
+        # Solo llamó a fechas hasta dar con el fixture (offsets -1..-7).
+        assert provider.dates[-1].date() == datetime(2026, 9, 4).date()
+
+    async def test_rechaza_fixture_equivocado(self):
+        # El provider devuelve UN partido en cada fecha, pero los
+        # nombres no casan con ninguno de los lados del evento.
+        pick = _pick(
+            "x",
+            "ganador",
+            evento="Ipswich - Liverpool",
+            fecha_evento=datetime(2026, 9, 11, 14, 0),
+        )
+        provider = _ProbeStubProvider(
+            datetime(2026, 9, 4), home="Tottenham", away="Arsenal", always=True
+        )
+        found = await verifier_mod.probe_event_date(pick, [provider])
+        assert found is None
+
+    async def test_evento_sin_dos_lados_no_sondea(self):
+        # "Lun - sep" o un nombre suelto: sin doble-match posible.
+        pick = _pick(
+            "x",
+            "ganador",
+            evento="Lun - sep",
+            fecha_evento=datetime(2026, 9, 11, 14, 0),
+        )
+        provider = _ProbeStubProvider(datetime(2026, 9, 4))
+        found = await verifier_mod.probe_event_date(pick, [provider])
+        assert found is None
+        assert provider.dates == []
+
+    async def test_solo_lado_que_casa_no_basta(self):
+        # "Carreno" casa con "Pablo Carreno Busta" pero "Lehecka" no
+        # aparece -> fixture equivocado, no se acepta la fecha.
+        pick = _pick(
+            "x",
+            "ganador",
+            evento="Carreno vs Lehecka",
+            fecha_evento=datetime(2026, 9, 2, 12, 0),
+        )
+        provider = _ProbeStubProvider(
+            datetime(2026, 8, 30),
+            home="Pablo Carreno Busta",
+            away="Carlos Alcaraz",
+            always=True,
+        )
+        found = await verifier_mod.probe_event_date(pick, [provider])
+        assert found is None
