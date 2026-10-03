@@ -141,6 +141,14 @@ async def _call(endpoint: Endpoint, key: str, prompt: str) -> Optional[str]:
                 endpoint.name,
                 f"{secs:.0f}s" if secs else "20m",
             )
+        elif exc.response.status_code == 413:
+            # Página mayor que el límite del free tier: no es salud
+            # del endpoint (la siguiente puede entrar) ni merece
+            # aparcarlo — la pasada sigue con el fallback de turno.
+            logger.info(
+                "[LLM] %s 413 (prompt demasiado grande) — se salta la página",
+                endpoint.name,
+            )
         else:
             # 4xx/5xx no-cuota: pausa corta para no martillear un
             # endpoint caído, pero reintentable pronto.
