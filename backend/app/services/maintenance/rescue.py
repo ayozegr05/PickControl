@@ -43,7 +43,11 @@ from app.models.user import User  # noqa: F401
 from app.services.pick_service import get_or_create_informante
 from app.services.results.verifier import _evento_feo
 from app.services.telegram.ocr import extract_text_from_image
-from app.services.telegram.pick_extractor import _llm_extract, extract_pick
+from app.services.telegram.pick_extractor import (
+    _is_settled_ticket,
+    _llm_extract,
+    extract_pick,
+)
 from app.services.telegram.processor import _find_duplicate_pick
 
 logger = get_logger("app.maintenance.rescue")
@@ -418,24 +422,85 @@ async def retry_incomplete_picks(
     return resumen
 
 
+# Rechazos deterministas que el re-triage aplica a pendientes antiguos:
+# señales que NO existen en un boleto vivo (sello "GANADOR", payout
+# "GANASTE <importe>", "<importe>€ Ganancias" con ✓ por pata...). Si se
+# añade otra regla de rechazo a `pick_extractor`, se suma aquí.
+_DETERMINISTIC_REJECTS = (_is_settled_ticket,)
+
+
+async def retriage_pending_picks(
+    max_age_days: Optional[float] = None,
+) -> dict[str, int]:
+    """Re-clasifica pendientes que hoy serían rechazados por reglas.
+
+    Cierra el agujero del ciclo: `retry_incomplete_picks` solo re-LLM
+    picks con `evento` feo — un pick mal clasificado con `evento`
+    bonito nunca se re-evalúa, así que si entró antes de que existiera
+    una regla determinista de rechazo queda pendiente para siempre.
+    Esta pasada aplica las reglas sobre el texto del raw — gratis, sin
+    LLM — y el pick pasa a `es_apuesta=False` (fuera de stats, fuera de
+    pendientes). El raw y la fila quedan intactos para auditoría.
+    """
+    resumen = {"candidatos": 0, "descartados": 0}
+    cutoff = _rescue_cutoff(get_settings(), max_age_days)
+    async with AsyncSessionLocal() as session:
+        stmt = (
+            select(ParsedPick, TelegramRawMessage)
+            .join(
+                TelegramRawMessage,
+                ParsedPick.raw_message_id == TelegramRawMessage.id,
+            )
+            .where(ParsedPick.es_apuesta == True)  # noqa: E712
+            .where(ParsedPick.acierto.is_(None))
+            .where(ParsedPick.anulada == False)  # noqa: E712
+        )
+        if cutoff is not None:
+            stmt = stmt.where(TelegramRawMessage.received_at >= cutoff)
+        rows = (await session.exec(stmt)).all()
+        resumen["candidatos"] = len(rows)
+
+        for pick, raw in rows:
+            text = (raw.extracted_text or raw.text or "").strip()
+            if not text:
+                continue
+            if any(reject(text) for reject in _DETERMINISTIC_REJECTS):
+                pick.es_apuesta = False
+                session.add(pick)
+                resumen["descartados"] += 1
+                logger.info(
+                    "[RESCUE] Retriage: pick %s -> es_apuesta=False "
+                    "(raw %s casa con boleto liquidado)",
+                    pick.id,
+                    raw.id,
+                )
+
+        await session.commit()
+    return resumen
+
+
 async def run_rescue_cycle() -> dict[str, dict[str, int]]:
     """Una pasada completa de rescate: primero OCR, luego reproceso
-    (así los raws recién rescatados se extraen en el mismo ciclo) y por
-    último los picks incompletos sin `evento`."""
+    (así los raws recién rescatados se extraen en el mismo ciclo),
+    después los picks incompletos sin `evento` y por último el
+    re-triage determinista de pendientes mal clasificados."""
     ocr = await retry_pending_ocr()
     reproc = await reprocess_pending_raws()
     incomplete = await retry_incomplete_picks()
+    retriage = await retriage_pending_picks()
     if (
         ocr["hechos"]
         or reproc["picks"]
         or reproc["antiguos"]
         or incomplete["rellenados"]
         or incomplete["descartados"]
+        or retriage["descartados"]
     ):
         logger.info(
             "[RESCUE] Ciclo: OCR %s ok/%s fallos de %s (%s sin fichero); "
             "reproceso %s/%s (+%s picks, %s dups, %s sin pick, %s antiguos); "
-            "incompletos %s/%s rellenados, %s descartados, %s fallos",
+            "incompletos %s/%s rellenados, %s descartados, %s fallos; "
+            "retriage %s/%s descartados",
             ocr["hechos"],
             ocr["fallos"],
             ocr["pendientes"],
@@ -450,5 +515,12 @@ async def run_rescue_cycle() -> dict[str, dict[str, int]]:
             incomplete["candidatos"],
             incomplete["descartados"],
             incomplete["fallos"],
+            retriage["descartados"],
+            retriage["candidatos"],
         )
-    return {"ocr": ocr, "reprocess": reproc, "incomplete": incomplete}
+    return {
+        "ocr": ocr,
+        "reprocess": reproc,
+        "incomplete": incomplete,
+        "retriage": retriage,
+    }

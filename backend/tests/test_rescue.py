@@ -522,3 +522,100 @@ class TestBackfillPendingCount:
         session.add(pick)
         await session.flush()
         return pick
+
+
+_SETTLED_SLIP = (
+    "SELLO: GANADOR\n"
+    "Acumulador 5 @ 91.00\n"
+    "Ipswich - Liverpool\n"
+    "✓ Alexander Isak: Marca gol\n"
+    "✓ Julio Enciso: Recibirá una tarjeta\n"
+    "Apuesta\n35,00€\nGANASTE\n3.185,00€"
+)
+
+
+class TestRetriagePendingPicks:
+    """`retriage_pending_picks`: las reglas deterministas de rechazo se
+    aplican sobre pendientes `es_apuesta=True` — un pick que entró
+    antes de que existiera la regla (boleto liquidado) se reclasifica
+    solo, sin LLM ni cuota."""
+
+    async def _pick(self, session, raw, **kwargs) -> ParsedPick:
+        pick = ParsedPick(
+            raw_message_id=raw.id,
+            es_apuesta=True,
+            seleccion="X gana",
+            deporte="futbol",
+            evento="Ipswich - Liverpool",
+            metodo="llm",
+            **kwargs,
+        )
+        session.add(pick)
+        await session.commit()
+        await session.refresh(pick)
+        return pick
+
+    async def test_boleto_liquidado_se_descarta(self, session, monkeypatch):
+        raw = await _raw(session, extracted_text=_SETTLED_SLIP, processed=True)
+        pick = await self._pick(session, raw)
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+
+        resumen = await rescue.retriage_pending_picks()
+
+        assert resumen == {"candidatos": 1, "descartados": 1}
+        await session.refresh(pick)
+        assert pick.es_apuesta is False
+
+    async def test_pick_normal_no_se_toca(self, session, monkeypatch):
+        raw = await _raw(session, text="Munar gana cuota 1.8", processed=True)
+        pick = await self._pick(session, raw)
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+
+        resumen = await rescue.retriage_pending_picks()
+
+        assert resumen == {"candidatos": 1, "descartados": 0}
+        await session.refresh(pick)
+        assert pick.es_apuesta is True
+
+    async def test_ya_liquidado_no_es_candidato(self, session, monkeypatch):
+        raw = await _raw(session, extracted_text=_SETTLED_SLIP, processed=True)
+        pick = await self._pick(session, raw, acierto=True)
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+
+        resumen = await rescue.retriage_pending_picks()
+
+        assert resumen["candidatos"] == 0
+        await session.refresh(pick)
+        assert pick.es_apuesta is True
+
+    async def test_patas_tambien_se_descartan_con_el_raw(self, session, monkeypatch):
+        """Padre y patas comparten el raw del slip: si el boleto era un
+        repost liquidado, toda la familia queda fuera a la vez."""
+        raw = await _raw(session, extracted_text=_SETTLED_SLIP, processed=True)
+        padre = await self._pick(session, raw, es_combinada=True)
+        pata = await self._pick(session, raw, combinada_id=padre.id)
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+
+        resumen = await rescue.retriage_pending_picks()
+
+        assert resumen["descartados"] == 2
+        await session.refresh(padre)
+        await session.refresh(pata)
+        assert padre.es_apuesta is False
+        assert pata.es_apuesta is False
+
+    async def test_raw_sin_texto_no_es_descartable(self, session, monkeypatch):
+        raw = await _raw(session, text="", processed=True)
+        pick = await self._pick(session, raw)
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+
+        resumen = await rescue.retriage_pending_picks()
+
+        assert resumen["descartados"] == 0
+        await session.refresh(pick)
+        assert pick.es_apuesta is True
