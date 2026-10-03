@@ -49,6 +49,7 @@ from datetime import date, timedelta
 from typing import Optional, Protocol
 
 import httpx
+from sqlalchemy import distinct, func
 from sqlmodel import select
 
 from app.core.config import get_settings
@@ -140,6 +141,9 @@ class BackfillReport:
     # de llamadas o la API falló — quedan pendientes para mañana, sin
     # marca (no son "nadie los tenía").
     sin_revisar: int = 0
+    # Filas escritas por fuente — el resumen de pasada muestra quién
+    # aportó qué ("tennisdata 87 · oddsfeed 3").
+    filas_por_fuente: dict[str, int] = field(default_factory=dict)
     detalles: list[str] = field(default_factory=list)
 
 
@@ -551,9 +555,27 @@ async def backfill_breakdown(session) -> dict:
             aplazados += 1
         else:
             agotados += 1
+    # Quién resolvió qué: picks (distintos) cuya cuota vino de cada
+    # fuente de backfill — las filas llevan parsed_pick_id del pick
+    # que disparó la descarga.
+    resueltos_por_fuente = {
+        str(provider): n
+        for provider, n in (
+            await session.exec(
+                select(
+                    OddsSnapshot.provider,
+                    func.count(distinct(OddsSnapshot.parsed_pick_id)),
+                )
+                .where(OddsSnapshot.provider.in_(_BACKFILL_PROVIDERS))
+                .where(OddsSnapshot.parsed_pick_id != None)  # noqa: E711
+                .group_by(OddsSnapshot.provider)
+            )
+        ).all()
+    }
     return {
         "total": len(picks),
         "resueltos": resueltos,
+        "resueltos_por_fuente": resueltos_por_fuente,
         "en_cola": en_cola,
         "aplazados": aplazados,
         "agotados": agotados,
@@ -765,9 +787,16 @@ async def _run_source(
                         )
                     )
                     report.filas += 1
+                    report.filas_por_fuente[source.name] = (
+                        report.filas_por_fuente.get(source.name, 0) + 1
+                    )
             done.add(ext_id)
         elif matched_keys:
-            report.filas += sum(len(downsample(by_key[k].points)) for k in matched_keys)
+            n = sum(len(downsample(by_key[k].points)) for k in matched_keys)
+            report.filas += n
+            report.filas_por_fuente[source.name] = (
+                report.filas_por_fuente.get(source.name, 0) + n
+            )
 
 
 _EVENT_SPLIT = re.compile(r"\s+(?:vs\.?|v|[-–—])\s+")
@@ -1026,6 +1055,9 @@ def _record_gemini_closing(
         session.add(pick)
         done_events.add(ext_id)
         report.filas += 1
+        report.filas_por_fuente[_GEMINI_ODDS_PROVIDER] = (
+            report.filas_por_fuente.get(_GEMINI_ODDS_PROVIDER, 0) + 1
+        )
 
 
 async def run(apply: bool, limit: int | None) -> BackfillReport:
@@ -1070,6 +1102,7 @@ async def run(apply: bool, limit: int | None) -> BackfillReport:
                     "sin_opcion": report.sin_opcion,
                     "mapeados": report.mapeados,
                     "sin_revisar": report.sin_revisar,
+                    "filas_por_fuente": report.filas_por_fuente,
                 },
             )
 

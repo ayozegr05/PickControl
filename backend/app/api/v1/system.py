@@ -35,6 +35,8 @@ class BackfillStatus(BaseModel):
 
     total: int
     resueltos: int
+    # Picks (distintos) cuya cuota aportó cada fuente de backfill.
+    resueltos_por_fuente: dict[str, int] = {}
     en_cola: int
     aplazados: int
     agotados: int

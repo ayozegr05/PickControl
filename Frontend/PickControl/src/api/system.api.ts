@@ -17,11 +17,15 @@ export interface BackfillPass {
   mapeados?: number;
   /** Picks que no se llegaron a intentar (presupuesto diario o error). */
   sin_revisar?: number;
+  /** Filas escritas por fuente en la pasada ("tennisdata" -> 87). */
+  filas_por_fuente?: Record<string, number>;
 }
 
 export interface BackfillStatus {
   total: number;
   resueltos: number;
+  /** Picks (distintos) cuya cuota aportó cada fuente de backfill. */
+  resueltos_por_fuente?: Record<string, number>;
   en_cola: number;
   aplazados: number;
   agotados: number;

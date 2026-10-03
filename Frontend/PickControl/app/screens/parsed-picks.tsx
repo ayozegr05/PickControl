@@ -852,6 +852,17 @@ export default function ParsedPicksScreen() {
                     {providersStatus.odds_backfill.resueltos}
                   </Text>
                 </View>
+                {(() => {
+                  const porFuente = Object.entries(
+                    providersStatus.odds_backfill?.resueltos_por_fuente ?? {}
+                  ).filter(([, n]) => n > 0);
+                  return porFuente.length > 0 ? (
+                    <Text style={styles.statSub}>
+                      {"   "}por fuente:{" "}
+                      {porFuente.map(([n, c]) => `${n} ${c}`).join(" · ")}
+                    </Text>
+                  ) : null;
+                })()}
                 {(providersStatus.odds_backfill.agotados ?? 0) > 0 && (
                   <View style={styles.providerRow}>
                     <Text style={styles.statLabel}>· Nadie los tenía</Text>
@@ -902,6 +913,12 @@ export default function ParsedPicksScreen() {
                       {p.revisados ?? 0} revisados ·{" "}
                       {p.con_fixture ?? 0} con partido · {p.filas ?? 0}{" "}
                       cuotas registradas
+                      {Object.keys(p.filas_por_fuente ?? {}).length > 0
+                        ? ` (${Object.entries(p.filas_por_fuente ?? {})
+                            .filter(([, n]) => n > 0)
+                            .map(([n, c]) => `${n} ${c}`)
+                            .join(" · ")})`
+                        : ""}
                       {(p.sin_revisar ?? 0) > 0
                         ? ` · ${p.sin_revisar} sin revisar (paga diaria agotada)`
                         : ""}
