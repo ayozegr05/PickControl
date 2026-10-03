@@ -66,6 +66,27 @@ _FLARESOLVERR_TIMEOUT = 75.0
 # (RPM), no por día — aparcar hasta mañana (comportamiento estándar de
 # `mark_rate_limited`) dejaría al investigador muerto por una ráfaga.
 _429_COOLDOWN = timedelta(minutes=20)
+# Cuota del free tier por MODELO (peticiones/día): el 429 trae el
+# hint "Please retry in 3h45m" con la hora real del reset. Cada
+# modelo agotado se aparca solo hasta ese instante — sin gastar ni
+# una llamada redescubriendo que sigue seco — mientras los demás
+# siguen trabajando con su propia cuota independiente.
+_MODEL_QUOTA_UNTIL: dict[str, datetime] = {}
+_RETRY_HINT = re.compile(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?")
+
+
+def _retry_hint_seconds(resp: httpx.Response) -> Optional[float]:
+    """Segundos que pide esperar un 429 del free tier ("retry in XhYmZs"),
+    o None si la respuesta no trae hint — cooldown de ritmo entonces."""
+    match = _RETRY_HINT.search(resp.text or "")
+    if not match or not any(match.groups()):
+        return None
+    hours, minutes, seconds = (
+        float(group) if group else 0.0 for group in match.groups()
+    )
+    total = hours * 3600 + minutes * 60 + seconds
+    return total or None
+
 
 # Dominios de resultados que validan una respuesta (allowlist anti-
 # alucinación): la cita tiene que caer en alguno de estos — un blog
@@ -575,29 +596,47 @@ class GeminiResearchProvider:
     ) -> Optional[dict[str, Any]]:
         """generateContent de texto plano, con fallback de modelos."""
         quota_hits = 0
+        parked = 0
         for model in _MODELS:
+            # Modelo aparcado por su cuota diaria concreta: se salta
+            # sin gastar la llamada (el 429 trae "retry in XhYm").
+            until = _MODEL_QUOTA_UNTIL.get(model)
+            if until is not None and until > utc_now():
+                parked += 1
+                continue
             payload, quota_resp = await self._call_model(model, prompt, use_tool)
             if quota_resp is not None:
                 # La cuota del free tier es por modelo: un 429 no
                 # implica que los demás estén secos — se prueban.
                 quota_hits += 1
+                hint = _retry_hint_seconds(quota_resp)
+                _MODEL_QUOTA_UNTIL[model] = utc_now() + (
+                    timedelta(seconds=hint) if hint else _429_COOLDOWN
+                )
                 continue
             if payload is not None:
                 return payload
-        if quota_hits:
-            self._cooldown_until = utc_now() + _429_COOLDOWN
+        if quota_hits or parked == len(_MODELS):
+            if parked == len(_MODELS):
+                # Toda la familia seca por cuota diaria: se retoma
+                # cuando el primer modelo renueve — no a los 20 min.
+                self._cooldown_until = min(
+                    u for u in _MODEL_QUOTA_UNTIL.values() if u > utc_now()
+                )
+            else:
+                self._cooldown_until = utc_now() + _429_COOLDOWN
             # Visible en /providers como bloqueo activo (timestamp, no
-            # aparcado de día: el cooldown propio de 20 min ya manda).
-            # Misma suscripción: se marca en el nombre compartido y en
-            # el alias de la pasada (gemini-odds) para que ambas
-            # tarjetas lo vean.
+            # aparcado de día). Misma suscripción: se marca en el
+            # nombre compartido y en el alias de la pasada
+            # (gemini-odds) para que ambas tarjetas lo vean.
             mark_cooldown(_PROVIDER_NAME, self._cooldown_until)
             if self._calls_as != _PROVIDER_NAME:
                 mark_cooldown(self._calls_as, self._cooldown_until)
             logger.warning(
-                "[GEMINI] 429 en %d modelos — cooldown %s min",
+                "[GEMINI] 429 en %d modelos%s — cooldown hasta %s",
                 quota_hits,
-                _429_COOLDOWN.seconds // 60,
+                f" (+{parked} aparcados)" if parked else "",
+                self._cooldown_until.strftime("%H:%M"),
             )
         return None
 

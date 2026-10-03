@@ -9,10 +9,13 @@ descarta aunque el modelo jure que está cancelado.
 
 import datetime
 import json
+from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 
 from app.core.config import get_settings
+from app.core.dates import utc_now
 from app.services.results.base import MatchState
 from app.services.results.gemini_research import GeminiResearchProvider
 
@@ -643,3 +646,118 @@ class TestFetchHtmlSkeleton:
         monkeypatch.setattr(provider, "_fetch_via_flaresolverr", _stub(None))
         html = await provider._fetch_html("https://www.betexplorer.com/x")
         assert html == skeleton
+
+
+class TestModelQuotaCooldown:
+    """Cuota diaria POR MODELO: el 429 del free tier trae
+    "retry in XhYm" (reset real de la ración del día) y ese modelo se
+    aparca solo hasta la hora indicada — sin gastar llamadas
+    redescubriendo que sigue seco. Los demás modelos siguen con su
+    cuota independiente."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_state(self, monkeypatch, tmp_path):
+        from app.services.results import base as results_base
+        from app.services.results import gemini_research as gr
+
+        monkeypatch.setattr(results_base, "_STATE", None)
+        monkeypatch.setattr(
+            results_base, "_STATE_FILE", tmp_path / "provider_state.json"
+        )
+        monkeypatch.setattr(gr, "_MODEL_QUOTA_UNTIL", {})
+
+    @staticmethod
+    def _resp_429(hint: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            status_code=429,
+            text=f'{{"error":{{"message":"quota. Please retry in {hint}."}}}}',
+        )
+
+    def test_retry_hint_parsea_horas_minutos_segundos(self):
+        from app.services.results.gemini_research import _retry_hint_seconds
+
+        resp = SimpleNamespace(text="Please retry in 3h45m1.219278153s.")
+        assert _retry_hint_seconds(resp) == pytest.approx(
+            3 * 3600 + 45 * 60 + 1.219278153
+        )
+
+    def test_retry_hint_sin_hint_devuelve_none(self):
+        from app.services.results.gemini_research import _retry_hint_seconds
+
+        assert _retry_hint_seconds(SimpleNamespace(text="rate limit")) is None
+
+    async def test_modelo_agotado_se_aparca_hasta_el_hint(self, provider, monkeypatch):
+        from app.services.results import gemini_research as gr
+
+        calls: list[str] = []
+
+        async def fake_call(model, prompt, use_tool=False):
+            calls.append(model)
+            if model == "gemini-3.5-flash":
+                return None, self._resp_429("3h45m")
+            return {"ok": True}, None
+
+        monkeypatch.setattr(provider, "_call_model", fake_call)
+        out = await provider._ask("x")
+
+        assert out == {"ok": True}
+        assert calls == ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
+        until = gr._MODEL_QUOTA_UNTIL["gemini-3.5-flash"]
+        assert until > utc_now() + timedelta(hours=3)
+
+    async def test_modelo_aparcado_se_salta_sin_llamar(self, provider, monkeypatch):
+        from app.services.results import gemini_research as gr
+
+        gr._MODEL_QUOTA_UNTIL["gemini-3.5-flash"] = utc_now() + timedelta(hours=2)
+        calls: list[str] = []
+
+        async def fake_call(model, prompt, use_tool=False):
+            calls.append(model)
+            return {"ok": True}, None
+
+        monkeypatch.setattr(provider, "_call_model", fake_call)
+        out = await provider._ask("x")
+
+        assert out == {"ok": True}
+        assert calls == ["gemini-3.1-flash-lite"]  # 3.5 ni se intenta
+
+    async def test_todos_aparcados_cooldown_hasta_el_primero(
+        self, provider, monkeypatch
+    ):
+        """Toda la familia seca por cuota diaria: el provider queda en
+        cooldown hasta que el primer modelo renueve (no a los 20 min
+        de siempre) y no se gasta ni una llamada."""
+        from app.services.results import gemini_research as gr
+
+        primero = utc_now() + timedelta(hours=1)
+        gr._MODEL_QUOTA_UNTIL["gemini-3.5-flash"] = utc_now() + timedelta(hours=3)
+        gr._MODEL_QUOTA_UNTIL["gemini-3.1-flash-lite"] = primero
+        gr._MODEL_QUOTA_UNTIL["gemini-3.8-flash"] = utc_now() + timedelta(hours=2)
+        calls: list[str] = []
+
+        async def fake_call(model, prompt, use_tool=False):
+            calls.append(model)
+            return None, None
+
+        monkeypatch.setattr(provider, "_call_model", fake_call)
+        assert await provider._ask("x") is None
+
+        assert calls == []
+        assert provider._cooldown_until == primero
+        assert provider._in_cooldown()
+
+    async def test_429_sin_hint_cooldown_de_ritmo(self, provider, monkeypatch):
+        """429 sin hint de reset -> el modelo se aparca 20 min y, si
+        todos fallan, el provider enfría esos 20 min como siempre."""
+        from app.services.results import gemini_research as gr
+
+        async def fake_call(model, prompt, use_tool=False):
+            return None, self._resp_429("")
+
+        monkeypatch.setattr(provider, "_call_model", fake_call)
+        assert await provider._ask("x") is None
+
+        for model in gr._MODELS:
+            until = gr._MODEL_QUOTA_UNTIL[model]
+            assert timedelta() < until - utc_now() <= timedelta(minutes=20)
+        assert provider._in_cooldown()
