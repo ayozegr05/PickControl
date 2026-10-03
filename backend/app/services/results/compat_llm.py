@@ -50,14 +50,15 @@ class Endpoint:
     env_key: str
 
 
-# Cascada en orden de calidad/cuota: Groq 70B gratis y rapidísimo;
-# Cerebras y OpenRouter :free como refuerzo; Gemini queda fuera — es
-# el paracaídas que maneja quien llama (su cuota es la más pequeña).
+# Cascada en orden de calidad/cuota: Groq gpt-oss-120b gratis y
+# rapidísimo (su catálogo ya no trae llama-3.3); Cerebras y
+# OpenRouter :free como refuerzo; Gemini queda fuera — es el
+# paracaídas que maneja quien llama (su cuota es la más pequeña).
 _ENDPOINTS: tuple[Endpoint, ...] = (
     Endpoint(
         "groq",
         "https://api.groq.com/openai/v1",
-        "llama-3.3-70b-versatile",
+        "openai/gpt-oss-120b",
         "groq_api_key",
     ),
     Endpoint(
