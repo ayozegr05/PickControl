@@ -97,7 +97,14 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     familia (`ID_PREFIX` "espn:"/"sofascore:"): el snapshotter solo pasa
     a capturar ids al provider que los emitió. Job periódico
     `snapshotter.py`, mapeo pick→mercado y comparación en `compare.py`.
-    Ver ROADMAP §5.
+    Backfill histórico en `historical_backfill.py` — cascada:
+    `football_csv.py` (football-data.co.uk, CSVs GRATIS por
+    liga/temporada: 1X2+O-U2.5+AH en 22 ligas, 1X2 en 16 extra; su
+    listado de temporada entera hace de sondeo de fecha — casa picks
+    cuya `fecha_evento` es la del repost y el backfill les escribe la
+    fecha real del fixture) → `tennisdata.py` (tennis-data.co.uk
+    gratis) → `oddspapi` → `oddsfeed` → `gemini-odds` (último
+    recurso). Ver ROADMAP §5.
 - **Frontend** `Frontend/PickControl/` — Expo + React Native + TypeScript,
   Expo Router (`app/screens/`, `app/dynamic-routes/`), cliente en `src/api/`.
 
