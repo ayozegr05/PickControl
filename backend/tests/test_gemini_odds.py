@@ -745,3 +745,21 @@ class TestGeminiPassGuards:
             lambda: SimpleNamespace(google_api_key=None),
         )
         assert await hb.run_gemini_odds_pass(apply=True) is None
+
+    async def test_evento_con_guion_no_renecesita_rescate(self, session, monkeypatch):
+        """`evento` ya bueno en formato "A - B": `_lookup_hint` lo
+        devuelve en minúsculas (canónico) y el check NO debe rechazarlo
+        ni llamar al rescate — antes se re-rescataba en cada pasada."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        rescue = AsyncMock(return_value=None)
+        monkeypatch.setattr(hb, "rescue_evento", rescue)
+        multi = AsyncMock(return_value={})
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        pick = self._pick(id=54, evento="Ipswich - Liverpool")
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [pick], set(), set(), session, apply=True, report=report
+        )
+
+        rescue.assert_not_awaited()
+        multi.assert_awaited_once()

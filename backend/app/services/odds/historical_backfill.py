@@ -1052,7 +1052,17 @@ async def _run_gemini_pass(
         # `evento` guardó la apuesta o basura OCR, la búsqueda es
         # imposible y se intenta rescatar el partido del raw
         # (texto -> mini-LLM -> imagen del slip) antes de rendirlo.
-        usable = bool(hint) and (sport == "tenis" or looks_like_match_hint(hint))
+        # La forma del cruce se comprueba sobre el `evento` ORIGINAL:
+        # `translate_team_aliases` (dentro de _lookup_hint) devuelve el
+        # nombre canónico en minúsculas y "a - b" en minúscula se
+        # rechaza a propósito (ambiguo con rangos "8 - 10") — un
+        # evento ya bueno tipo "Ipswich - Liverpool" se re-rescataba
+        # en cada pasada por culpa de esa bajada de caja.
+        usable = bool(hint) and (
+            sport == "tenis"
+            or looks_like_match_hint((pick.evento or "").strip())
+            or looks_like_match_hint(hint)
+        )
         rescued_ok = False
         if not usable and sport != "tenis":
             rescued = await rescue_evento(session, pick, settings)
