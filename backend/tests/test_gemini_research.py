@@ -1,7 +1,8 @@
 """GeminiResearchProvider: investigador de último recurso.
 
-Pipeline de dos saltos vía url_context: (1) DDG Lite -> URLs, filtradas
-por allowlist; (2) el modelo lee SOLO esas páginas y reporta el estado.
+Pipeline de dos saltos: (1) DDG Lite por fetch propio -> URLs filtradas
+por allowlist (url_context solo si la página es ilegible); (2) el
+modelo lee SOLO esas páginas y reporta el estado.
 Fase 1: solo estados "no jugado" (cancelled/postponed/walkover) y SOLO
 citando una de las URLs fiables leídas — sin esa cita la respuesta se
 descarta aunque el modelo jure que está cancelado.
@@ -77,37 +78,61 @@ def provider():
 
 
 class TestSearchUrls:
-    """Salto 1: el modelo lee DDG vía url_context, filtro allowlist."""
+    """Salto 1: DDG Lite por fetch propio (gratis); url_context solo
+    como plan B cuando el fetch no devuelve página legible."""
 
-    async def test_urls_no_fiables_se_filtran(self, provider, monkeypatch):
-        text = json.dumps(
-            {
-                "urls": [
-                    _TENNIS_URL,
-                    "https://blog-random.io/pick",
-                    "javascript:alert(1)",
-                ]
-            }
+    async def test_ddg_lite_decodifica_uddg_y_filtra(self, provider, monkeypatch):
+        html = (
+            '<a rel="nofollow" href="//duckduckgo.com/l/?uddg='
+            "https%3A%2F%2Fwww.tennis.com%2Ftournaments%2Fx%2Fmatches%2Fabc"
+            '&amp;rut=xyz">r</a>'
+            '<a href="https://blog-random.io/pick">x</a>'
+            '<a href="javascript:alert(1)">y</a>'
         )
-        monkeypatch.setattr(provider, "_ask", _stub(_payload(text)))
+        monkeypatch.setattr(provider, "_fetch_html", _stub_page(html))
+
+        async def no_debe_llamarse(*a, **k):
+            raise AssertionError("_ask no debería llamarse con DDG propio")
+
+        monkeypatch.setattr(provider, "_ask", no_debe_llamarse)
         urls = await provider._search_urls(_DATE, "Kestelboim/Romboli")
         assert urls == [_TENNIS_URL]
 
     async def test_error_api_devuelve_vacio(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_fetch_html", _stub_page(""))
         monkeypatch.setattr(provider, "_ask", _stub(None))
         assert await provider._search_urls(_DATE, "x") == []
 
-    async def test_busqueda_usa_url_context(self, provider, monkeypatch):
+    async def test_fetch_roto_cae_a_url_context(self, provider, monkeypatch):
         calls = []
 
         async def spy(prompt, use_tool=False):
             calls.append(use_tool)
-            return None
+            return _payload(json.dumps({"urls": [_TENNIS_URL]}))
 
+        monkeypatch.setattr(provider, "_fetch_html", _stub_page(""))
         monkeypatch.setattr(provider, "_ask", spy)
-        await provider._search_urls(_DATE, "x")
-        # Sin resultados prueba la segunda query; todas con tool.
+        urls = await provider._search_urls(_DATE, "x")
+        assert urls == [_TENNIS_URL]
         assert calls and all(c is True for c in calls)
+
+    async def test_pagina_legible_sin_hits_no_gasta_modelo(self, provider, monkeypatch):
+        """DDG respondió pero sin dominios permitidos -> siguiente
+        query gratis; leer la misma página vía modelo daría igual."""
+        queries = []
+
+        async def fetch(url):
+            queries.append(url)
+            return '<a href="https://blog-random.io/pick">x</a>'
+
+        async def no_debe_llamarse(*a, **k):
+            raise AssertionError("_ask no debería llamarse")
+
+        monkeypatch.setattr(provider, "_fetch_html", fetch)
+        monkeypatch.setattr(provider, "_ask", no_debe_llamarse)
+        assert await provider._search_urls(_DATE, "x") == []
+        # Probó las 3 queries genéricas, todas por fetch propio.
+        assert len(queries) == 3
 
 
 class TestFindPostponedMatch:

@@ -58,11 +58,12 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     respaldo: su conteo por `competitors[].status.$ref` puede
     desviarse del oficial (Baku 2025: 15 ESPN vs 19 FIA). Al final de
     la cascada,
-    `gemini_research.py` (Gemini, free tier): salto 1 = `url_context`
-    lee DDG Lite (los buscadores bloquean la IP de la VM) y filtra URLs
-    por allowlist de dominios de resultados; los saltos 2/3 descargan
-    esas páginas nosotros y el modelo extrae JSON sobre su texto — así
-    la cuota mínima del tool solo se gasta en la búsqueda. Fases:
+    `gemini_research.py` (Gemini, free tier): salto 1 = DDG Lite por
+    fetch propio (cae a FlareSolverr ante challenge) + parseo de
+    enlaces — `url_context` solo queda como plan B cuando la página de
+    resultados es ilegible. Los saltos 2/3 descargan esas páginas
+    nosotros y el modelo extrae JSON sobre su texto — así la cuota del
+    free tier casi solo se gasta en extracción. Fases:
     `find_postponed_match` devuelve SOLO estados no jugados
     (cancelled/postponed/walkover) con cita obligatoria; `find_match`
     liquida marcadores solo con fuente leída + doble lectura que debe

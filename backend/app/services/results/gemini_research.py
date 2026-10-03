@@ -3,8 +3,11 @@
 Cuando TODA la cascada determinista falla, este provider usa Gemini
 gratis (free tier, sin grounding de pago) en dos saltos:
 
-1. BÚSQUEDA: el modelo lee una página de resultados de DuckDuckGo Lite
-   vía `url_context` y devuelve las URLs que hablan del partido.
+1. BÚSQUEDA: nosotros fetcheamos la página de resultados de
+   DuckDuckGo Lite (con render de FlareSolverr si responde challenge)
+   y parseamos los enlaces; solo si esa página es ilegible de plano
+   el modelo la lee vía `url_context` como plan B — la única llamada
+   con tool que queda.
 2. VERIFICACIÓN: filtramos esas URLs por la allowlist de dominios de
    resultados y el modelo lee SOLO esas páginas concretas, devolviendo
    el estado del fixture con las fuentes consultadas.
@@ -24,8 +27,9 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from html import unescape as html_unescape
 from typing import Any, Optional
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import parse_qs, quote_plus, urlparse
 
 import httpx
 
@@ -671,11 +675,12 @@ class GeminiResearchProvider:
     ) -> list[str]:
         """Salto 1: búsqueda -> URLs fiables del partido.
 
-        Los buscadores bloquean la IP del servidor (DDG 403, Bing
-        degradado), así que la lectura de resultados la hace el
-        fetcher de Google vía url_context sobre DDG Lite — la única
-        llamada con tool del pipeline; el resto va por fetch propio
-        y texto plano para no quemar su cuota mínima.
+        DDG Lite lo fetcheamos nosotros (cae a FlareSolverr ante
+        challenge) y los enlaces se parsean aquí — la búsqueda ya no
+        quema cuota del modelo. Solo si la página de resultados no se
+        puede leer de ninguna forma se usa el fetcher de Google vía
+        url_context como plan B; el resto del pipeline siempre va por
+        fetch propio y texto plano para no quemar su cuota mínima.
 
         El día exacto en la query empobrece los resultados de DDG (las
         páginas no indexan la fecha como texto), así que se prueba
@@ -702,29 +707,67 @@ class GeminiResearchProvider:
         urls: list[str] = []
         seen: set[str] = set()
         for query in queries:
-            search_url = "https://lite.duckduckgo.com/lite/?q=" + quote_plus(query)
-            payload = await self._ask(
-                _SEARCH_PROMPT.format(
-                    search_url=search_url,
-                    sport=self._sport_es(),
-                    hint=hint,
-                    date=date.strftime("%d de %B de %Y"),
-                ),
-                use_tool=True,
-            )
-            if payload is None:
-                continue
-            data = _extract_json(self._payload_text(payload))
-            if not data:
-                continue
-            for u in data.get("urls") or []:
-                u = str(u)
-                if u and u not in seen:
+            # Primero gratis: DDG Lite por fetch propio (cae a
+            # FlareSolverr si responde challenge). Solo si el fetch
+            # en sí falla — página vacía/bloqueada — se gasta una
+            # llamada del modelo; una página leída sin dominios
+            # permitidos da el mismo vacío a cualquiera que la lea.
+            found, page_ok = await self._search_ddg_lite(query)
+            if not found and not page_ok:
+                found = await self._search_urls_gemini(query, date, hint)
+            for u in found:
+                if u not in seen:
                     seen.add(u)
                     urls.append(u)
             if urls:
                 break
         return _filter_trusted_urls(urls)[:_MAX_VERIFIED_URLS]
+
+    async def _search_ddg_lite(self, query: str) -> tuple[list[str], bool]:
+        """DDG Lite por fetch propio — cero cuota de modelo.
+
+        Devuelve (urls de dominios permitidos, página_legible). Los
+        enlaces salientes vienen envueltos como `/l/?uddg=<url>` — se
+        decodifica el destino real antes de aplicar la allowlist."""
+        html = await self._fetch_html(
+            "https://lite.duckduckgo.com/lite/?q=" + quote_plus(query)
+        )
+        if not html:
+            return [], False
+        urls: list[str] = []
+        seen: set[str] = set()
+        for href in re.findall(r'href="([^"]+)"', html):
+            href = html_unescape(href).strip()
+            if "uddg=" in href:
+                href = (parse_qs(urlparse(href).query).get("uddg") or [""])[0]
+            if href.startswith("http") and href not in seen:
+                seen.add(href)
+                urls.append(href)
+        return _filter_trusted_urls(urls), True
+
+    async def _search_urls_gemini(
+        self, query: str, date: datetime, hint: str
+    ) -> list[str]:
+        """Fallback: el modelo lee DDG Lite vía url_context.
+
+        Solo se usa cuando el fetch propio de la página de resultados
+        falla del todo — gasta una llamada del free tier, así que es
+        el plan B y no el camino normal."""
+        payload = await self._ask(
+            _SEARCH_PROMPT.format(
+                search_url="https://lite.duckduckgo.com/lite/?q=" + quote_plus(query),
+                sport=self._sport_es(),
+                hint=hint,
+                date=date.strftime("%d de %B de %Y"),
+            ),
+            use_tool=True,
+        )
+        if payload is None:
+            return []
+        data = _extract_json(self._payload_text(payload))
+        if not data:
+            return []
+        return [str(u) for u in (data.get("urls") or []) if u]
 
     async def _verify_data(
         self, date: datetime, hint: str, urls: list[str]
