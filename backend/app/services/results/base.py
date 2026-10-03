@@ -137,6 +137,22 @@ TEAM_ALIASES = {
     "dortmund": "borussia dortmund",
     "napoles": "napoli",
     "roma": "as roma",
+    "deportivo de la coruña": "la coruna",
+    "deportivo de la coruna": "la coruna",
+    "deportivo la coruña": "la coruna",
+    "deportivo la coruna": "la coruna",
+    "deportivo de a coruña": "la coruna",
+    "deportivo de a coruna": "la coruna",
+    "vfb stuttgart": "stuttgart",
+    "cologne": "fc koln",
+    "fc colonia": "fc koln",
+    "saint-truidense": "st truiden",
+    "sint-truidense": "st truiden",
+    "st truidense": "st truiden",
+    "sint truidense": "st truiden",
+    "union saint-gilloise": "union st gilloise",
+    "union saint gilloise": "union st gilloise",
+    "union sg": "union st gilloise",
 }
 
 
@@ -823,6 +839,19 @@ def mark_loop_ran(loop_name: str) -> None:
     """
     _load_state()["loops"][loop_name] = utc_now().isoformat()
     _save_state()
+
+
+def clear_missed(key: str) -> None:
+    """Borra la marca de búsqueda fallida de `key`.
+
+    Se usa cuando cambia la premisa que hizo fallar la búsqueda — p.
+    ej. el backfill corrige `fecha_evento` con la fecha real del
+    fixture: las marcas "nofixture" dejadas buscando en el día
+    equivocado ya no son válidas y hay que reintentar."""
+    state = _load_state()
+    if key in state["missed"]:
+        del state["missed"][key]
+        _save_state()
 
 
 def is_missed(key: str, ttl: Optional[timedelta] = None) -> bool:

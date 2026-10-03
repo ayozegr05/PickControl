@@ -510,6 +510,7 @@ class TestBackfillPendingCount:
         # proveedor: una fuente puede cubrir lo que la otra no).
         results_base.mark_missed(f"oddspapi|nofixture|{pick.id}")
         results_base.mark_missed(f"oddsfeed|nofixture|{pick.id}")
+        results_base.mark_missed(f"footballdata|nofixture|{pick.id}")
         assert await count_pending_backfill(session) == 0
 
     async def _pick(self, session, **kwargs) -> ParsedPick:

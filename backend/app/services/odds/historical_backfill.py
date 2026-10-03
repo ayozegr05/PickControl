@@ -7,15 +7,22 @@ en vivo.
 
 Fuentes en cascada (orden = prioridad, no volumen):
 
-0. `tennisdata` (tennis-data.co.uk): XLSX anuales GRATIS de cuotas de
+0. `footballdata` (football-data.co.uk): CSVs GRATIS por liga y
+   temporada (22 ligas principales + 16 "extra") con cierre y apertura
+   de 1X2, O/U 2.5 y hándicap asiático. Sin key ni cuota. Además su
+   listado de temporada entera hace de sondeo de fecha: casa picks
+   cuya `fecha_evento` guardada es la del repost, y el backfill les
+   escribe la fecha real del fixture — el resto de fuentes busca ya
+   en el día correcto.
+1. `tennisdata` (tennis-data.co.uk): XLSX anuales GRATIS de cuotas de
    ganador ATP/WTA (Pinnacle/B365). Sin key ni cuota — drena los picks
    de tenis `mercado="ganador"` sin gastar una sola llamada de las
    APIs de pago. No cubre Challengers/ITF ni mercados de juegos.
-1. `oddspapi` (bet36528): el rico — 33k mercados (córners, tarjetas,
+2. `oddspapi` (bet36528): el rico — 33k mercados (córners, tarjetas,
    props...) pero BASIC son solo 200 req/mes.
-2. `oddsfeed` (odds-feed): solo mercados principales (1X2, O/U,
+3. `oddsfeed` (odds-feed): solo mercados principales (1X2, O/U,
    hándicap, BTTS) pero 500 req/mes y histórico real validado.
-3. `gemini-odds`: último recurso por pick — el investigador Gemini
+4. `gemini-odds`: último recurso por pick — el investigador Gemini
    lee la página del partido en un comparador (oddspedia, oddsportal,
    betexplorer) y extrae la cuota de cierre del mercado del pick.
    Doble validación: la cuota tiene que aparecer literal en el HTML y
@@ -60,7 +67,7 @@ from app.models.odds_snapshot import OddsEvent, OddsSnapshot
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage  # noqa: F401
 from app.models.user import User  # noqa: F401  (FKs de TelegramRawMessage)
-from app.services.odds import oddsfeed, oddspapi, tennisdata
+from app.services.odds import football_csv, oddsfeed, oddspapi, tennisdata
 from app.services.odds.compare import map_pick_choices
 from app.services.odds.event_rescue import looks_like_match_hint, rescue_evento
 from app.services.odds.oddsfeed import (
@@ -84,6 +91,7 @@ from app.services.odds.oddspapi import (
 )
 from app.services.odds.snapshotter import _canonical_sport, _lookup_hint
 from app.services.results.base import (
+    clear_missed,
     count_odds_rows_written,
     count_provider_call,
     is_missed,
@@ -141,6 +149,9 @@ class BackfillReport:
     # de llamadas o la API falló — quedan pendientes para mañana, sin
     # marca (no son "nadie los tenía").
     sin_revisar: int = 0
+    # `fecha_evento` corregidas con la fecha real del fixture (la
+    # guardada era la del repost — sondeo de fecha del CSV).
+    fechas_corregidas: int = 0
     # Filas escritas por fuente — el resumen de pasada muestra quién
     # aportó qué ("tennisdata 87 · oddsfeed 3").
     filas_por_fuente: dict[str, int] = field(default_factory=dict)
@@ -401,6 +412,70 @@ class _TennisDataSource:
         return ("ok", choices) if choices else ("miss", [])
 
 
+class _FootballCsvSource:
+    """football-data.co.uk: un CSV por liga y temporada, sin key ni
+    cuota — el gemelo de tenis de `tennisdata`.
+
+    `fixtures()` devuelve TODA la temporada del día pedido (más las
+    adyacentes) en vez de solo ese día: el listado completo hace de
+    sondeo de fecha — `match()` casa por nombres en una ventana de
+    ±60 días, así un pick cuya fecha guardada es la del repost
+    encuentra su fixture real, y `_run_source` corrige su
+    `fecha_evento` antes de que las APIs de pago busquen en el día
+    equivocado. Las descargas se cachean por temporada y pasada."""
+
+    name = football_csv.NAME
+
+    def __init__(self) -> None:
+        self._seasons: dict[str, Optional[list[football_csv.FootballFixture]]] = {}
+        self._extra: Optional[list[football_csv.FootballFixture]] = None
+        self._extra_fetched = False
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return {"futbol": 0}
+
+    async def _season_rows(self, http, code: str):
+        if code not in self._seasons:
+            self._seasons[code] = await football_csv.fetch_season(http, code)
+            if self._seasons[code] is not None:
+                count_provider_call(self.name)
+        return self._seasons[code]
+
+    async def _extra_rows(self, http):
+        if not self._extra_fetched:
+            self._extra = await football_csv.fetch_extra(http)
+            self._extra_fetched = True
+            if self._extra is not None:
+                count_provider_call(self.name)
+        return self._extra
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        rows: list = []
+        for code in football_csv.season_codes(day):
+            season = await self._season_rows(http, code)
+            if season is None:
+                return None
+            rows += season
+        extra = await self._extra_rows(http)
+        if extra is None:
+            return None
+        return rows + extra
+
+    def match(self, fixtures, hint, dt, sofascore_id):
+        return football_csv.match_row(fixtures, hint, dt)
+
+    def ext_id(self, fixture: football_csv.FootballFixture) -> str:
+        return football_csv.event_ext_id(fixture)
+
+    def fixture_key(self, fixture: football_csv.FootballFixture) -> str:
+        return self.ext_id(fixture)
+
+    async def choices(self, http, fixture: football_csv.FootballFixture, sport, picks):
+        choices = football_csv.row_choices(fixture)
+        return ("ok", choices) if choices else ("miss", [])
+
+
 def _book_defs(books, book) -> list:
     """Las (idx, choice_name, choice_group) del market_book dado."""
     for candidate, defs in books:
@@ -410,6 +485,7 @@ def _book_defs(books, book) -> list:
 
 
 _BACKFILL_PROVIDERS = (
+    football_csv.NAME,
     tennisdata.NAME,
     oddspapi.NAME,
     oddsfeed.NAME,
@@ -462,7 +538,7 @@ async def _resolved_pick_ids(session) -> set[int]:
 
 def _sources(settings) -> list[_HistorySource]:
     """Fuentes disponibles según la configuración, en orden de uso."""
-    sources: list[_HistorySource] = [_TennisDataSource()]
+    sources: list[_HistorySource] = [_FootballCsvSource(), _TennisDataSource()]
     if settings.rapidapi_tennis_key:
         sources.append(
             _OddsPapiSource(
@@ -699,6 +775,27 @@ async def _run_source(
                 if apply:
                     mark_missed(nofixture_key.format(pick.id))
                 continue
+            real_start = getattr(fixture, "start", None)
+            if (
+                real_start is not None
+                and pick.fecha_evento is not None
+                and pick.fecha_evento.date() != real_start.date()
+            ):
+                # La fecha guardada era la del repost: la del fixture
+                # es la verdad del provider. La corregimos para que el
+                # resto de fuentes busquen el día correcto, y limpiamos
+                # las marcas "nofixture" dejadas con la fecha mala.
+                report.detalles.append(
+                    f"  ~ pick {pick.id}: fecha {pick.fecha_evento.date()} "
+                    f"-> {real_start.date()} [{source.name}]"
+                )
+                report.fechas_corregidas += 1
+                pick.fecha_evento = real_start
+                if apply:
+                    session.add(pick)
+                    for other in _sources(get_settings()):
+                        if other.name != source.name:
+                            clear_missed(f"{other.name}|nofixture|{pick.id}")
             ext_id = source.ext_id(fixture)
             if ext_id in done:
                 continue
@@ -1153,6 +1250,7 @@ async def run(apply: bool, limit: int | None) -> BackfillReport:
                     "sin_opcion": report.sin_opcion,
                     "mapeados": report.mapeados,
                     "sin_revisar": report.sin_revisar,
+                    "fechas_corregidas": report.fechas_corregidas,
                     "filas_por_fuente": report.filas_por_fuente,
                 },
             )

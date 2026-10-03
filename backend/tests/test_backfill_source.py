@@ -109,3 +109,38 @@ async def test_presupuesto_en_curvas_cuenta_sin_revisar(session):
     assert report.con_fixture == 2
     assert report.sin_revisar == 2
     assert report.filas == 0
+
+
+class _EarlyFixture(_Fixture):
+    """El partido real se jugó el 4/sep, no el 20 que guarda el pick
+    (la fecha guardada era la del repost del boleto)."""
+
+    start = datetime(2026, 9, 4)
+
+
+async def test_fixture_en_otra_fecha_corrige_fecha_evento(session):
+    """El fixture casado por una fuente con sondeo de fecha (el CSV
+    de temporada entera) corrige `fecha_evento` del pick con la fecha
+    real del partido — la guardada era la del repost."""
+    src = _FakeSource(fixtures_return=[_EarlyFixture()])
+    pick = _pick(1, 20)  # guardada: 20/sep; partido real: 4/sep
+    assert pick.fecha_evento != _EarlyFixture.start
+
+    report = BackfillReport()
+    await _run_source(src, [pick], set(), set(), session, None, False, report)
+
+    assert report.con_fixture == 1
+    assert report.fechas_corregidas == 1
+    assert pick.fecha_evento == _EarlyFixture.start
+
+
+async def test_fixture_misma_fecha_no_corrige(session):
+    src = _FakeSource(fixtures_return=[_Fixture()])
+    pick = _pick(1, 20)
+    pick.fecha_evento = _Fixture.start  # ya correcta
+
+    report = BackfillReport()
+    await _run_source(src, [pick], set(), set(), session, None, False, report)
+
+    assert report.fechas_corregidas == 0
+    assert pick.fecha_evento == _Fixture.start
