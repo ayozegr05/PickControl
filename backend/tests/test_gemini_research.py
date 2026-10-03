@@ -574,3 +574,72 @@ class TestTickerCornerSummary:
         summary = _ticker_corner_summary(text)
         assert "Silkeborg IF Reserves 2" in summary
         assert "Sonderjyske Reserves 2" in summary
+
+
+class _FakeResp:
+    def __init__(self, text: str, status: int = 200):
+        self.text = text
+        self.status_code = status
+
+
+class _FakeHttpClient:
+    """Sustituye httpx.AsyncClient dentro de gemini_research."""
+
+    def __init__(self, text: str):
+        self._text = text
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url):
+        return _FakeResp(self._text)
+
+
+class TestFetchHtmlSkeleton:
+    """`_fetch_html`: un 200 con esqueleto JS (sin tabla) debe caer al
+    render de FlareSolverr — el comparador devuelve la página vacía y
+    las cuotas solo existen en el DOM."""
+
+    async def test_esqueleto_js_cae_a_flaresolverr(self, provider, monkeypatch):
+        from app.services.results import gemini_research as gr
+
+        monkeypatch.setattr(
+            gr.httpx, "AsyncClient", lambda **k: _FakeHttpClient("<html>ok</html>")
+        )
+        rendered = "<html>" + "x" * 40000 + "</html>"
+        monkeypatch.setattr(provider, "_fetch_via_flaresolverr", _stub(rendered))
+
+        html = await provider._fetch_html("https://www.betexplorer.com/x")
+        assert html == rendered
+
+    async def test_pagina_rica_no_gasta_flaresolverr(self, provider, monkeypatch):
+        from app.services.results import gemini_research as gr
+
+        rich = "<html>" + "x" * 40000 + "</html>"
+        monkeypatch.setattr(gr.httpx, "AsyncClient", lambda **k: _FakeHttpClient(rich))
+        calls = []
+
+        async def fs(url):
+            calls.append(url)
+            return None
+
+        monkeypatch.setattr(provider, "_fetch_via_flaresolverr", fs)
+        html = await provider._fetch_html("https://www.betexplorer.com/x")
+        assert html == rich
+        assert calls == []
+
+    async def test_esqueleto_sin_flaresolverr_conserva_html(
+        self, provider, monkeypatch
+    ):
+        from app.services.results import gemini_research as gr
+
+        skeleton = "<html>shell</html>"
+        monkeypatch.setattr(
+            gr.httpx, "AsyncClient", lambda **k: _FakeHttpClient(skeleton)
+        )
+        monkeypatch.setattr(provider, "_fetch_via_flaresolverr", _stub(None))
+        html = await provider._fetch_html("https://www.betexplorer.com/x")
+        assert html == skeleton

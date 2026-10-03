@@ -272,6 +272,12 @@ def _ticker_corner_summary(text: str) -> str:
     return f" Corner Kicks {t1} {c1} {t2} {c2}." f" Corner Kicks {t2} {c2} {t1} {c1}."
 
 
+# Por debajo de este tamaño el HTML casi seguro es un esqueleto JS
+# (las páginas de comparadores con tabla real pesan centenares de KB
+# renderizadas): se intenta el render de FlareSolverr y se conserva
+# la versión más larga.
+_MIN_RICH_HTML = 30_000
+
 _FETCH_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -842,7 +848,15 @@ class GeminiResearchProvider:
 
     async def _fetch_html(self, url: str) -> Optional[str]:
         """HTML crudo de una página; si el fetch directo choca contra
-        Cloudflare/403 se reintenta vía FlareSolverr (Chromium propio)."""
+        Cloudflare/403 se reintenta vía FlareSolverr (Chromium propio).
+
+        También cuando el 200 trae un esqueleto JS sin contenido: los
+        comparadores (oddspedia, oddsportal, betexplorer) sirven la
+        página vacía y las tablas de cuotas/stats solo existen en el
+        DOM renderizado — sin render el fetch "funciona" pero no hay
+        literal que validar y la búsqueda se marca 'sin cuota' con
+        datos que sí estaban ahí."""
+        html: Optional[str] = None
         try:
             async with httpx.AsyncClient(
                 timeout=_TIMEOUT,
@@ -851,10 +865,15 @@ class GeminiResearchProvider:
             ) as client:
                 resp = await client.get(url)
             if resp.status_code == 200 and "__cf_chl" not in resp.text:
-                return resp.text
+                html = resp.text
         except httpx.HTTPError as exc:
             logger.info("[GEMINI] Fetch %s falló: %r", url, exc)
-        return await self._fetch_via_flaresolverr(url)
+        if html is not None and len(html) >= _MIN_RICH_HTML:
+            return html
+        rendered = await self._fetch_via_flaresolverr(url)
+        if rendered and len(rendered) > len(html or ""):
+            return rendered
+        return html
 
     async def _fetch_via_flaresolverr(self, url: str) -> Optional[str]:
         """HTML renderizado por el FlareSolverr de la VM.
