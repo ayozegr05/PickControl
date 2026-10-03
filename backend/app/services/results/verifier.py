@@ -1691,11 +1691,51 @@ _LAST_VOID_REASON: ContextVar[Optional[str]] = ContextVar(
     "last_void_reason", default=None
 )
 
+# (home, away) del último fixture encontrado dentro de un verify_pick.
+# Lo escriben los `_find_*` y lo lee el wrapper para reparar un
+# `evento` inservible del pick ("Lun - sep", vacío, "Desconocido")
+# cuando el partido sí se encontró por otra vía (jugador, stats...).
+_LAST_MATCH_NAMES: ContextVar[Optional[tuple[str, str]]] = ContextVar(
+    "last_match_names", default=None
+)
+
 
 def _void(reason: str) -> tuple[None, bool]:
     """Marca un retorno anulado con su motivo para `verify_pick`."""
     _LAST_VOID_REASON.set(reason)
     return None, True
+
+
+_EVENTO_FEO_DIA = re.compile(r"^(lun|mar|mi[eé]|jue|vie|s[aá]b|dom)\b", re.IGNORECASE)
+
+
+def _evento_feo(evento: Optional[str]) -> bool:
+    """El campo no sirve como pista: vacío, "Desconocido" o el
+    encabezado de día que el extractor confundió con el partido
+    ("Lun - sep"). Un nombre de torneo corto SÍ cuenta — aporta algo."""
+    e = (evento or "").strip()
+    return (
+        len(e) < _MIN_LOOKUP_HINT_LEN
+        or "desconocido" in e.lower()
+        or bool(_EVENTO_FEO_DIA.match(e))
+    )
+
+
+async def _evento_desde_odds(pick: ParsedPick) -> Optional[str]:
+    """Nombre real del partido via `odds_event_id`: la fila `OddsEvent`
+    ya guarda home/away del evento que casó el snapshotter — lectura
+    local, cero llamadas. Caso real: evento OCR "Lun - sep" pero el
+    partido ya identificado ("espn:soccer:uefa.nations:401861080")."""
+    from app.models.odds_snapshot import OddsEvent
+
+    ext_id = pick.odds_event_id
+    if not ext_id:
+        return None
+    async with AsyncSessionLocal() as session:
+        ev = await session.get(OddsEvent, ext_id)
+    if ev and ev.home_team and ev.away_team:
+        return f"{ev.home_team} vs {ev.away_team}"
+    return None
 
 
 def _provider_label(provider: ResultsProvider) -> str:
@@ -1767,6 +1807,7 @@ async def _find_match_across_providers(
             continue
         if match:
             _LAST_PROVIDER_HIT.set(_provider_label(provider))
+            _LAST_MATCH_NAMES.set((match.home_team, match.away_team))
             return match
     return None
 
@@ -1797,6 +1838,7 @@ async def _find_stats_across_providers(
             continue
         if stats:
             _LAST_PROVIDER_HIT.set(_provider_label(provider))
+            _LAST_MATCH_NAMES.set((stats.home_team, stats.away_team))
             return stats
     return None
 
@@ -1828,6 +1870,7 @@ async def _find_stats_1h_across_providers(
             continue
         if stats:
             _LAST_PROVIDER_HIT.set(_provider_label(provider))
+            _LAST_MATCH_NAMES.set((stats.home_team, stats.away_team))
             return stats
     return None
 
@@ -1858,6 +1901,8 @@ async def _find_events_across_providers(
             continue
         if events:
             _LAST_PROVIDER_HIT.set(_provider_label(provider))
+            if events.home_team and events.away_team:
+                _LAST_MATCH_NAMES.set((events.home_team, events.away_team))
             return events
     return None
 
@@ -1917,6 +1962,8 @@ async def _find_postponed_across_providers(
             continue
         if state:
             _LAST_PROVIDER_HIT.set(_provider_label(provider))
+            if state.home_team and state.away_team:
+                _LAST_MATCH_NAMES.set((state.home_team, state.away_team))
             return state
     return None
 
@@ -1987,7 +2034,16 @@ async def verify_pick(
     """
     token = _LAST_PROVIDER_HIT.set(None)
     token_reason = _LAST_VOID_REASON.set(None)
+    token_names = _LAST_MATCH_NAMES.set(None)
     try:
+        if _evento_feo(pick.evento):
+            # Rescate del fixture por `odds_event_id`: si el snapshotter
+            # ya identificó el partido (cuotas capturadas en vivo), la
+            # fila OddsEvent tiene los nombres — pista mejor que la
+            # basura OCR ("Lun - sep") sin gastar ni una llamada.
+            nombre = await _evento_desde_odds(pick)
+            if nombre:
+                pick.evento = nombre
         acierto, anulada = await _verify_pick_result(pick, providers)
         if (
             acierto is None
@@ -2036,10 +2092,18 @@ async def verify_pick(
         if acierto is not None or anulada:
             pick.verificado_provider = _LAST_PROVIDER_HIT.get()
             pick.motivo_anulada = _LAST_VOID_REASON.get() if anulada else None
+            names = _LAST_MATCH_NAMES.get()
+            if names and _evento_feo(pick.evento):
+                # Resuelto por jugador/selección con evento inservible:
+                # se escribe el nombre real encontrado para que el pick
+                # no quede feo para siempre (p. ej. "Dietrich gana" sin
+                # evento -> "Dietrich vs X" del fixture real).
+                pick.evento = f"{names[0]} vs {names[1]}"
         return acierto, anulada
     finally:
         _LAST_PROVIDER_HIT.reset(token)
         _LAST_VOID_REASON.reset(token_reason)
+        _LAST_MATCH_NAMES.reset(token_names)
 
 
 async def _verify_pick_result(

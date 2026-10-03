@@ -41,6 +41,7 @@ from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.models.user import User  # noqa: F401
 from app.services.pick_service import get_or_create_informante
+from app.services.results.verifier import _evento_feo
 from app.services.telegram.ocr import extract_text_from_image
 from app.services.telegram.pick_extractor import _llm_extract, extract_pick
 from app.services.telegram.processor import _find_duplicate_pick
@@ -303,12 +304,15 @@ _LLM_BACKFILL_FIELDS = (
 async def retry_incomplete_picks(
     max_age_days: Optional[float] = None,
 ) -> dict[str, int]:
-    """Reintenta la pasada LLM en picks `rule` simples sin `evento`.
+    """Reintenta la pasada LLM en picks con `evento` inservible.
 
     Caso real: el pick salió por reglas con el rival solo en la prosa
     del análisis y la 2ª pasada LLM falló en ese momento (429/red) —
-    queda `es_apuesta=True` con `evento` vacío y nunca verificará. El
-    ciclo lo reintenta hasta que el LLM lo analiza de verdad:
+    queda `es_apuesta=True` con `evento` vacío y nunca verificará. Lo
+    mismo pasa con `evento` basura ("Lun - sep", "Desconocido": el
+    extractor tomó el encabezado del día en vez del partido) — el OCR
+    suele tener los dos nombres y la 2ª pasada los recupera. El ciclo
+    lo reintenta hasta que el LLM lo analiza de verdad:
 
     - LLM rellena `evento` -> se actualizan los campos que aporta.
     - LLM dice "no es apuesta" -> `es_apuesta=False` (basura confirmada
@@ -316,8 +320,12 @@ async def retry_incomplete_picks(
     - LLM falla (429/red) o no aporta evento -> no se toca nada; se
       reintenta en el siguiente ciclo hasta `rescue_max_age_days`.
 
-    Solo picks simples: en combinadas el LLM devuelve el pick completo
-    y no hay forma segura de mapearlo pata a pata.
+    Patas de combinada (`combinada_id` not null): el LLM devuelve el
+    boleto completo y no hay forma segura de mapearlo pata a pata, así
+    que solo se rellenan `evento`/`deporte` — la identidad del fixture
+    es común a todo el boleto y basta para que el verificador lo
+    encuentre. Tampoco se marca `es_apuesta=False` en una pata (rompería
+    la liquidación del padre).
     """
     settings = get_settings()
     resumen = {"candidatos": 0, "rellenados": 0, "descartados": 0, "fallos": 0}
@@ -335,18 +343,23 @@ async def retry_incomplete_picks(
             .where(ParsedPick.es_apuesta == True)  # noqa: E712
             .where(ParsedPick.acierto.is_(None))
             .where(ParsedPick.anulada == False)  # noqa: E712
-            .where(ParsedPick.combinada_id.is_(None))
             .where(ParsedPick.es_combinada == False)  # noqa: E712
+            # Prefiltro SQL amplio; `_evento_feo` decide si la pasada
+            # LLM merece la pena (no se reextrae "Como v Parma" corto
+            # pero válido).
             .where(
                 or_(
                     ParsedPick.evento.is_(None),
                     func.trim(ParsedPick.evento) == "",
+                    func.length(func.trim(ParsedPick.evento)) < 12,
+                    func.lower(ParsedPick.evento).like("%desconocido%"),
                 )
             )
         )
         if cutoff is not None:
             stmt = stmt.where(TelegramRawMessage.received_at >= cutoff)
         rows = (await session.exec(stmt)).all()
+        rows = [(p, r) for p, r in rows if _evento_feo(p.evento)]
         resumen["candidatos"] = len(rows)
 
         for pick, raw in rows:
@@ -372,6 +385,18 @@ async def retry_incomplete_picks(
                 continue
             if llm is None:
                 resumen["fallos"] += 1
+                continue
+            if pick.combinada_id is not None:
+                # Pata: solo identidad del fixture — el resto del pick
+                # (mercado/cuota/línea) es propio de la pata y no se
+                # remapea desde el boleto completo.
+                if not llm.es_apuesta or not llm.evento:
+                    continue
+                pick.evento = llm.evento
+                if llm.deporte:
+                    pick.deporte = llm.deporte
+                session.add(pick)
+                resumen["rellenados"] += 1
                 continue
             if not llm.es_apuesta:
                 # Analizado de verdad y no es apuesta -> descarte.

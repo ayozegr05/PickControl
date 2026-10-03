@@ -3537,3 +3537,85 @@ class TestVoidRecheck:
         today = utc_now().date().isoformat()
         assert snap[today]["procesadas"] == 1
         assert snap[today]["corregidas"] == 1
+
+
+class TestEventoFeoRescate:
+    """`evento` inservible ("Lun - sep", vacío, "Desconocido"):
+
+    - Antes de verificar, `odds_event_id` recupera el nombre real del
+      fixture desde `odds_events` (cero llamadas — ya lo pagó el
+      snapshotter).
+    - Al resolverse por otra vía (jugador de la selección), el pick
+      hereda el "Local vs Visitante" del fixture encontrado.
+    """
+
+    def _odds_session_cm(self, session):
+        @asynccontextmanager
+        async def _cm():
+            yield session
+
+        return _cm
+
+    async def test_odds_event_id_repara_el_evento(self, session, monkeypatch):
+        from app.models.odds_snapshot import OddsEvent
+
+        session.add(
+            OddsEvent(
+                event_ext_id="tennisapi1:99",
+                sport="tenis",
+                home_team="Carlos Alcaraz",
+                away_team="Jannik Sinner",
+            )
+        )
+        await session.commit()
+        monkeypatch.setattr(
+            verifier_mod, "AsyncSessionLocal", self._odds_session_cm(session)
+        )
+        pick = _pick_tenis("Alcaraz gana")
+        pick.evento = "Lun - sep"
+        pick.odds_event_id = "tennisapi1:99"
+        provider = _StubTennisProvider(home_sets=2, away_sets=0)
+
+        acierto, anulada = await verify_pick(pick, [provider])
+
+        assert (acierto, anulada) == (True, False)
+        assert pick.evento == "Carlos Alcaraz vs Jannik Sinner"
+
+    async def test_resuelto_por_jugador_escribe_el_fixture(self, session, monkeypatch):
+        """Sin odds_event_id: se resuelve buscando al jugador y el
+        evento feo se reescribe con el partido real encontrado."""
+        monkeypatch.setattr(
+            verifier_mod, "AsyncSessionLocal", self._odds_session_cm(session)
+        )
+        pick = _pick_tenis("Alcaraz gana")
+        pick.evento = None
+        provider = _StubTennisProvider(home_sets=2, away_sets=0)
+
+        acierto, anulada = await verify_pick(pick, [provider])
+
+        assert (acierto, anulada) == (True, False)
+        assert pick.evento == "Carlos Alcaraz vs Jannik Sinner"
+
+    async def test_sin_resolver_no_toca_el_evento(self, session, monkeypatch):
+        monkeypatch.setattr(
+            verifier_mod, "AsyncSessionLocal", self._odds_session_cm(session)
+        )
+        pick = _pick_tenis("Medvedev gana")  # no está en el stub
+        pick.evento = None
+        provider = _StubTennisProvider(home_sets=2, away_sets=0)
+
+        acierto, anulada = await verify_pick(pick, [provider])
+
+        assert (acierto, anulada) == (None, False)
+        assert pick.evento is None
+
+    async def test_evento_bueno_no_se_sobrescribe(self, session, monkeypatch):
+        monkeypatch.setattr(
+            verifier_mod, "AsyncSessionLocal", self._odds_session_cm(session)
+        )
+        pick = _pick_tenis("Alcaraz gana")  # evento "Alcaraz - Sinner"
+        provider = _StubTennisProvider(home_sets=2, away_sets=0)
+
+        await verify_pick(pick, [provider])
+
+        assert pick.evento == "Alcaraz - Sinner"

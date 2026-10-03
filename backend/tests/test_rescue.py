@@ -367,10 +367,9 @@ class TestRetryIncompletePicks:
         assert resumen["candidatos"] == 0
         llm.assert_not_called()
 
-    async def test_patas_y_padres_de_combinada_no_entran(self, session, monkeypatch):
+    async def test_padre_de_combinada_no_entra(self, session, monkeypatch):
         raw = await _raw(session, text="combinada", processed=True)
-        padre = await self._pick_sin_evento(session, raw, es_combinada=True)
-        await self._pick_sin_evento(session, raw, combinada_id=padre.id)
+        await self._pick_sin_evento(session, raw, es_combinada=True)
         _settings_stub(monkeypatch)
         monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
         llm = AsyncMock()
@@ -380,6 +379,96 @@ class TestRetryIncompletePicks:
 
         assert resumen["candidatos"] == 0
         llm.assert_not_called()
+
+    async def test_evento_basura_tambien_es_candidato(self, session, monkeypatch):
+        """No solo el vacío: "Lun - sep" (encabezado de día extraído por
+        error) también entra a la 2ª pasada LLM."""
+        raw = await _raw(session, text="Suecia Polonia tarjetas", processed=True)
+        pick = await self._pick_sin_evento(session, raw)
+        pick.evento = "Lun - sep"
+        await session.commit()
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+        monkeypatch.setattr(
+            rescue,
+            "_llm_extract",
+            AsyncMock(
+                return_value=ExtractedPick(
+                    es_apuesta=True,
+                    evento="Suecia vs Polonia",
+                    deporte="fútbol",
+                )
+            ),
+        )
+
+        resumen = await rescue.retry_incomplete_picks()
+
+        assert resumen["rellenados"] == 1
+        await session.refresh(pick)
+        assert pick.evento == "Suecia vs Polonia"
+
+    async def test_pata_solo_rellena_evento_y_deporte(self, session, monkeypatch):
+        """Las patas entran al rescate (comparten el fixture del boleto)
+        pero solo se les escriben `evento`/`deporte`: el LLM devuelve el
+        boleto completo y mercado/cuota/línea son propios de cada pata."""
+        raw = await _raw(session, text="slip de dos patas", processed=True)
+        padre = await self._pick_sin_evento(session, raw, es_combinada=True)
+        padre.acierto = True  # el padre ya liquidado no es candidato
+        pata = await self._pick_sin_evento(
+            session, raw, combinada_id=padre.id, mercado="over/under juegos"
+        )
+        await session.commit()
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+        monkeypatch.setattr(
+            rescue,
+            "_llm_extract",
+            AsyncMock(
+                return_value=ExtractedPick(
+                    es_apuesta=True,
+                    evento="Rottgering vs Winter",
+                    deporte="tenis",
+                    mercado="ganador",
+                    cuota=9.9,
+                )
+            ),
+        )
+
+        resumen = await rescue.retry_incomplete_picks()
+
+        assert resumen["rellenados"] == 1
+        await session.refresh(pata)
+        assert pata.evento == "Rottgering vs Winter"
+        assert pata.deporte == "tenis"
+        # El resto de la pata no se toca: ni mercado ni cuota ni metodo.
+        assert pata.mercado == "over/under juegos"
+        assert pata.cuota is None
+        assert pata.metodo == "rule"
+
+    async def test_pata_no_se_descarta_aunque_llm_diga_no_apuesta(
+        self, session, monkeypatch
+    ):
+        """Un `es_apuesta=False` del LLM no puede marcar una pata:
+        rompería la liquidación del padre."""
+        raw = await _raw(session, text="slip", processed=True)
+        padre = await self._pick_sin_evento(session, raw, es_combinada=True)
+        padre.acierto = True
+        pata = await self._pick_sin_evento(session, raw, combinada_id=padre.id)
+        await session.commit()
+        _settings_stub(monkeypatch)
+        monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
+        monkeypatch.setattr(
+            rescue,
+            "_llm_extract",
+            AsyncMock(return_value=ExtractedPick(es_apuesta=False)),
+        )
+
+        resumen = await rescue.retry_incomplete_picks()
+
+        assert resumen["descartados"] == 0
+        await session.refresh(pata)
+        assert pata.es_apuesta is True
+        assert pata.evento is None
 
 
 class TestBackfillPendingCount:
