@@ -23,6 +23,7 @@ from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import app.services.results.base as results_base
+import app.services.results.compat_llm as compat_llm
 import app.services.results.response_cache as response_cache
 from app.db.postgres import get_session
 from app.main import app
@@ -38,6 +39,15 @@ def _isolated_provider_cache(tmp_path, monkeypatch):
     # contadores de llamadas).
     monkeypatch.setattr(results_base, "_STATE", None)
     monkeypatch.setattr(results_base, "_STATE_FILE", tmp_path / "provider_state.json")
+
+
+@pytest.fixture(autouse=True)
+def _no_compat_llm(monkeypatch):
+    """La cascada de extractores hosted (Groq/Cerebras/OpenRouter)
+    apagada en tests: con keys reales en `.env` haría llamadas HTTP
+    de verdad. `test_compat_llm` la prueba aparte restaurando
+    `_ENDPOINTS` con su fixture `_real_endpoints`."""
+    monkeypatch.setattr(compat_llm, "_ENDPOINTS", ())
 
 
 @pytest_asyncio.fixture

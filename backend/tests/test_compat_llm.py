@@ -17,6 +17,15 @@ from app.services.results import compat_llm
 pytestmark = pytest.mark.anyio
 
 
+_REAL_ENDPOINTS = compat_llm._ENDPOINTS
+
+
+@pytest.fixture(autouse=True)
+def _real_endpoints(monkeypatch):
+    """Este archivo SÍ prueba la cascada real: conftest la vacía."""
+    monkeypatch.setattr(compat_llm, "_ENDPOINTS", _REAL_ENDPOINTS)
+
+
 @pytest.fixture(autouse=True)
 def state_file(tmp_path, monkeypatch):
     """provider_state.json aislado por test (cooldowns)."""

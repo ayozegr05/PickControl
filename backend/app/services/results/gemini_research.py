@@ -379,6 +379,105 @@ _ODDS_MARKET_NAMES = (
     "First set winner",
 )
 
+# Búsqueda dirigida por tipo de mercado: con el nombre del mercado en
+# la query, DDG suele devolver directamente la pestaña del comparador
+# donde vive esa línea en vez de la portada 1X2 del partido.
+_MARKET_SEARCH_TERMS: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
+    (
+        re.compile(r"c[oó]rner|corner", re.I),
+        ("oddspedia corners", "oddsportal corners", "betexplorer corners"),
+    ),
+    (
+        re.compile(r"tarjeta|card|booking", re.I),
+        ("oddspedia cards", "oddsportal cards", "betexplorer cards"),
+    ),
+    (
+        re.compile(r"h[aá]ndicap|handicap|spread", re.I),
+        ("oddsportal handicap", "betexplorer asian handicap"),
+    ),
+    (
+        re.compile(r"ambos|btts", re.I),
+        ("oddsportal btts", "oddspedia ambos marcan"),
+    ),
+    (
+        re.compile(r"gol|over|under|m[aá]s de|menos de|total", re.I),
+        ("oddsportal over under", "oddspedia goles", "betexplorer over under"),
+    ),
+)
+
+# Mercados de 1ª parte: la pestaña de totals de oddsportal es la de
+# tiempo completo — pedir "#over-under" para "1ª parte over 1.5"
+# traería la línea equivocada (y validaría contra el pick mal).
+_FIRST_HALF = re.compile(r"1ª|1er|primera|descanso|half|\bht\b|\b1h\b", re.I)
+
+
+def _market_terms(descs: list[str]) -> list[str]:
+    """Términos de búsqueda dirigidos por los mercados del grupo."""
+    terms: list[str] = []
+    for desc in descs:
+        for pattern, extras in _MARKET_SEARCH_TERMS:
+            if pattern.search(desc):
+                terms += [t for t in extras if t not in terms]
+    return terms
+
+
+def _market_line(desc: str) -> Optional[str]:
+    """Primera cifra del mercado ("más de 2.5 (línea 2.5)" -> "2.5")."""
+    m = re.search(r"[-+]?(\d+(?:[.,]\d+)?)", desc)
+    return m.group(1).replace(",", ".") if m else None
+
+
+def _comparator_variants(urls: list[str], descs: list[str]) -> list[str]:
+    """Subpáginas de mercado de comparadores conocidos.
+
+    La página principal del partido suele listar solo 1X2: en
+    oddsportal las demás líneas viven en pestañas que el propio JS
+    selecciona por fragmento (`#over-under;2.5`, `#ah;-1.5`). El
+    servidor devuelve el mismo HTML base para todas — el fragmento lo
+    interpreta el navegador — así que estas variantes solo difieren
+    renderizadas: el fetch directo trae la misma shell y cae a
+    FlareSolverr, que es gratis. Se devuelven para ir AL FINAL de la
+    cola: solo se gastan si la página base no resolvió el mercado."""
+    want_ou = any(
+        re.search(r"m[aá]s de|menos de|over|under|gol", d, re.I)
+        and not _FIRST_HALF.search(d)
+        and _market_line(d)
+        for d in descs
+    )
+    want_ah = any(
+        re.search(r"h[aá]ndicap|handicap", d, re.I)
+        and not _FIRST_HALF.search(d)
+        and _market_line(d)
+        for d in descs
+    )
+    if not (want_ou or want_ah):
+        return []
+    variants: list[str] = []
+    for url in urls:
+        if not any("oddsportal" in d for d in _domains_of([url])):
+            continue
+        base = url.split("#")[0].rstrip("/")
+        if want_ou:
+            line = next(
+                _market_line(d)
+                for d in descs
+                if re.search(r"m[aá]s de|menos de|over|under|gol", d, re.I)
+                and not _FIRST_HALF.search(d)
+                and _market_line(d)
+            )
+            variants.append(f"{base}/#over-under;{line}")
+        if want_ah:
+            line = next(
+                _market_line(d)
+                for d in descs
+                if re.search(r"h[aá]ndicap|handicap", d, re.I)
+                and not _FIRST_HALF.search(d)
+                and _market_line(d)
+            )
+            variants.append(f"{base}/#ah;{line}")
+    return [v for v in dict.fromkeys(variants) if v not in urls]
+
+
 _ODDS_PROMPT = """Texto extraído de una página web de apuestas
 deportivas (comparador de cuotas o casa):
 
@@ -1222,9 +1321,18 @@ class GeminiResearchProvider:
             return None
         # Queries dirigidas a los comparadores que publican la tabla
         # de cuotas pre-partido por casa — una crónica sin tabla no
-        # resuelve nada.
-        priority = ["oddspedia cuotas", "oddsportal odds", "betexplorer odds"]
+        # resuelve nada. Las del tipo de mercado van primero: con
+        # "corners" en la query DDG trae la pestaña de córners.
+        priority = _market_terms([desc]) + [
+            "oddspedia cuotas",
+            "oddsportal odds",
+            "betexplorer odds",
+        ]
         urls = await self._search_urls(date, hint, priority_terms=priority)
+        # Al final de la cola, las pestañas de mercado del comparador
+        # (la portada suele traer solo 1X2 — el fragmento selecciona
+        # la pestaña/línea concreta una vez renderizado).
+        urls += _comparator_variants(urls, [desc])
         for url in urls:
             text = await self._fetch_page_text(url)
             if not text:
@@ -1279,8 +1387,13 @@ class GeminiResearchProvider:
         hint = (team_hint or "").strip()
         if not hint or not descs or any(not d for d in descs):
             return {}
-        priority = ["oddspedia cuotas", "oddsportal odds", "betexplorer odds"]
+        priority = _market_terms(descs) + [
+            "oddspedia cuotas",
+            "oddsportal odds",
+            "betexplorer odds",
+        ]
         urls = await self._search_urls(date, hint, priority_terms=priority)
+        urls += _comparator_variants(urls, descs)
         apuestas = "\n".join(f"{i + 1}. {d}" for i, d in enumerate(descs))
         found: dict[int, ClosingOdds] = {}
         for url in urls:

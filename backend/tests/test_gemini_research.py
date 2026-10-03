@@ -18,7 +18,11 @@ import pytest
 from app.core.config import get_settings
 from app.core.dates import utc_now
 from app.services.results.base import MatchState
-from app.services.results.gemini_research import GeminiResearchProvider
+from app.services.results.gemini_research import (
+    GeminiResearchProvider,
+    _comparator_variants,
+    _market_terms,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -786,3 +790,44 @@ class TestModelQuotaCooldown:
             until = gr._MODEL_QUOTA_UNTIL[model]
             assert timedelta() < until - utc_now() <= timedelta(minutes=20)
         assert provider._in_cooldown()
+
+
+class TestMarketTargeting:
+    """Punto 1: queries y subpáginas dirigidas por el mercado del pick
+    — la portada del comparador suele traer solo 1X2."""
+
+    def test_market_terms_corners(self):
+        terms = _market_terms(["córners / más de 9.5"])
+        assert any("corners" in t for t in terms)
+
+    def test_market_terms_goles(self):
+        terms = _market_terms(["total goles / más de 2.5 (línea 2.5)"])
+        assert any("over" in t for t in terms)
+
+    def test_market_terms_ganador_sin_dirigida(self):
+        assert _market_terms(["ganador / Walling gana"]) == []
+
+    def test_variants_oddsportal_over_under(self):
+        urls = ["https://www.oddsportal.com/football/x/swansea-watford-abc/"]
+        v = _comparator_variants(urls, ["total goles / más de 2.5 (línea 2.5)"])
+        assert v == [
+            "https://www.oddsportal.com/football/x/swansea-watford-abc/#over-under;2.5"
+        ]
+
+    def test_variants_oddsportal_handicap(self):
+        urls = ["https://www.oddsportal.com/football/x/abc/"]
+        v = _comparator_variants(urls, ["hándicap asiático / -1.5"])
+        assert v == ["https://www.oddsportal.com/football/x/abc/#ah;1.5"]
+
+    def test_variants_primera_parte_no_genera(self):
+        """La pestaña #over-under de oddsportal es tiempo completo —
+        para un mercado de 1ª parte no se pide (línea equivocada)."""
+        urls = ["https://www.oddsportal.com/football/x/abc/"]
+        assert _comparator_variants(urls, ["1ª parte / más de 1.5"]) == []
+
+    def test_variants_solo_oddsportal(self):
+        urls = ["https://oddspedia.com/football/x-123"]
+        assert _comparator_variants(urls, ["más de 2.5 goles"]) == []
+
+    def test_variants_sin_oddsportal_vacio(self):
+        assert _comparator_variants(["https://x.io/y"], ["más de 2.5"]) == []
