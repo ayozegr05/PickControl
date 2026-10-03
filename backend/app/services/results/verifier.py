@@ -934,6 +934,18 @@ _TENNIS_SETS_AFTER_VERB = re.compile(
     r"(?:gana\w*|vence\w*|se\s+impone)\s+(\d+)\s*[-:]\s*(\d+)", re.IGNORECASE
 )
 
+# Sets negados y disyunción de marcadores: "X NO ganará 2 sets" (el
+# tipster suele aclararlo con "rival gana 3-0 o 3-1") y "X gana 3-0 o
+# 3-1". Van antes del marcador exacto simple: si pasaran por ahí solo
+# se leería el primer marcador ("3-0") y una victoria 3-1 se
+# liquidaría como fallo. Tampoco deben caer al "ganador" genérico:
+# extraería el primer nombre de la selección y podría liquidar el
+# pick al revés.
+_TENNIS_NEG_SETS = re.compile(r"\bno\s+gana\w*\s+(\d+)\s+sets?\b", re.IGNORECASE)
+_TENNIS_SCORE_OR = re.compile(
+    r"(\d+)\s*[-–:]\s*(\d+)\s+o\s+(\d+)\s*[-–:]\s*(\d+)", re.IGNORECASE
+)
+
 
 # Tenis: sujeto del mercado de totales/hándicap — "juegos" o "sets".
 _TENNIS_SETS_SUBJECT = re.compile(r"\bsets?\b", re.IGNORECASE)
@@ -1157,6 +1169,48 @@ async def _verify_tennis_pick(
     """
     seleccion = pick.seleccion or ""
     text = f"{seleccion} {pick.mercado or ''}"
+
+    # "X NO ganará N sets" y "X gana A-B o C-D": si el patrón casa pero
+    # no se puede extraer el jugador o no hay partido, el pick queda
+    # pendiente de forma explícita — nunca cae a las ramas de abajo,
+    # que lo liquidarían con una interpretación equivocada.
+    neg_sets = _TENNIS_NEG_SETS.search(seleccion)
+    score_or = _TENNIS_SCORE_OR.search(seleccion)
+    if neg_sets or score_or:
+        allowed: Optional[set[tuple[int, int]]] = None
+        max_sets = 0
+        if neg_sets:
+            player = _extract_tennis_player_name(seleccion[: neg_sets.start()])
+            max_sets = int(neg_sets.group(1))
+        else:
+            prefix = seleccion[: score_or.start()]
+            verb = _TENNIS_WIN_VERB.search(prefix)
+            player = _extract_tennis_player_name(
+                prefix[: verb.start()] if verb else prefix
+            )
+            allowed = {
+                (int(score_or.group(1)), int(score_or.group(2))),
+                (int(score_or.group(3)), int(score_or.group(4))),
+            }
+        if not player:
+            return None, False
+        team_hint = _tennis_lookup_hint(pick, player)
+        match = await _find_match_across_providers(
+            pick.fecha_evento, team_hint, providers, pick.id
+        )
+        if not match:
+            return None, False
+        if match.status in _TENNIS_VOID_STATUSES:
+            return _void("retirada")
+        if await _rearranged_fixture_void(pick, match, team_hint, providers):
+            return None, True
+        scores = _tennis_scores(match, player)
+        if scores is None:
+            return None, False
+        player_sets, opp_sets = scores
+        if neg_sets:
+            return player_sets < max_sets, False
+        return (player_sets, opp_sets) in allowed, False
 
     # Correct score en juegos ("gana 6-4 6-2"): va ANTES del marcador de
     # sets — si no, "6-4" se leería como un marcador de sets imposible.

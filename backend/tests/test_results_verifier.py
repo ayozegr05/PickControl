@@ -591,6 +591,71 @@ class TestTennisMarkets:
         acierto, anulada = await verify_pick(pick, [provider])
         assert (acierto, anulada) == (None, False)
 
+    async def test_no_ganara_sets_acierta(self):
+        # Pick 410 real: "Carreño NO ganará 2 sets (Lehecka gana 3-0 o
+        # 3-1)". Lehecka ganó 3-1 -> Carreño solo ganó 1 set: acierto.
+        provider = _StubTennisProvider(
+            3,
+            1,
+            sets=[(6, 1), (7, 6), (4, 6), (6, 2)],
+            home="Jiri Lehecka",
+            away="Pablo Carreno Busta",
+        )
+        pick = _pick_tenis("Carreño NO ganará 2 sets (Lehecka gana 3-0 o 3-1)")
+        pick.evento = "Carreno Busta vs Lehecka"
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_no_ganara_sets_falla(self):
+        # Si el jugador negado SÍ llega a 2 sets, la apuesta pierde.
+        provider = _StubTennisProvider(
+            3,
+            2,
+            sets=[(6, 1), (4, 6), (6, 7), (7, 6), (6, 2)],
+            home="Jiri Lehecka",
+            away="Pablo Carreno Busta",
+        )
+        pick = _pick_tenis("Carreño NO ganará 2 sets (Lehecka gana 3-0 o 3-1)")
+        pick.evento = "Carreno Busta vs Lehecka"
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_marcador_disyuntivo_acierta(self):
+        # "Lehecka gana 3-0 o 3-1": vale cualquiera de los dos.
+        provider = _StubTennisProvider(
+            3,
+            1,
+            sets=[(6, 1), (7, 6), (4, 6), (6, 2)],
+            home="Jiri Lehecka",
+            away="Pablo Carreno Busta",
+        )
+        pick = _pick_tenis("Lehecka gana 3-0 o 3-1")
+        pick.evento = "Lehecka vs Carreno"
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is True
+
+    async def test_marcador_disyuntivo_falla_otro_marcador(self):
+        # Victoria 3-2 no está en "3-0 o 3-1" -> fallo, no solo ganador.
+        provider = _StubTennisProvider(
+            3,
+            2,
+            sets=[(6, 1), (7, 6), (4, 6), (3, 6), (6, 2)],
+            home="Jiri Lehecka",
+            away="Pablo Carreno Busta",
+        )
+        pick = _pick_tenis("Lehecka gana 3-0 o 3-1")
+        pick.evento = "Lehecka vs Carreno"
+        acierto, _ = await verify_pick(pick, [provider])
+        assert acierto is False
+
+    async def test_marcador_disyuntivo_sin_partido_pendiente(self):
+        # Sin partido compatible queda pendiente — no cae al "ganador".
+        provider = _StubTennisProvider(2, 0, sets=[(6, 4), (6, 4)])
+        pick = _pick_tenis("Lehecka gana 3-0 o 3-1")
+        pick.evento = "Lehecka vs Carreno"
+        acierto, anulada = await verify_pick(pick, [provider])
+        assert (acierto, anulada) == (None, False)
+
     async def test_gana_un_set(self):
         provider = _StubTennisProvider(2, 1, sets=[(6, 4), (3, 6), (6, 2)])
         acierto, _ = await verify_pick(_pick_tenis("Alcaraz gana un set"), [provider])
