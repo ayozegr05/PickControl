@@ -108,6 +108,18 @@ class TestOddsLiteralOk:
             text, "11.00", 11.0, ["Under", "11"]
         )
 
+    def test_ancla_no_casa_handicap(self):
+        # Caso real pick 1618: el "1.01" era el precio Away del
+        # hándicap "-3/+3"; el ancla "3.5" casaba dentro de "-3.5".
+        # Con la exclusión de "-"/"+" el ancla no casa y se rechaza.
+        text = (
+            "AH -3.5/+3.5 Home 12.00 Away 1.01 Compare odds "
+            "1x2 Home 1.83 Draw 3.90 Away 4.50"
+        )
+        assert not GeminiResearchProvider._odds_literal_ok(
+            text, "1.01", 1.01, ["Under", "3.5"]
+        )
+
 
 class TestLiteralAnchors:
     def test_eleccion_1x2_sin_linea_no_ancla(self):

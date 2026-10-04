@@ -1533,11 +1533,12 @@ class GeminiResearchProvider:
         La aparición no puede SOLAPARSE con un ancla: si el modelo
         confunde la línea con el precio ("Under 11 córners" -> cuota
         11.0), el literal "11" caería justo dentro del ancla "11" de
-        la propia línea y colaría."""
+        la propia línea y colaría. El ancla numérica tampoco casa
+        tras "-"/"+": "-3.5/+3.5" es un hándicap, no el total 3.5."""
         anchor_res = [
             re.compile(
                 (
-                    rf"(?<![\d.,]){re.escape(a)}(?![\d.,])"
+                    rf"(?<![\d.,+\-]){re.escape(a)}(?![\d.,])"
                     if re.fullmatch(r"[\d.,]+", a)
                     else re.escape(a)
                 ),
