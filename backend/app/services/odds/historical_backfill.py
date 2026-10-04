@@ -586,9 +586,15 @@ class _BetExplorerSource(_StaticListingSource):
     - `/football/results/` del día: todo el fútbol mundial, pero
       solo embebe cuotas para fechas muy recientes (~ayer).
     - `/football/{pais}/{liga}/results/`: temporada entera con
-      cuota por fila — la vía histórica. Se descarga UNA vez por
-      pasada (lazy, solo cuando un día viejo lo pide) y las filas
-      se filtran por la fecha de cada partido.
+      cuota por fila — la vía histórica.
+
+    Cobertura en dos niveles: las ligas semilla `_BE_LEAGUES` se
+    descargan una vez por pasada (sus filas corrigen `fecha_evento`
+    malas y resuelven días viejos directo), y cuando un partido
+    casado del listado diario no trae cuota se descarga SU liga bajo
+    demanda vía `league_path` — auto-descubrimiento de las ~360
+    competiciones del índice (selecciones, femenino, menores) sin
+    mantener el mapa a mano.
     """
 
     name = static_pages.NAME_BE
@@ -597,11 +603,31 @@ class _BetExplorerSource(_StaticListingSource):
 
     def __init__(self) -> None:
         super().__init__()
-        self._league_rows: Optional[list[static_pages.StaticMatch]] = None
+        self._leagues: Optional[dict[str, list[static_pages.StaticMatch]]] = None
 
     @property
     def sport_ids(self) -> dict[str, int]:
         return {"futbol": 0}
+
+    async def _league(self, http, path: str) -> list[static_pages.StaticMatch]:
+        """Filas de una página de liga, cacheadas por ruta en la
+        pasada (un 404/slug malo cachea lista vacía, no rompe)."""
+        if self._leagues is None:
+            self._leagues = {}
+        if path not in self._leagues:
+            self._leagues[path] = await static_pages.fetch_betexplorer_league(
+                http, path
+            )
+        return self._leagues[path]
+
+    async def _base_leagues(self, http) -> list[static_pages.StaticMatch]:
+        """Las ligas semilla `_BE_LEAGUES`, descargadas una vez por
+        pasada (lazy — solo cuando un día viejo lo pide)."""
+        if self._leagues is None:
+            for path in static_pages._BE_LEAGUES:
+                await self._league(http, path)
+        assert self._leagues is not None
+        return [r for rows in self._leagues.values() for r in rows]
 
     async def fixtures(self, http, sport_id: int, day: date):
         if day in self._days:
@@ -610,11 +636,8 @@ class _BetExplorerSource(_StaticListingSource):
             day_rows, suspicious = await static_pages.fetch_betexplorer_day(http, day)
             league_rows: list[static_pages.StaticMatch] = []
             if utc_now().date() - day > static_pages._BE_DAY_ODDS_MAX_AGE:
-                if self._league_rows is None:
-                    self._league_rows = (
-                        await static_pages.fetch_betexplorer_all_leagues(http)
-                    )
-                league_rows = [r for r in self._league_rows if r.start.date() == day]
+                base = await self._base_leagues(http)
+                league_rows = [r for r in base if r.start.date() == day]
             # Mismo partido en las dos vistas (mismo ext_id): la fila
             # de liga gana porque es la que trae la cuota de cierre.
             by_id = {r.ext_id: r for r in day_rows}
@@ -625,6 +648,22 @@ class _BetExplorerSource(_StaticListingSource):
         except Exception:
             self._days[day] = None
         return self._days[day]
+
+    async def choices(self, http, fixture: static_pages.StaticMatch, sport, picks):
+        choices = static_pages.be_choices(fixture)
+        if not choices and fixture.league_path:
+            # La fila del día no embebe data-odd: su página de liga sí.
+            path = fixture.league_path.strip("/").removeprefix("football/")
+            rows = await self._league(http, path)
+            row = next((r for r in rows if r.ext_id == fixture.ext_id), None)
+            if row is not None:
+                fixture.odds1, fixture.oddsX, fixture.odds2 = (
+                    row.odds1,
+                    row.oddsX,
+                    row.odds2,
+                )
+                choices = static_pages.be_choices(fixture)
+        return ("ok", choices) if choices else ("miss", [])
 
 
 def _book_defs(books, book) -> list:

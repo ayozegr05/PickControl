@@ -122,6 +122,10 @@ class StaticMatch:
     odds1: Optional[float]
     oddsX: Optional[float]
     odds2: Optional[float]
+    # BetExplorer: ruta "/football/{pais}/{liga}/" de la cabecera de
+    # torneo — permite descargar la página de liga bajo demanda para
+    # sacar el data-odd cuando la fila del día no lo embebe.
+    league_path: str = ""
 
     @property
     def has_odds(self) -> bool:
@@ -420,10 +424,12 @@ def _parse_betexplorer_day(text: str) -> tuple[list[StaticMatch], bool]:
     """Partidos del listado por día (con tournament por sección)."""
     matches: list[StaticMatch] = []
     tournament = ""
+    league_path = ""
     for m in re.finditer(r"<tr\b[^>]*>.*?</tr>", text, re.S):
         row = m.group(0)
         tm = _BE_TOURNAMENT.search(row)
         if tm:
+            league_path = tm.group(1)
             tournament = _TAG.sub(" ", tm.group(2)).strip()
             continue
         rm = _BE_ROW.search(row)
@@ -446,6 +452,7 @@ def _parse_betexplorer_day(text: str) -> tuple[list[StaticMatch], bool]:
                 odds1=float(odds[0]) if len(odds) > 0 else None,
                 oddsX=float(odds[1]) if len(odds) > 1 else None,
                 odds2=float(odds[2]) if len(odds) > 2 else None,
+                league_path=league_path,
             )
         )
     return matches, (not matches and len(text) > _MIN_SUSPICIOUS_LEN)
@@ -492,7 +499,7 @@ def _parse_league_date(text: str) -> Optional[date]:
 
 
 def _parse_betexplorer_league(
-    text: str, tournament: str
+    text: str, tournament: str, league_path: str = ""
 ) -> tuple[list[StaticMatch], bool]:
     """Partidos de una página /results/ de liga (toda la temporada
     con `data-odd` por fila)."""
@@ -524,6 +531,7 @@ def _parse_betexplorer_league(
                 odds1=float(odds[0]) if len(odds) > 0 else None,
                 oddsX=float(odds[1]) if len(odds) > 1 else None,
                 odds2=float(odds[2]) if len(odds) > 2 else None,
+                league_path=league_path,
             )
         )
     return matches, (not matches and len(text) > _MIN_SUSPICIOUS_LEN)
@@ -544,19 +552,8 @@ async def fetch_betexplorer_league(
     if resp.status_code != 200:
         return []
     tournament = " ".join(p.replace("-", " ") for p in league_path.split("/"))
-    matches, _ = _parse_betexplorer_league(resp.text, tournament)
+    matches, _ = _parse_betexplorer_league(resp.text, tournament, league_path)
     return matches
-
-
-async def fetch_betexplorer_all_leagues(
-    http: httpx.AsyncClient,
-) -> list[StaticMatch]:
-    """Todas las ligas configuradas, una pasada — las filas se
-    filtran por fecha en el consumidor."""
-    rows: list[StaticMatch] = []
-    for path in _BE_LEAGUES:
-        rows += await fetch_betexplorer_league(http, path)
-    return rows
 
 
 def be_match(rows: list[StaticMatch], hint: str) -> Optional[StaticMatch]:
@@ -602,7 +599,6 @@ __all__ = [
     "fetch_tennisexplorer_upcoming",
     "fetch_betexplorer_day",
     "fetch_betexplorer_league",
-    "fetch_betexplorer_all_leagues",
     "te_match",
     "be_match",
     "te_choices",

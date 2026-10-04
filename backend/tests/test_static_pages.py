@@ -239,6 +239,62 @@ def test_be_choices_full_time_1x2():
     ]
 
 
+@pytest.mark.asyncio
+async def test_be_choices_lazy_league(monkeypatch):
+    """La fila du jour sans `data-odd` : la page de ligue, découverte
+    via `league_path`, fournit les clôtures 1X2 (auto-découverte des
+    ~360 compétitions sans maintenance du mappe)."""
+    src = _BetExplorerSource()
+    day_row = sp.StaticMatch(
+        home_name="Malaga",
+        away_name="Deportivo La Coruna",
+        start=datetime(2026, 10, 3, 19, 30),
+        ext_id="betexplorer:hGycdKve",
+        tournament="Spain: LaLiga2",
+        odds1=None,
+        oddsX=None,
+        odds2=None,
+        league_path="/football/spain/laliga2/",
+    )
+    league_row = sp.StaticMatch(
+        home_name="Malaga",
+        away_name="Deportivo La Coruna",
+        start=datetime(2026, 10, 3, 12, 0),
+        ext_id="betexplorer:hGycdKve",
+        tournament="spain laliga2",
+        odds1=2.10,
+        oddsX=3.30,
+        odds2=2.25,
+        league_path="spain/laliga2",
+    )
+    calls = []
+
+    async def fake_league(http, path):
+        calls.append(path)
+        return [league_row]
+
+    monkeypatch.setattr(sp, "fetch_betexplorer_league", fake_league)
+    status, choices = await src.choices(None, day_row, "futbol", [])
+    assert status == "ok"
+    assert {c.choice_name: c.points[0].cuota for c in choices} == {
+        "1": 2.10,
+        "X": 3.30,
+        "2": 2.25,
+    }
+    assert calls == ["spain/laliga2"]
+    # Deuxième appel : la ligue est en cache, pas de re-fetch.
+    status2, _ = await src.choices(None, day_row, "futbol", [])
+    assert status2 == "ok"
+    assert calls == ["spain/laliga2"]
+
+
+def test_be_day_rows_portent_league_path():
+    """La cabecera de torneo donne à chaque fila son chemin de liga
+    (découverte à la demande)."""
+    rows, _ = sp._parse_betexplorer_day(BE_HTML)
+    assert rows[0].league_path == "/football/spain/laliga2/"
+
+
 def test_be_liga_parse_temporada():
     """La página /results/ de una liga trae la temporada entera con
     `data-odd` y fecha "DD.MM." (año inferido del calendario)."""
