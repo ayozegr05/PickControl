@@ -851,6 +851,12 @@ class GeminiResearchProvider:
         ]
         urls: list[str] = []
         seen: set[str] = set()
+        # NO parar en la primera query con resultados: cada término
+        # prioritario apunta a un comparador distinto (oddspedia,
+        # oddsportal, betexplorer) y cortar pronto dejaba fuera al
+        # resto — la cobertura de cuotas depende de tener varias
+        # tablas candidatas. DDG Lite no cuesta cuota: solo se corta
+        # cuando ya sobran candidatos.
         for query in queries:
             # Primero gratis: DDG Lite por fetch propio (cae a
             # FlareSolverr si responde challenge). Solo si el fetch
@@ -864,9 +870,13 @@ class GeminiResearchProvider:
                 if u not in seen:
                     seen.add(u)
                     urls.append(u)
-            if urls:
+            if len(urls) >= _MAX_VERIFIED_URLS * 3:
                 break
-        return _filter_trusted_urls(urls)[:_MAX_VERIFIED_URLS]
+        # Pool de candidatos algo mayor que antes (6 vs 3): con varios
+        # comparadores la primera página que extraiga bien corta el
+        # loop igual — el coste extra solo se paga cuando las primeras
+        # no traen la tabla del mercado.
+        return _filter_trusted_urls(urls)[: _MAX_VERIFIED_URLS * 2]
 
     async def _search_ddg_lite(self, query: str) -> tuple[list[str], bool]:
         """DDG Lite por fetch propio — cero cuota de modelo.
