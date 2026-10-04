@@ -330,6 +330,14 @@ export default function ParsedPicksScreen() {
           n in providersStatus.rate_limited ||
           (providersStatus.calls_today?.[n] ?? 0) > 0
       ),
+      // Extractores LLM de la fuente gemini-odds (groq, cerebras...):
+      // entran solos en cuanto hacen llamadas o quedan aparcados.
+      ...Object.keys(providersStatus.calls_today ?? {}).filter((n) =>
+        n.startsWith("llm-compat")
+      ),
+      ...Object.keys(providersStatus.rate_limited).filter((n) =>
+        n.startsWith("llm-compat")
+      ),
     ]);
     return [...names]
       .sort((a, b) => {
