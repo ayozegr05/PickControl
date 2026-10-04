@@ -265,3 +265,50 @@ async def notify_provider_rate_limited(provider_name: str) -> None:
         logger.warning(
             "[PUSH] notify_provider_rate_limited(%s) falló: %s", provider_name, exc
         )
+
+
+async def notify_scraper_broken(source_name: str, detail: str) -> None:
+    """Push "listado de cuotas roto" SOLO a admins.
+
+    Disparada por el canario de `odds/static_pages.py`: la página se
+    descarga bien pero ya no tiene filas parseables — firma de que
+    cambiaron el layout y el parser hay que retocarlo. Información de
+    operación, no para usuarios normales."""
+    try:
+        if not _enabled(get_settings()):
+            return
+        async with AsyncSessionLocal() as session:
+            rows = list(
+                (
+                    await session.exec(
+                        select(DeviceToken)
+                        .join(User, User.id == DeviceToken.user_id)
+                        .where(User.role == UserRole.ADMIN)
+                        .where(DeviceToken.enabled == True)  # noqa: E712
+                    )
+                ).all()
+            )
+
+            def message(token: str) -> dict:
+                return {
+                    "to": token,
+                    "title": "Fuente de cuotas rota",
+                    "body": (
+                        f"{source_name} devuelve páginas sin partidos "
+                        f"parseables — {detail}. Revisar el parser."
+                    ),
+                    "data": {
+                        "type": "scraper_broken",
+                        "provider": source_name,
+                    },
+                }
+
+            sent = await _send(session, rows, message)
+            if sent:
+                logger.info(
+                    "[PUSH] Scraper %s roto notificado a %d dispositivos admin.",
+                    source_name,
+                    sent,
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[PUSH] notify_scraper_broken(%s) falló: %s", source_name, exc)

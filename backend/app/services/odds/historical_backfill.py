@@ -54,7 +54,7 @@ import asyncio
 import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Optional, Protocol
+from typing import Any, Optional, Protocol
 
 import httpx
 from sqlalchemy import distinct, func
@@ -68,7 +68,13 @@ from app.models.odds_snapshot import OddsEvent, OddsSnapshot
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage  # noqa: F401
 from app.models.user import User  # noqa: F401  (FKs de TelegramRawMessage)
-from app.services.odds import football_csv, oddsfeed, oddspapi, tennisdata
+from app.services.odds import (
+    football_csv,
+    oddsfeed,
+    oddspapi,
+    static_pages,
+    tennisdata,
+)
 from app.services.odds.compare import map_pick_choices
 from app.services.odds.event_rescue import looks_like_match_hint, rescue_evento
 from app.services.odds.oddsfeed import (
@@ -513,6 +519,80 @@ class _FootballCsvSource:
         return ("ok", choices) if choices else ("miss", [])
 
 
+class _StaticListingSource:
+    """Adapter común para los listados estáticos (`static_pages`).
+
+    El "listado de eventos del día" ES la página del día — una
+    descarga trae todos los partidos con su cuota de cierre inline,
+    así `choices` no hace ninguna llamada extra. Las descargas se
+    cachean por día dentro de la pasada (la fuente se instancia por
+    `run()`).
+
+    `fixtures()` devuelve None no solo ante error de red sino ante la
+    página "sospechosa de vacía" (descargada grande, cero filas —
+    layout roto): el pick se reintenta en la próxima pasada en vez
+    de comerse un `nofixture` falso, y el canario (`scraper_health`)
+    alarma si la rotura persiste."""
+
+    fetcher: Any = None
+    matcher: Any = None
+    choicer: Any = None
+
+    def __init__(self) -> None:
+        self._days: dict[date, Optional[list[static_pages.StaticMatch]]] = {}
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        if day not in self._days:
+            try:
+                rows, suspicious = await type(self).fetcher(http, day)
+                self._days[day] = None if suspicious else rows
+            except Exception:
+                self._days[day] = None
+        return self._days[day]
+
+    def match(self, fixtures, hint, dt, sofascore_id):
+        return type(self).matcher(fixtures, hint)
+
+    def ext_id(self, fixture: static_pages.StaticMatch) -> str:
+        return fixture.ext_id
+
+    def fixture_key(self, fixture: static_pages.StaticMatch) -> str:
+        return fixture.ext_id
+
+    async def choices(self, http, fixture: static_pages.StaticMatch, sport, picks):
+        choices = type(self).choicer(fixture)
+        return ("ok", choices) if choices else ("miss", [])
+
+
+class _TennisExplorerSource(_StaticListingSource):
+    """tennisexplorer.com: listado diario estático con cuotas de
+    ganador — cubre ATP/WTA/**ITF** (el hueco que ninguna API ni
+    bet365 toca). Fetch directo, sin key ni cuota."""
+
+    name = static_pages.NAME_TE
+    fetcher = staticmethod(static_pages.fetch_tennisexplorer_day)
+    matcher = staticmethod(static_pages.te_match)
+    choicer = staticmethod(static_pages.te_choices)
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return {"tenis": 0}
+
+
+class _BetExplorerSource(_StaticListingSource):
+    """betexplorer.com: /football/results/ del día — cierres 1X2 de
+    casi todas las ligas del mundo en data-odd, HTML estático."""
+
+    name = static_pages.NAME_BE
+    fetcher = staticmethod(static_pages.fetch_betexplorer_day)
+    matcher = staticmethod(static_pages.be_match)
+    choicer = staticmethod(static_pages.be_choices)
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return {"futbol": 0}
+
+
 def _book_defs(books, book) -> list:
     """Las (idx, choice_name, choice_group) del market_book dado."""
     for candidate, defs in books:
@@ -524,6 +604,8 @@ def _book_defs(books, book) -> list:
 _BACKFILL_PROVIDERS = (
     football_csv.NAME,
     tennisdata.NAME,
+    static_pages.NAME_TE,
+    static_pages.NAME_BE,
     oddspapi.NAME,
     oddsfeed.NAME,
     *_LLM_EXTRACTOR_PROVIDERS,
@@ -575,7 +657,12 @@ async def _resolved_pick_ids(session) -> set[int]:
 
 def _sources(settings) -> list[_HistorySource]:
     """Fuentes disponibles según la configuración, en orden de uso."""
-    sources: list[_HistorySource] = [_FootballCsvSource(), _TennisDataSource()]
+    sources: list[_HistorySource] = [
+        _FootballCsvSource(),
+        _TennisDataSource(),
+        _TennisExplorerSource(),
+        _BetExplorerSource(),
+    ]
     if settings.rapidapi_tennis_key:
         sources.append(
             _OddsPapiSource(

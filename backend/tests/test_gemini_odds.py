@@ -542,12 +542,14 @@ class TestPickPendingGemini:
         # footballdata siempre cubre fútbol: para aislar la regla de
         # Gemini, el pick ya fue intentado por la fuente gratis.
         results_base.mark_missed("footballdata|nofixture|7")
+        results_base.mark_missed("betexplorer|nofixture|7")
         settings = SimpleNamespace(google_api_key=None, rapidapi_tennis_key=None)
         assert not hb._pick_pending(pick, set(), settings)
 
     def test_con_google_key_queda_pendiente(self):
         pick = self._pick()
         results_base.mark_missed("footballdata|nofixture|7")
+        results_base.mark_missed("betexplorer|nofixture|7")
         settings = SimpleNamespace(google_api_key="k", rapidapi_tennis_key=None)
         assert hb._pick_pending(pick, set(), settings)
 
@@ -555,6 +557,7 @@ class TestPickPendingGemini:
         pick = self._pick()
         settings = SimpleNamespace(google_api_key="k", rapidapi_tennis_key=None)
         results_base.mark_missed("footballdata|nofixture|7")
+        results_base.mark_missed("betexplorer|nofixture|7")
         results_base.mark_missed("llm-odds|done|7")
         assert not hb._pick_pending(pick, set(), settings)
 
@@ -588,6 +591,7 @@ class TestQuotaLargaNoBloquea:
         pick = self._pick()
         results_base.mark_missed("oddsfeed|nofixture|7")
         results_base.mark_missed("footballdata|nofixture|7")
+        results_base.mark_missed("betexplorer|nofixture|7")
         results_base.mark_cooldown("oddspapi", utc_now() + timedelta(days=20))
         assert not hb._pick_pending(pick, set(), self._settings(google=None))
 
@@ -597,6 +601,7 @@ class TestQuotaLargaNoBloquea:
         pick = self._pick()
         results_base.mark_missed("oddsfeed|nofixture|7")
         results_base.mark_missed("footballdata|nofixture|7")
+        results_base.mark_missed("betexplorer|nofixture|7")
         assert hb._pick_pending(pick, set(), self._settings(google=None))
 
     def test_cooldown_corto_si_bloquea(self):
@@ -605,6 +610,7 @@ class TestQuotaLargaNoBloquea:
         pick = self._pick()
         results_base.mark_missed("oddsfeed|nofixture|7")
         results_base.mark_missed("footballdata|nofixture|7")
+        results_base.mark_missed("betexplorer|nofixture|7")
         results_base.mark_cooldown("oddspapi", utc_now() + timedelta(minutes=20))
         assert hb._pick_pending(pick, set(), self._settings(google=None))
 
@@ -661,9 +667,10 @@ class TestBackfillBreakdown:
         aplazado = await self._pick(session, 2)  # solo le debe oddspapi
         results_base.mark_missed(f"oddsfeed|nofixture|{aplazado.id}")
         results_base.mark_missed(f"footballdata|nofixture|{aplazado.id}")
+        results_base.mark_missed(f"betexplorer|nofixture|{aplazado.id}")
         results_base.mark_missed(f"llm-odds|done|{aplazado.id}")
         agotado = await self._pick(session, 3)  # todos intentaron
-        for src in ("oddsfeed", "oddspapi", "footballdata"):
+        for src in ("oddsfeed", "oddspapi", "footballdata", "betexplorer"):
             results_base.mark_missed(f"{src}|nofixture|{agotado.id}")
         results_base.mark_missed(f"llm-odds|done|{agotado.id}")
         resuelto = await self._pick(session, 4)  # ya tiene cuotas
@@ -692,6 +699,8 @@ class TestBackfillBreakdown:
         assert bd["por_fuente"] == {
             "footballdata": 1,
             "tennisdata": 0,
+            "tennisexplorer": 0,
+            "betexplorer": 1,
             "oddspapi": 0,
             "oddsfeed": 1,
         }

@@ -8,12 +8,14 @@ concurrente con el servidor FastAPI, usando el patrón `lifespan`
 import asyncio
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.services.maintenance.backlog import run_backlog_verification
 from app.services.maintenance.rescue import run_rescue_cycle
+from app.services.odds import static_pages
 from app.services.odds.historical_backfill import (
     count_pending_backfill,
     run,
@@ -169,6 +171,15 @@ async def _run_odds_backfill_loop() -> None:
     while True:
         try:
             if loop_due("odds_backfill", interval_seconds):
+                # Canario de los listados estáticos: descarga HOY y
+                # cuenta filas parseables; avisa por push si el
+                # layout se rompió. Va antes del early-exit — corre
+                # aunque no haya backlog (no gasta cuota de nada).
+                try:
+                    async with httpx.AsyncClient(timeout=60) as _http:
+                        await static_pages.canary(_http)
+                except Exception as cexc:  # noqa: BLE001
+                    logger.warning("[ODDS_BACKFILL] canario estático: %s", cexc)
                 async with AsyncSessionLocal() as session:
                     pending = await count_pending_backfill(session)
                 if pending:

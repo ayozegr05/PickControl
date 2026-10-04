@@ -740,6 +740,11 @@ def providers_snapshot() -> dict:
         # extractor -> {ok, fail} del día.
         "calls_by_purpose": dict(state.get("call_purpose", {}).get(today, {})),
         "extract_stats": dict(state.get("extract_stats", {}).get(today, {})),
+        # Salud de los listados estáticos de cuotas (tennisexplorer /
+        # betexplorer): {fuente: {fails, last_ok, last_fail, alerted}}.
+        # `fails` alto = la página se descarga pero el parser no
+        # encuentra filas — layout roto, revisar `static_pages.py`.
+        "scraper_health": dict(state.get("scraper_health", {})),
     }
 
 
