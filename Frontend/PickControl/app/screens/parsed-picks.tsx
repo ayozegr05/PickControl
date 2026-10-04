@@ -321,42 +321,88 @@ export default function ParsedPicksScreen() {
       "sofascore_direct",
       "oddspapi",
       "oddsfeed",
-      "gemini-odds",
     ]);
-    const names = new Set<string>([
-      ...Object.keys(providersStatus.odds_snapshots_by_provider ?? {}),
-      ...[...known].filter(
-        (n) =>
-          n in providersStatus.rate_limited ||
-          (providersStatus.calls_today?.[n] ?? 0) > 0
-      ),
-      // Extractores LLM de la fuente gemini-odds (groq, cerebras...):
-      // entran solos en cuanto hacen llamadas o quedan aparcados.
-      ...Object.keys(providersStatus.calls_today ?? {}).filter((n) =>
-        n.startsWith("llm-compat")
-      ),
-      ...Object.keys(providersStatus.rate_limited).filter((n) =>
-        n.startsWith("llm-compat")
-      ),
-    ]);
-    return [...names]
-      .sort((a, b) => {
-        const aLimited = a in providersStatus.rate_limited;
-        const bLimited = b in providersStatus.rate_limited;
-        if (aLimited !== bLimited) return aLimited ? -1 : 1;
-        return a.localeCompare(b);
-      })
-      .map((name) => {
-        const limitedSince = providersStatus.rate_limited[name] ?? null;
-        return {
-          name,
-          limitedSince,
-          ...clasificarBloqueo(limitedSince),
-          callsToday: providersStatus.calls_today?.[name] ?? 0,
-          dailyLimit: providersStatus.daily_limits?.[name] ?? null,
-          snapshots: providersStatus.odds_snapshots_by_provider?.[name] ?? 0,
-        };
-      });
+    // Fuentes de datos puras: snapshots propios o actividad conocida.
+    const names = new Set<string>(
+      [
+        ...Object.keys(providersStatus.odds_snapshots_by_provider ?? {}),
+        ...[...known].filter(
+          (n) =>
+            n in providersStatus.rate_limited ||
+            (providersStatus.calls_today?.[n] ?? 0) > 0
+        ),
+      ].filter((n) => !/^[a-z0-9]+-odds$/.test(n) && !n.startsWith("llm-compat"))
+    );
+    const generic = [...names].map((name) => {
+      const limitedSince = providersStatus.rate_limited[name] ?? null;
+      return {
+        name,
+        limitedSince,
+        ...clasificarBloqueo(limitedSince),
+        callsToday: providersStatus.calls_today?.[name] ?? 0,
+        dailyLimit: providersStatus.daily_limits?.[name] ?? null,
+        snapshots: providersStatus.odds_snapshots_by_provider?.[name] ?? 0,
+        purposeCalls: {} as Record<string, number>,
+        extractOk: null as number | null,
+        extractFail: null as number | null,
+      };
+    });
+    // Motores del pipeline web+LLM: una fila por extractor
+    // (`{motor}-odds`). Las llamadas de groq/cerebras/openrouter se
+    // cuentan como `llm-compat-{motor}`; las de Gemini como
+    // `gemini-odds` (su calls_as histórico).
+    const engines = new Set<string>();
+    for (const src of [
+      providersStatus.calls_today ?? {},
+      providersStatus.rate_limited ?? {},
+      providersStatus.calls_by_purpose ?? {},
+    ]) {
+      for (const n of Object.keys(src)) {
+        const m = n.match(/^llm-compat-(.+)$/);
+        if (m) engines.add(m[1]);
+      }
+    }
+    for (const n of Object.keys(
+      providersStatus.odds_snapshots_by_provider ?? {}
+    )) {
+      const m = n.match(/^([a-z0-9]+)-odds$/);
+      if (m) engines.add(m[1]);
+    }
+    for (const n of Object.keys(providersStatus.extract_stats ?? {})) {
+      engines.add(n);
+    }
+    if (
+      "gemini-odds" in providersStatus.rate_limited ||
+      (providersStatus.calls_today?.["gemini-odds"] ?? 0) > 0
+    ) {
+      engines.add("gemini");
+    }
+    const engineRows = [...engines].map((engine) => {
+      const callMark = engine === "gemini" ? "gemini-odds" : `llm-compat-${engine}`;
+      const rowProvider = `${engine}-odds`;
+      const limitedSince =
+        providersStatus.rate_limited[callMark] ??
+        providersStatus.rate_limited[rowProvider] ??
+        null;
+      const stats = providersStatus.extract_stats?.[engine];
+      return {
+        name: rowProvider,
+        limitedSince,
+        ...clasificarBloqueo(limitedSince),
+        callsToday: providersStatus.calls_today?.[callMark] ?? 0,
+        dailyLimit: providersStatus.daily_limits?.[callMark] ?? null,
+        snapshots: providersStatus.odds_snapshots_by_provider?.[rowProvider] ?? 0,
+        purposeCalls: providersStatus.calls_by_purpose?.[callMark] ?? {},
+        extractOk: stats?.ok ?? null,
+        extractFail: stats?.fail ?? null,
+      };
+    });
+    return [...generic, ...engineRows].sort((a, b) => {
+      const aLimited = a.limitedSince !== null;
+      const bLimited = b.limitedSince !== null;
+      if (aLimited !== bLimited) return aLimited ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
   }, [providersStatus]);
 
   const applyUpdate = (list: ParsedPick[], updated: ParsedPick) =>
@@ -790,12 +836,27 @@ export default function ParsedPicksScreen() {
                         : ""}
                       {row.callsToday > 0 && row.snapshots > 0 ? " · " : ""}
                       {row.snapshots > 0
-                        ? `${row.snapshots} snapshot${
+                        ? `${row.snapshots} cuota${
                             row.snapshots !== 1 ? "s" : ""
-                          }`
+                          } registrada${row.snapshots !== 1 ? "s" : ""}`
                         : ""}
                     </Text>
                   )}
+                  {Object.keys(row.purposeCalls).length > 0 && (
+                    <Text style={styles.providerMeta}>
+                      {Object.entries(row.purposeCalls)
+                        .map(([p, n]) => `${n} ${p}`)
+                        .join(" · ")}
+                    </Text>
+                  )}
+                  {row.extractOk !== null || row.extractFail !== null ? (
+                    <Text style={styles.providerMeta}>
+                      extracciones: {row.extractOk ?? 0} ok
+                      {(row.extractFail ?? 0) > 0
+                        ? ` · ${row.extractFail} fallos`
+                        : ""}
+                    </Text>
+                  ) : null}
                 </View>
               ))
             )}
@@ -885,13 +946,13 @@ export default function ParsedPicksScreen() {
                       providersStatus.odds_backfill?.por_fuente ?? {}
                     ).filter(([, n]) => n > 0),
                     ...((
-                      providersStatus.odds_backfill?.gemini_pendientes ?? 0
+                      providersStatus.odds_backfill?.llm_pendientes ?? 0
                     ) > 0
                       ? ([
                           [
-                            "gemini-odds",
+                            "llm-odds",
                             providersStatus.odds_backfill
-                              ?.gemini_pendientes ?? 0,
+                              ?.llm_pendientes ?? 0,
                           ],
                         ] as [string, number][])
                       : []),
@@ -903,6 +964,13 @@ export default function ParsedPicksScreen() {
                     </Text>
                   ) : null;
                 })()}
+                {(providersStatus.odds_backfill.llm_procesados ?? 0) > 0 && (
+                  <Text style={styles.statSub}>
+                    Pipeline web+LLM:{" "}
+                    {providersStatus.odds_backfill.llm_procesados} ya
+                    procesados (con cuota o sin encontrarla)
+                  </Text>
+                )}
                 {(() => {
                   // Historial de pasadas (más reciente primero); si aún
                   // no existe la lista, al menos la última suelta.

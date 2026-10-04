@@ -22,7 +22,8 @@ Fuentes en cascada (orden = prioridad, no volumen):
    props...) pero BASIC son solo 200 req/mes.
 3. `oddsfeed` (odds-feed): solo mercados principales (1X2, O/U,
    hándicap, BTTS) pero 500 req/mes y histórico real validado.
-4. `gemini-odds`: último recurso por pick — el investigador Gemini
+4. `llm-odds`: último recurso por pick — búsqueda web + extracción
+   LLM (cascada Groq→Cerebras→OpenRouter, Gemini de respaldo)
    lee la página del partido en un comparador (oddspedia, oddsportal,
    betexplorer) y extrae la cuota de cierre del mercado del pick.
    Doble validación: la cuota tiene que aparecer literal en el HTML y
@@ -93,6 +94,7 @@ from app.services.odds.snapshotter import _canonical_sport, _lookup_hint
 from app.services.results import compat_llm
 from app.services.results.base import (
     clear_missed,
+    count_missed_prefix,
     count_odds_rows_written,
     count_provider_call,
     is_missed,
@@ -119,6 +121,18 @@ _FEED_MAX_CALLS_PER_RUN = 40
 # intentado cuesta 2-4 llamadas al modelo; el presupuesto por pasada
 # comparte el free tier con la investigación de resultados.
 _GEMINI_ODDS_PROVIDER = "gemini-odds"
+
+# Marca NEUTRA del pipeline web+LLM: las marcas `llm-odds|done|{pick}`
+# las comparten todos los extractores — un intento fallido con Groq no
+# debe repetirse gastando cuota de Gemini (ni viceversa).
+_LLM_ODDS_MARK = "llm-odds"
+# Provider de cada fila = el motor que la extrajo de verdad:
+# groq-odds, gemini-odds, cerebras-odds, openrouter-odds. `llm-odds`
+# también es provider válido: etiqueta de las filas históricas
+# escritas antes de la atribución por motor (extractor desconocido).
+_LLM_EXTRACTOR_PROVIDERS = tuple(
+    f"{e}-odds" for e in ("groq", "cerebras", "openrouter", "gemini", "llm")
+)
 
 
 def _llm_odds_configured(settings) -> bool:
@@ -512,7 +526,7 @@ _BACKFILL_PROVIDERS = (
     tennisdata.NAME,
     oddspapi.NAME,
     oddsfeed.NAME,
-    _GEMINI_ODDS_PROVIDER,
+    *_LLM_EXTRACTOR_PROVIDERS,
 )
 
 
@@ -578,9 +592,11 @@ def _sources(settings) -> list[_HistorySource]:
     return sources
 
 
-def _gemini_done_key() -> str:
-    """Marca de procesado de la fuente Gemini por pick."""
-    return f"{_GEMINI_ODDS_PROVIDER}|done|{{}}"
+def _llm_done_key() -> str:
+    """Marca de procesado del pipeline web+LLM por pick (neutra:
+    compartida por groq/gemini/cerebras — el intento cuenta una vez
+    sea cual sea el motor que lo hizo)."""
+    return f"{_LLM_ODDS_MARK}|done|{{}}"
 
 
 def _pick_pending(
@@ -617,7 +633,7 @@ def _pick_pending(
     if not sources_missed:
         return True
     if _llm_odds_configured(settings) and not is_missed(
-        _gemini_done_key().format(pick.id)
+        _llm_done_key().format(pick.id)
     ):
         return True
     return False
@@ -658,7 +674,7 @@ async def backfill_breakdown(session) -> dict:
     parked = {s.name for s in sources if _source_quota_parked(s)}
     resueltos = en_cola = aplazados = agotados = 0
     por_fuente = {s.name: 0 for s in sources}
-    gemini_pendientes = 0
+    llm_pendientes = 0
     for pick in picks:
         if pick.odds_event_id in done or pick.id in resolved_picks:
             resueltos += 1
@@ -672,12 +688,12 @@ async def backfill_breakdown(session) -> dict:
         live_owing = [s for s in owing if s.name not in parked]
         for s in live_owing:
             por_fuente[s.name] += 1
-        gemini_owes = _llm_odds_configured(settings) and not is_missed(
-            _gemini_done_key().format(pick.id)
+        llm_owes = _llm_odds_configured(settings) and not is_missed(
+            _llm_done_key().format(pick.id)
         )
-        if gemini_owes:
-            gemini_pendientes += 1
-        if live_owing or gemini_owes:
+        if llm_owes:
+            llm_pendientes += 1
+        if live_owing or llm_owes:
             en_cola += 1
         elif owing:
             aplazados += 1
@@ -708,7 +724,11 @@ async def backfill_breakdown(session) -> dict:
         "aplazados": aplazados,
         "agotados": agotados,
         "por_fuente": por_fuente,
-        "gemini_pendientes": gemini_pendientes,
+        "llm_pendientes": llm_pendientes,
+        # Acumulado histórico del pipeline web+LLM: intentos marcados
+        # `llm-odds|done` (resueltos con fila o descartados sin
+        # cuota publicada) — la cola "ya masticada" que no se repite.
+        "llm_procesados": count_missed_prefix(f"{_LLM_ODDS_MARK}|done|"),
         "fuentes_en_pausa": {
             s.name: rate_limited_until(s.name).isoformat()  # type: ignore[union-attr]
             for s in sources
@@ -1007,7 +1027,7 @@ async def _run_gemini_pass(
         # aquí evita quemar rescates de OpenAI para picks que no se
         # van a buscar en esta pasada.
         return
-    done_key = _gemini_done_key()
+    done_key = _llm_done_key()
     resolved = resolved_picks or set()
     candidates = [
         p
@@ -1103,12 +1123,12 @@ async def _run_gemini_pass(
             elif rescued:
                 report.detalles.append(
                     f"  - pick {pick.id}: rescate sin forma de partido "
-                    f"({rescued}) [{_GEMINI_ODDS_PROVIDER}]"
+                    f"({rescued}) [{_LLM_ODDS_MARK}]"
                 )
             else:
                 report.detalles.append(
                     f"  - pick {pick.id}: evento no rescatable "
-                    f"(ni texto ni OCR ni imagen) [{_GEMINI_ODDS_PROVIDER}]"
+                    f"(ni texto ni OCR ni imagen) [{_LLM_ODDS_MARK}]"
                 )
         if not usable:
             if apply:
@@ -1141,7 +1161,7 @@ async def _run_gemini_pass(
                     mark_missed(done_key.format(pick.id))
                 report.detalles.append(
                     f"  - pick {pick.id}: sin cuota en comparadores "
-                    f"[{_GEMINI_ODDS_PROVIDER}]"
+                    f"[{_LLM_ODDS_MARK}]"
                 )
                 continue
             _record_gemini_closing(
@@ -1165,18 +1185,20 @@ def _record_gemini_closing(
     apply: bool,
     report: BackfillReport,
 ) -> None:
-    """Valida y persiste la cuota que Gemini propuso para UN pick.
+    """Valida y persiste la cuota que el extractor propuso para UN pick.
 
     Autocheck: la propuesta tiene que casar con el pick por la misma
     función que usa el comparador. Si el evento sintético tiene los
     lados invertidos se prueba la orientación contraria antes de
-    descartar.
+    descartar. La fila se firma con el motor que la extrajo
+    (`{extractor}-odds`) — la auditoría dice quién produjo cada cuota.
     """
     sport = _canonical_sport(pick.deporte) or ""
-    ext_id = pick.odds_event_id or f"{_GEMINI_ODDS_PROVIDER}:{pick.id}"
+    row_provider = f"{found.extractor or 'gemini'}-odds"
+    ext_id = pick.odds_event_id or f"{row_provider}:{pick.id}"
     event = events.get(ext_id) or _synthetic_event(pick, sport, ext_id)
     probe = OddsSnapshot(
-        provider=_GEMINI_ODDS_PROVIDER,
+        provider=row_provider,
         event_ext_id=ext_id,
         market_name=found.market_name,
         choice_name=found.choice_name,
@@ -1210,11 +1232,11 @@ def _record_gemini_closing(
         != key
     ):
         if apply:
-            mark_missed(_gemini_done_key().format(pick.id))
+            mark_missed(_llm_done_key().format(pick.id))
         report.detalles.append(
             f"  - pick {pick.id}: propuesta no verificable "
             f"({found.market_name}/{found.choice_name}) "
-            f"[{_GEMINI_ODDS_PROVIDER}]"
+            f"[{row_provider}]"
         )
         return
 
@@ -1222,7 +1244,7 @@ def _record_gemini_closing(
     report.detalles.append(
         f"  + pick {pick.id}: {found.market_name} / {found.choice_name}"
         f" | cierre {found.cuota} ({found.casa or '?'}) "
-        f"[{_GEMINI_ODDS_PROVIDER} via {found.source_url}]"
+        f"[{row_provider} via {found.source_url}]"
     )
     if apply:
         if ext_id not in registered:
@@ -1230,7 +1252,7 @@ def _record_gemini_closing(
             registered.add(ext_id)
         session.add(
             OddsSnapshot(
-                provider=_GEMINI_ODDS_PROVIDER,
+                provider=row_provider,
                 event_ext_id=ext_id,
                 market_name=found.market_name,
                 choice_name=found.choice_name,
@@ -1245,8 +1267,8 @@ def _record_gemini_closing(
         session.add(pick)
         done_events.add(ext_id)
         report.filas += 1
-        report.filas_por_fuente[_GEMINI_ODDS_PROVIDER] = (
-            report.filas_por_fuente.get(_GEMINI_ODDS_PROVIDER, 0) + 1
+        report.filas_por_fuente[row_provider] = (
+            report.filas_por_fuente.get(row_provider, 0) + 1
         )
 
 
@@ -1284,9 +1306,7 @@ async def run(apply: bool, limit: int | None) -> BackfillReport:
                 resolved,
             )
         if _gemini_pass_lock.locked():
-            report.detalles.append(
-                "  ! [gemini-odds] pasada de goteo en curso — se omite"
-            )
+            report.detalles.append("  ! [llm-odds] pasada de goteo en curso — se omite")
         else:
             async with _gemini_pass_lock:
                 await _run_gemini_pass(
@@ -1340,7 +1360,7 @@ async def run_gemini_odds_pass(apply: bool) -> Optional[BackfillReport]:
         picks = await _load_picks(session, None)
         done = await _done_event_ids(session)
         resolved = await _resolved_pick_ids(session)
-        done_key = _gemini_done_key()
+        done_key = _llm_done_key()
         if not any(
             p.id is not None
             and p.id not in resolved
@@ -1355,10 +1375,10 @@ async def run_gemini_odds_pass(apply: bool) -> Optional[BackfillReport]:
         )
         if apply:
             await session.commit()
-            # Visible en la pantalla depurativa como "gemini_odds":
+            # Visible en la pantalla depurativa como "llm_odds":
             # qué hizo el último goteo sin abrir logs del contenedor.
             record_loop_summary(
-                "gemini_odds",
+                "llm_odds",
                 {
                     "mapeados": report.mapeados,
                     "filas": report.filas,

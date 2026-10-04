@@ -25,8 +25,10 @@ from app.core.dates import utc_now
 from app.core.logging import get_logger
 from app.services.results.base import (
     count_provider_call,
+    count_purpose_call,
     is_rate_limited,
     mark_cooldown,
+    record_extractor_result,
     retry_hint_seconds,
 )
 
@@ -100,25 +102,32 @@ def has_live_endpoint(settings: Optional[Settings] = None) -> bool:
 
 
 async def extract_text(
-    prompt: str, *, settings: Optional[Settings] = None
-) -> Optional[str]:
-    """Texto de la primera respuesta útil de la cascada, None si
-    ningún endpoint configurado/vivo responde — el fallback (Gemini)
-    corre por cuenta de quien llama."""
+    prompt: str, *, purpose: str = "", settings: Optional[Settings] = None
+) -> Optional[tuple[str, str]]:
+    """(texto, endpoint) de la primera respuesta útil de la cascada,
+    None si ningún endpoint configurado/vivo responde — el fallback
+    (Gemini) corre por cuenta de quien llama.
+
+    `purpose` etiqueta la llamada ('cuotas'/'resultados'/'stats') para
+    el desglose por propósito en la vista de sistema."""
     s = settings or get_settings()
     for endpoint in _ENDPOINTS:
         key = getattr(s, endpoint.env_key, None)
         if not key or is_rate_limited(_mark(endpoint)):
             continue
-        text = await _call(endpoint, key, prompt)
+        text = await _call(endpoint, key, prompt, purpose)
+        record_extractor_result(endpoint.name, bool(text))
         if text:
-            return text
+            return text, endpoint.name
     return None
 
 
-async def _call(endpoint: Endpoint, key: str, prompt: str) -> Optional[str]:
+async def _call(
+    endpoint: Endpoint, key: str, prompt: str, purpose: str = ""
+) -> Optional[str]:
     try:
         count_provider_call(_mark(endpoint))
+        count_purpose_call(_mark(endpoint), purpose)
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.post(
                 f"{endpoint.base_url}/chat/completions",

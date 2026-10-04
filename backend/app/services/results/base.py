@@ -668,6 +668,37 @@ def _notify_rate_limited(provider_name: str) -> None:
     loop.create_task(notify_provider_rate_limited(provider_name))
 
 
+def count_purpose_call(mark: str, purpose: str) -> None:
+    """Llamada por propósito ('cuotas'/'resultados'/'stats').
+
+    Desglosa `calls` para la vista de sistema: una fila `groq-odds`
+    puede mostrar cuántas llamadas fueron de cuotas y cuántas de
+    resultados sin mezclar mundos. Persistido bajo `call_purpose`
+    (`{fecha: {marca: {propósito: n}}}`).
+    """
+    if not purpose:
+        return
+    today = utc_now().date().isoformat()
+    per = _load_state().setdefault("call_purpose", {}).setdefault(today, {})
+    marks = per.setdefault(mark, {})
+    marks[purpose] = int(marks.get(purpose, 0)) + 1
+    _save_state()
+
+
+def record_extractor_result(name: str, ok: bool) -> None:
+    """Éxito/fallo por extractor LLM (groq, cerebras, gemini...).
+
+    `ok` = devolvió texto usable; `fail` = error/timeout/vacío.
+    Termómetro de calidad real por endpoint para la vista de
+    sistema — decide si un refuerzo de cascada merece la pena.
+    """
+    today = utc_now().date().isoformat()
+    stats = _load_state().setdefault("extract_stats", {}).setdefault(today, {})
+    bucket = stats.setdefault(name, {"ok": 0, "fail": 0})
+    bucket["ok" if ok else "fail"] += 1
+    _save_state()
+
+
 def providers_snapshot() -> dict:
     """Estado actual de providers para la vista de sistema (solo admin).
 
@@ -704,6 +735,11 @@ def providers_snapshot() -> dict:
         "calls_today": dict(calls.get(today, {})),
         "calls_by_day": dict(calls),
         "daily_limits": dict(state.get("limits", {})),
+        # Desglose por propósito y efectividad de los extractores LLM
+        # (llm-compat-*, gemini): marca -> {propósito: n} y
+        # extractor -> {ok, fail} del día.
+        "calls_by_purpose": dict(state.get("call_purpose", {}).get(today, {})),
+        "extract_stats": dict(state.get("extract_stats", {}).get(today, {})),
     }
 
 
@@ -889,6 +925,12 @@ def is_missed(key: str, ttl: Optional[timedelta] = None) -> bool:
     if ttl is None:
         return checked_on >= (utc_now().date() - _MISSED_TTL).isoformat()
     return checked_on >= (utc_now() - ttl).isoformat()
+
+
+def count_missed_prefix(prefix: str) -> int:
+    """Cuántas marcas `missed` cuelgan de un prefijo (p. ej.
+    'llm-odds|done|') — acumulado de procesados para la vista."""
+    return sum(1 for k in _load_state().get("missed", {}) if k.startswith(prefix))
 
 
 def rate_limit_from(exc: BaseException) -> bool:

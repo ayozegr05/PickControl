@@ -324,7 +324,7 @@ class TestGeminiBackfillPass:
         assert report.mapeados == 0
         assert pick.odds_event_id is None
         # Marcada como procesada: no se reintenta en cada pasada.
-        assert results_base.is_missed(f"gemini-odds|done|{pick.id}")
+        assert results_base.is_missed(f"llm-odds|done|{pick.id}")
 
     async def test_cubierto_por_filas_existentes_no_llama(self, session, monkeypatch):
         """Si el evento ya tiene la opción casada por otro provider,
@@ -360,7 +360,7 @@ class TestGeminiBackfillPass:
             [pick], {"oddspapi:7"}, set(), session, apply=True, report=report
         )
         assert finder.await_count == 0
-        assert results_base.is_missed("gemini-odds|done|42")
+        assert results_base.is_missed("llm-odds|done|42")
 
     async def test_picks_mismo_evento_comparten_busqueda(self, session, monkeypatch):
         """Dos picks del mismo partido: UNA llamada multi resuelve a
@@ -422,8 +422,8 @@ class TestGeminiBackfillPass:
         )
 
         assert len(calls) == 2
-        assert results_base.is_missed("gemini-odds|done|20")
-        assert results_base.is_missed("gemini-odds|done|21")
+        assert results_base.is_missed("llm-odds|done|20")
+        assert results_base.is_missed("llm-odds|done|21")
 
     async def test_evento_feo_se_rescata_del_raw(self, session, monkeypatch):
         """`evento` con la apuesta en vez del cruce: el rescate lo
@@ -470,11 +470,11 @@ class TestGeminiBackfillPass:
         )
 
         multi.assert_not_awaited()
-        assert results_base.is_missed("gemini-odds|done|31")
+        assert results_base.is_missed("llm-odds|done|31")
 
 
 class TestPickPendingGemini:
-    """La marca `gemini-odds|done` entra en el conteo de pendientes."""
+    """La marca `llm-odds|done` entra en el conteo de pendientes."""
 
     def _pick(self) -> ParsedPick:
         return ParsedPick(
@@ -502,7 +502,7 @@ class TestPickPendingGemini:
         pick = self._pick()
         settings = SimpleNamespace(google_api_key="k", rapidapi_tennis_key=None)
         results_base.mark_missed("footballdata|nofixture|7")
-        results_base.mark_missed("gemini-odds|done|7")
+        results_base.mark_missed("llm-odds|done|7")
         assert not hb._pick_pending(pick, set(), settings)
 
 
@@ -608,11 +608,11 @@ class TestBackfillBreakdown:
         aplazado = await self._pick(session, 2)  # solo le debe oddspapi
         results_base.mark_missed(f"oddsfeed|nofixture|{aplazado.id}")
         results_base.mark_missed(f"footballdata|nofixture|{aplazado.id}")
-        results_base.mark_missed(f"gemini-odds|done|{aplazado.id}")
+        results_base.mark_missed(f"llm-odds|done|{aplazado.id}")
         agotado = await self._pick(session, 3)  # todos intentaron
         for src in ("oddsfeed", "oddspapi", "footballdata"):
             results_base.mark_missed(f"{src}|nofixture|{agotado.id}")
-        results_base.mark_missed(f"gemini-odds|done|{agotado.id}")
+        results_base.mark_missed(f"llm-odds|done|{agotado.id}")
         resuelto = await self._pick(session, 4)  # ya tiene cuotas
         resuelto.odds_event_id = "oddsfeed:99"
         session.add(
@@ -642,7 +642,7 @@ class TestBackfillBreakdown:
             "oddspapi": 0,
             "oddsfeed": 1,
         }
-        assert bd["gemini_pendientes"] == 1
+        assert bd["llm_pendientes"] == 1
         assert "oddspapi" in bd["fuentes_en_pausa"]
         # El contador del job diario solo mide trabajo real (en_cola).
         assert await hb.count_pending_backfill(session) == 1
@@ -738,7 +738,7 @@ class TestGeminiPassGuards:
 
         multi.assert_not_awaited()
         assert pick.evento == "9,5 córners en total"  # no se ensucia
-        assert results_base.is_missed("gemini-odds|done|50")
+        assert results_base.is_missed("llm-odds|done|50")
 
     async def test_grupos_limpios_antes_que_rescatados(self, session, monkeypatch):
         """Los eventos con cruce bueno de origen se buscan antes que
@@ -793,7 +793,7 @@ class TestGeminiPassGuards:
         rescue.assert_not_awaited()
         multi.assert_not_awaited()
         # No marcada: se retoma cuando el cooldown expire.
-        assert not results_base.is_missed("gemini-odds|done|53")
+        assert not results_base.is_missed("llm-odds|done|53")
 
     async def test_run_gemini_odds_pass_en_cooldown_devuelve_none(self, monkeypatch):
         """El drenaje a goteo sale gratis si el provider está aparcado."""

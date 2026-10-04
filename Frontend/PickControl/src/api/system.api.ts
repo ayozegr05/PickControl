@@ -30,7 +30,11 @@ export interface BackfillStatus {
   aplazados: number;
   agotados: number;
   por_fuente: Record<string, number>;
-  gemini_pendientes: number;
+  /** Pendientes del pipeline web+LLM (búsqueda + extractor). */
+  llm_pendientes: number;
+  /** Picks ya procesados por el pipeline web+LLM (marca llm-odds|done):
+   * resueltos con fila o descartados sin cuota publicada. */
+  llm_procesados?: number;
   fuentes_en_pausa: Record<string, string>;
   ultima_pasada?: BackfillPass | null;
   /** Últimas ~10 pasadas (más reciente al final) — ritmo del robot. */
@@ -57,6 +61,10 @@ export interface ProvidersStatus {
   odds_backfill_pending?: number;
   /** Embudo del backlog (en_cola vs aplazados por quota). */
   odds_backfill?: BackfillStatus | null;
+  /** Llamadas de hoy por propósito: marca -> {cuotas/resultados/stats: n}. */
+  calls_by_purpose?: Record<string, Record<string, number>>;
+  /** Extracciones de hoy por motor: extractor -> {ok, fail}. */
+  extract_stats?: Record<string, { ok: number; fail: number }>;
 }
 
 export function getProvidersStatus(): Promise<ProvidersStatus> {

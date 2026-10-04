@@ -201,10 +201,10 @@ async def _run_gemini_odds_loop() -> None:
                 if compat_llm.has_live_endpoint()
                 else _GEMINI_ONLY_INTERVAL_SECONDS
             )
-            if loop_due("gemini_odds", interval):
+            if loop_due("llm_odds", interval):
                 report = await run_gemini_odds_pass(apply=True)
                 if report is not None:
-                    mark_loop_ran("gemini_odds")
+                    mark_loop_ran("llm_odds")
                     logger.info(
                         "[GEMINI_ODDS] Goteo: %s mapeados, %s filas.",
                         report.mapeados,

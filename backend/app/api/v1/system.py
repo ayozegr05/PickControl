@@ -41,7 +41,10 @@ class BackfillStatus(BaseModel):
     aplazados: int
     agotados: int
     por_fuente: dict[str, int]
-    gemini_pendientes: int
+    # Pendientes del pipeline web+LLM (antes "gemini_pendientes") y
+    # acumulado de picks ya procesados por él (marca llm-odds|done).
+    llm_pendientes: int
+    llm_procesados: int = 0
     fuentes_en_pausa: dict[str, str]
     ultima_pasada: dict | None = None
     # Últimas pasadas del loop (más reciente al final) — permite
@@ -75,6 +78,11 @@ class ProvidersStatus(BaseModel):
     # Embudo del backlog de cuotas (en_cola / aplazados / por fuente /
     # última pasada). None si no hay fuentes de histórico configuradas.
     odds_backfill: BackfillStatus | None = None
+    # Llamadas por propósito hoy: marca -> {propósito: n}
+    # ("llm-compat-groq" -> {"cuotas": 18, "resultados": 5}).
+    calls_by_purpose: dict[str, dict[str, int]] = {}
+    # Efectividad de extractores LLM hoy: nombre -> {ok, fail}.
+    extract_stats: dict[str, dict[str, int]] = {}
 
 
 @router.get("/providers", response_model=ProvidersStatus)

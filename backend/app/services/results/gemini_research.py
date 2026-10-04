@@ -42,10 +42,12 @@ from app.services.results.base import (
     MatchState,
     MatchStats,
     count_provider_call,
+    count_purpose_call,
     fold_name,
     is_rate_limited,
     mark_cooldown,
     rate_limit_from,
+    record_extractor_result,
     retry_hint_seconds,
 )
 
@@ -572,6 +574,10 @@ class ClosingOdds:
     cuota: float
     casa: str
     source_url: str
+    # Motor que extrajo el JSON ("groq", "cerebras", "gemini"...) —
+    # la fila se escribe como provider "{extractor}-odds" para que la
+    # auditoría diga quién produjo cada cuota.
+    extractor: str = ""
 
 
 def _domains_of(urls: list[str]) -> set[str]:
@@ -759,20 +765,29 @@ class GeminiResearchProvider:
             )
         return None
 
-    async def _extract_text(self, prompt: str) -> Optional[tuple[str, list[str]]]:
+    async def _extract_text(
+        self, prompt: str, purpose: str = ""
+    ) -> Optional[tuple[str, list[str], str]]:
         """Extracción texto→JSON: primero los endpoints OpenAI-compat
         gratuitos (Groq/Cerebras/OpenRouter — cuota diaria grande y
         modelos 70B); Gemini solo si ninguno responde — su cuota es la
-        más pequeña. Devuelve (texto, urls_leídas_por_el_modelo) —
-        la lista solo es no-vacía cuando respondió Gemini con tool —
-        y el texto lo valida siempre quien llama contra la página."""
-        text = await compat_llm.extract_text(prompt)
-        if text:
-            return text, []
+        más pequeña. Devuelve (texto, urls_leídas_por_el_modelo,
+        motor) — las urls solo vienen cuando respondió Gemini con
+        tool — y el texto lo valida siempre quien llama contra la
+        página. El motor ("groq"/"cerebras"/.../"gemini") nombra el
+        provider de la fila que se escriba: `{motor}-odds` dice la
+        verdad de quién extrajo cada cuota."""
+        compat = await compat_llm.extract_text(prompt, purpose=purpose)
+        if compat:
+            text, engine = compat
+            return text, [], engine
         payload = await self._ask(prompt)
-        if payload is None:
+        count_purpose_call(self._calls_as, purpose)
+        text = self._payload_text(payload) if payload else ""
+        record_extractor_result("gemini", bool(text))
+        if not text:
             return None
-        return self._payload_text(payload), self._payload_urls(payload)
+        return text, self._payload_urls(payload), "gemini"
 
     def _payload_text(self, payload: dict[str, Any]) -> str:
         candidates = payload.get("candidates") or []
@@ -921,11 +936,12 @@ class GeminiResearchProvider:
                 sport=self._sport_es(),
                 hint=hint,
                 date=date.strftime("%d de %B de %Y"),
-            )
+            ),
+            purpose="resultados",
         )
         if not result:
             return None
-        out, model_read = result
+        out, model_read, _engine = result
         data = _extract_json(out)
         if not data:
             return None
@@ -1235,7 +1251,8 @@ class GeminiResearchProvider:
                     player=player,
                     hint=hint,
                     date=date.strftime("%d de %B de %Y"),
-                )
+                ),
+                purpose="resultados",
             )
             if not result:
                 continue
@@ -1298,7 +1315,8 @@ class GeminiResearchProvider:
                     sport=self._sport_es(),
                     hint=hint,
                     date=date.strftime("%d de %B de %Y"),
-                )
+                ),
+                purpose="stats",
             )
             if not result:
                 continue
@@ -1366,14 +1384,15 @@ class GeminiResearchProvider:
                     date=date.strftime("%d de %B de %Y"),
                     market_desc=desc,
                     markets="|".join(_ODDS_MARKET_NAMES),
-                )
+                ),
+                purpose="cuotas",
             )
             if not result:
                 continue
             data = _extract_json(result[0])
             if not data:
                 continue
-            found = self._closing_from_text(text, data, url)
+            found = self._closing_from_text(text, data, url, extractor=result[2])
             if found is not None:
                 logger.info(
                     "[GEMINI] cuota cierre '%s' %s/%s = %s (%s) en %s",
@@ -1431,7 +1450,8 @@ class GeminiResearchProvider:
                     date=date.strftime("%d de %B de %Y"),
                     apuestas=apuestas,
                     markets="|".join(_ODDS_MARKET_NAMES),
-                )
+                ),
+                purpose="cuotas",
             )
             if not result:
                 continue
@@ -1442,7 +1462,7 @@ class GeminiResearchProvider:
                     continue
                 if not (0 <= idx < len(descs)) or idx in found:
                     continue
-                closing = self._closing_from_text(text, entry, url)
+                closing = self._closing_from_text(text, entry, url, extractor=result[2])
                 if closing is None:
                     continue
                 found[idx] = closing
@@ -1459,7 +1479,7 @@ class GeminiResearchProvider:
         return found
 
     def _closing_from_text(
-        self, text: str, data: dict[str, Any], url: str
+        self, text: str, data: dict[str, Any], url: str, extractor: str = ""
     ) -> Optional[ClosingOdds]:
         """Valida la respuesta del modelo contra el texto descargado."""
         market = str(data.get("market_name") or "")
@@ -1487,6 +1507,7 @@ class GeminiResearchProvider:
             cuota=cuota,
             casa=str(data.get("casa") or "").strip(),
             source_url=url,
+            extractor=extractor,
         )
 
     @staticmethod

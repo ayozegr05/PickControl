@@ -86,13 +86,13 @@ class TestExtractText:
     async def test_cascada_salta_sin_key_y_corta_al_primer_ok(self, monkeypatch):
         calls = []
 
-        async def fake(ep, key, prompt):
+        async def fake(ep, key, prompt, purpose=""):
             calls.append(ep.name)
             return "ok" if ep.name == "cerebras" else None
 
         monkeypatch.setattr(compat_llm, "_call", fake)
         s = _settings(cerebras="k2", openrouter="k3")
-        assert await compat_llm.extract_text("p", settings=s) == "ok"
+        assert await compat_llm.extract_text("p", settings=s) == ("ok", "cerebras")
         # groq sin key ni se intenta; openrouter ni llega al turno.
         assert calls == ["cerebras"]
 
@@ -100,17 +100,17 @@ class TestExtractText:
         results_base.mark_cooldown("llm-compat-groq", utc_now() + timedelta(hours=1))
         calls = []
 
-        async def fake(ep, key, prompt):
+        async def fake(ep, key, prompt, purpose=""):
             calls.append(ep.name)
             return "ok"
 
         monkeypatch.setattr(compat_llm, "_call", fake)
         s = _settings(groq="k1", cerebras="k2")
-        assert await compat_llm.extract_text("p", settings=s) == "ok"
+        assert await compat_llm.extract_text("p", settings=s) == ("ok", "cerebras")
         assert calls == ["cerebras"]  # groq aparcado ni se intenta
 
     async def test_todos_fallan_devuelve_none(self, monkeypatch):
-        async def fake(ep, key, prompt):
+        async def fake(ep, key, prompt, purpose=""):
             return None
 
         monkeypatch.setattr(compat_llm, "_call", fake)
