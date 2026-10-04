@@ -27,16 +27,17 @@ TE_HTML = """
 <a href="/itf-men-monastir/2026/itf-men/"><span class="fl">&nbsp;</span>
 <span class="type-men">&nbsp;</span>ITF Monastir</a></td>
 <td class="score">S</td><td class="course">H</td><td class="course">A</td></tr>
-<tr id="s11" class="two bott">
+<tr id="r1175" class="two bott">
 <td class="first time" rowspan="2">15:30</td>
 <td class="t-name"><a href="/player/rodionov/">Rodionov J.</a></td>
-<td class="result">&nbsp;</td><td class="score">&nbsp;</td><td class="h2h">-</td>
+<td class="result">2</td><td class="score">6</td><td class="h2h">-</td>
 <td class="coursew" rowspan="2">1.49</td>
 <td class="course" rowspan="2">3.00</td>
+<td class="alone-icons" rowspan="2">&nbsp;</td>
 <td rowspan="2"><a href="/match-detail/?id=3338819">info</a></td></tr>
-<tr id="s11b" class="two">
+<tr id="r1175b" class="two">
 <td class="t-name"><a href="/player/ferreira-silva/">Ferreira Silva F.</a></td>
-<td class="result">&nbsp;</td><td class="score">&nbsp;</td><td class="h2h">-</td></tr>
+<td class="result">0</td><td class="score">2</td><td class="h2h">-</td></tr>
 <tr id="s12" class="one bott">
 <td class="first time" rowspan="2">17:00</td>
 <td class="t-name"><a href="/player/coe/">Coe R.</a></td>
@@ -71,6 +72,31 @@ Eibar - <strong>Leganes</strong></a></td>
 <td class="table-main__result"><a href="/x/"> <strong>0:0</strong></a></td>
 <td class="table-main__partial" colspan="3">&nbsp;</td></tr>
 </tbody></table>
+"""
+
+# Fila de la página /football/{liga}/results/ — formato distinto:
+# <tr><td h-text-left><a class="in-match">A - B</a></td> + odds +
+# celda de fecha "DD.MM." (sin data-dt).
+BE_LEAGUE_HTML = """
+<table class="table-main"><tr><th class="h-text-left" colspan="2">
+7. Round</th></tr>
+<tr><td class="h-text-left"><a data-test="10971117"
+href="/football/spain/laliga2/malaga-deportivo-la-coruna/hGycdKve/"
+class="in-match"><span>Malaga</span> - <span>Deportivo La Coruna</span></a></td>
+<td class="h-text-center"><a href="/x/">1:2</a></td>
+<td class="table-main__odds" data-oid="a" data-odd="2.10"></td>
+<td class="table-main__odds" data-oid="b" data-odd="3.30"></td>
+<td class="table-main__odds" data-oid="c" data-odd="2.25"></td>
+<td class="h-text-right h-text-no-wrap">15.09.</td></tr>
+<tr><td class="h-text-left"><a data-test="10971118"
+href="/football/spain/laliga2/eibar-leganes/AbCdEf12/"
+class="in-match"><span><strong>Eibar</strong></span> - <span>Leganes</span></a></td>
+<td class="h-text-center"><a href="/x/">0:0</a></td>
+<td class="table-main__odds" data-oid="d" data-odd="2.60"></td>
+<td class="table-main__odds" data-oid="e" data-odd="3.00"></td>
+<td class="table-main__odds" data-oid="f" data-odd="2.90"></td>
+<td class="h-text-right h-text-no-wrap">15.09.</td></tr>
+</table>
 """
 
 
@@ -211,6 +237,22 @@ def test_be_choices_full_time_1x2():
         ("Full time", "X"),
         ("Full time", "2"),
     ]
+
+
+def test_be_liga_parse_temporada():
+    """La página /results/ de una liga trae la temporada entera con
+    `data-odd` y fecha "DD.MM." (año inferido del calendario)."""
+    from app.services.odds.static_pages import _parse_betexplorer_league
+
+    rows, suspicious = _parse_betexplorer_league(BE_LEAGUE_HTML, "spain laliga2")
+    assert not suspicious
+    assert len(rows) == 2
+    r = rows[0]
+    assert r.home_name == "Malaga"
+    assert r.away_name == "Deportivo La Coruna"
+    assert (r.odds1, r.oddsX, r.odds2) == (2.10, 3.30, 2.25)
+    assert r.ext_id == "betexplorer:hGycdKve"
+    assert r.start.date() == date(2026, 9, 15)
 
 
 # --- Integración con la cascada ------------------------------------

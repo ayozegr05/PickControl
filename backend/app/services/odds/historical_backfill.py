@@ -580,17 +580,51 @@ class _TennisExplorerSource(_StaticListingSource):
 
 
 class _BetExplorerSource(_StaticListingSource):
-    """betexplorer.com: /football/results/ del día — cierres 1X2 de
-    casi todas las ligas del mundo en data-odd, HTML estático."""
+    """betexplorer.com: cierres 1X2 de casi todas las ligas del
+    mundo en `data-odd`, HTML estático. Dos vistas del mismo dato:
+
+    - `/football/results/` del día: todo el fútbol mundial, pero
+      solo embebe cuotas para fechas muy recientes (~ayer).
+    - `/football/{pais}/{liga}/results/`: temporada entera con
+      cuota por fila — la vía histórica. Se descarga UNA vez por
+      pasada (lazy, solo cuando un día viejo lo pide) y las filas
+      se filtran por la fecha de cada partido.
+    """
 
     name = static_pages.NAME_BE
-    fetcher = staticmethod(static_pages.fetch_betexplorer_day)
     matcher = staticmethod(static_pages.be_match)
     choicer = staticmethod(static_pages.be_choices)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._league_rows: Optional[list[static_pages.StaticMatch]] = None
 
     @property
     def sport_ids(self) -> dict[str, int]:
         return {"futbol": 0}
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        if day in self._days:
+            return self._days[day]
+        try:
+            day_rows, suspicious = await static_pages.fetch_betexplorer_day(http, day)
+            league_rows: list[static_pages.StaticMatch] = []
+            if utc_now().date() - day > static_pages._BE_DAY_ODDS_MAX_AGE:
+                if self._league_rows is None:
+                    self._league_rows = (
+                        await static_pages.fetch_betexplorer_all_leagues(http)
+                    )
+                league_rows = [r for r in self._league_rows if r.start.date() == day]
+            # Mismo partido en las dos vistas (mismo ext_id): la fila
+            # de liga gana porque es la que trae la cuota de cierre.
+            by_id = {r.ext_id: r for r in day_rows}
+            for row in league_rows:
+                by_id[row.ext_id] = row
+            rows = list(by_id.values())
+            self._days[day] = None if (not rows and suspicious) else rows
+        except Exception:
+            self._days[day] = None
+        return self._days[day]
 
 
 def _book_defs(books, book) -> list:
