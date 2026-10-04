@@ -1557,7 +1557,7 @@ class GeminiResearchProvider:
 
     @staticmethod
     def _literal_near_anchor(text: str, literal: str, anchors: list[str]) -> bool:
-        """Alguna aparición del literal cae a ~150 chars de un ancla
+        """Alguna aparición del literal cae cerca de un ancla
         (nombre de selección o línea): la cuota es de ESA selección,
         no de otro mercado de la misma tabla.
 
@@ -1565,7 +1565,13 @@ class GeminiResearchProvider:
         confunde la línea con el precio ("Under 11 córners" -> cuota
         11.0), el literal "11" caería justo dentro del ancla "11" de
         la propia línea y colaría. El ancla numérica tampoco casa
-        tras "-"/"+": "-3.5/+3.5" es un hándicap, no el total 3.5."""
+        tras "-"/"+": "-3.5/+3.5" es un hándicap, no el total 3.5.
+
+        Con línea numérica (totales/hándicaps) la barra sube: el
+        literal tiene que caer en la MISMA FILA de tabla que la
+        línea — la ventana simple dejaba colar el precio de la
+        línea vecina (Over 1.0 @1.12 servido como Over 1.5)."""
+        line_anchors = [a for a in anchors if a and re.fullmatch(r"[\d.,]+", a)]
         anchor_res = [
             re.compile(
                 (
@@ -1582,7 +1588,85 @@ class GeminiResearchProvider:
         for m in re.finditer(re.escape(literal), text):
             if any(m.start() < e and s < m.end() for s, e in anchor_spans):
                 continue
+            if line_anchors:
+                if GeminiResearchProvider._literal_in_line_row(text, m, anchors):
+                    return True
+                continue
             window = text[max(0, m.start() - 150) : m.end() + 150]
             if any(ar.search(window) for ar in anchor_res):
                 return True
         return False
+
+    @staticmethod
+    def _literal_in_line_row(text: str, m: re.Match, anchors: list[str]) -> bool:
+        """El literal cae en la FILA de la línea pedida.
+
+        Las tablas planas de los comparadores repiten
+        `<línea> <over> Over <over> <under> Under <under>` una fila
+        tras otra y cierran cada una con "Compare odds"/"Comparar
+        cuotas" (o "Show more" en el pliegue): ese delimitador marca
+        la frontera de fila. Dos reglas:
+
+        1. La línea ancla aparece en el MISMO segmento que el
+           literal — sin delimitador, a ±45 chars.
+        2. Si el nombre del lado ("Over"/"Under"/equipo) aparece en
+           la fila, el literal está ligado a él: en el hueco entre
+           etiqueta y precio solo puede mediar la propia línea
+           ("Under 11 a 11.00" vale; "1.25 5.50 Under" no — el 5.50
+           es el precio del OTRO lado). Si la fila no etiqueta el
+           lado ("Menos de 4 goles a 1.05"), solo manda la regla 1.
+        """
+        line_anchors = [a for a in anchors if a and re.fullmatch(r"[\d.,]+", a)]
+        name_anchors = [a for a in anchors if a and not re.fullmatch(r"[\d.,]+", a)]
+        line_re = [rf"(?<![\d.,+\-]){re.escape(a)}(?![\d.,])" for a in line_anchors]
+        if _ROW_DELIM.search(text):
+            bounds = [0] + [d.end() for d in _ROW_DELIM.finditer(text)]
+            seg_start, seg_end = 0, len(text)
+            for i, start in enumerate(bounds):
+                end = bounds[i + 1] if i + 1 < len(bounds) else len(text)
+                if start <= m.start() < end:
+                    seg_start, seg_end = start, end
+                    break
+            seg = text[seg_start:seg_end]
+            if not any(re.search(p, seg) for p in line_re):
+                return False
+            region, m_lo = seg, m.start() - seg_start
+        else:
+            if not any(
+                abs(am.start() - m.start()) <= 45
+                for p in line_re
+                for am in re.finditer(p, text)
+            ):
+                return False
+            lo = max(0, m.start() - 60)
+            region, m_lo = text[lo : m.end() + 60], m.start() - lo
+        m_span = (m_lo, m_lo + (m.end() - m.start()))
+        line_vals = {a.replace(",", ".") for a in line_anchors}
+        side_seen = False
+        for a in name_anchors:
+            for am in re.finditer(re.escape(a), region, re.I):
+                side_seen = True
+                if am.end() <= m_span[0]:
+                    gap = region[am.end() : m_span[0]]
+                elif am.start() >= m_span[1]:
+                    gap = region[m_span[1] : am.start()]
+                else:
+                    continue  # solapa al literal: no es una etiqueta útil
+                if len(gap) > 30:
+                    continue
+                # Solo la línea puede mediar entre etiqueta y
+                # precio ("Under 11 a 11.00"): cualquier otro número
+                # es el precio del lado contrario de la fila.
+                nums = re.findall(r"[+-]?\d+(?:[.,]\d+)?", gap)
+                if all(n.lstrip("+-").replace(",", ".") in line_vals for n in nums):
+                    return True
+        return not side_seen
+
+
+# Fin de fila en las tablas planas de los comparadores (oddspedia
+# y clones): cada fila de mercado cierra con "Compare odds" o
+# "Comparar cuotas" (y "Show more" pliega las líneas extra). Sirve
+# de frontera para exigir que la cuota esté en la fila de SU
+# línea — el precio de la línea vecina está a 30 chars pero en
+# OTRO segmento.
+_ROW_DELIM = re.compile(r"(?:compare|comparar)\s+(?:odds|cuotas)|show more", re.I)

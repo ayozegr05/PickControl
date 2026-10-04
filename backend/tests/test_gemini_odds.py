@@ -120,6 +120,59 @@ class TestOddsLiteralOk:
             text, "1.01", 1.01, ["Under", "3.5"]
         )
 
+    _TOTALS_TABLE = (
+        "Total Goals 0.5 1.09 Over 1.09 9.50 Under 9.50 Compare odds "
+        "0.75 1.10 Over 1.10 7.60 Under 7.60 Compare odds "
+        "1 1.12 Over 1.12 7.00 Under 7.00 Compare odds "
+        "1.5 1.25 Over 1.25 5.50 Under 5.50 Compare odds"
+    )
+
+    def test_precio_linea_vecina_rechaza(self):
+        # Caso real pick 1997/1943: el "1.12" es el precio de Over
+        # 1.0 — estaba a 30 chars de la fila "1.5" y colaba por la
+        # ventana. Con la barrera de fila, "1.5" no está en el
+        # segmento del literal -> rechazado.
+        assert not GeminiResearchProvider._odds_literal_ok(
+            self._TOTALS_TABLE, "1.12", 1.12, ["Over", "1.5"]
+        )
+
+    def test_precio_linea_propia_acepta(self):
+        # La misma tabla: Over 1.0 @1.12 sí valida — el ancla "1"
+        # está en el segmento del literal y "Over" le va pegado.
+        assert GeminiResearchProvider._odds_literal_ok(
+            self._TOTALS_TABLE, "1.12", 1.12, ["Over", "1"]
+        )
+
+    def test_under_misma_fila_acepta(self):
+        # Under 1.5 @5.50: el literal está en la fila "1.5" y
+        # pegado a su etiqueta "Under".
+        assert GeminiResearchProvider._odds_literal_ok(
+            self._TOTALS_TABLE, "5.50", 5.50, ["Under", "1.5"]
+        )
+
+    def test_precio_lado_contrario_rechaza(self):
+        # Una cuota Under con el precio del lado Over (1.25) de la
+        # fila correcta: "Under" existe en la fila pero NO va pegado
+        # al literal — tampoco cuela.
+        assert not GeminiResearchProvider._odds_literal_ok(
+            self._TOTALS_TABLE, "1.25", 1.25, ["Under", "1.5"]
+        )
+
+    def test_fila_sin_delimitador_ventana_corta(self):
+        # Sin "Compare odds" (otros comparadores): fallback de ±45
+        # a la línea — acepta si la línea está cerca.
+        text = "pronóstico: Menos de 4.5 goles @ 1.61 en bet365"
+        assert GeminiResearchProvider._odds_literal_ok(
+            text, "1.61", 1.61, ["Under", "4.5"]
+        )
+
+    def test_fila_sin_delimitador_lejos_rechaza(self):
+        lejos = "texto de relleno sin números " * 10
+        text = f"Over 1.0 @ 1.12 {lejos} total 1.5 otro mercado"
+        assert not GeminiResearchProvider._odds_literal_ok(
+            text, "1.12", 1.12, ["Over", "1.5"]
+        )
+
 
 class TestLiteralAnchors:
     def test_eleccion_1x2_sin_linea_no_ancla(self):
