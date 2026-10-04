@@ -91,6 +91,23 @@ class TestOddsLiteralOk:
             text, "5.40", 5.40, ["Under", "4"]
         )
 
+    def test_linea_no_es_cuota(self):
+        # Caso real pick 1419: "Under 11 córners" — el modelo puso la
+        # línea (11) como cuota. El literal solapado con el ancla no
+        # cuenta: solo valdría un "11" APARTE, como precio real.
+        text = "Corners 2-Way: Over 11 a 1.83, Under 11 a 1.95"
+        assert not GeminiResearchProvider._odds_literal_ok(
+            text, "11", 11.0, ["Under", "11"]
+        )
+
+    def test_linea_igual_cuota_real_acepta(self):
+        # Si la página sí muestra un precio 11.0 para Under 11,
+        # hay una aparición extra del literal junto al ancla.
+        text = "Corners 2-Way: Over 11 a 1.01, Under 11 a 11.00"
+        assert GeminiResearchProvider._odds_literal_ok(
+            text, "11.00", 11.0, ["Under", "11"]
+        )
+
 
 class TestLiteralAnchors:
     def test_eleccion_1x2_sin_linea_no_ancla(self):

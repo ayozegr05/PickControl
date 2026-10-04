@@ -1528,7 +1528,12 @@ class GeminiResearchProvider:
     def _literal_near_anchor(text: str, literal: str, anchors: list[str]) -> bool:
         """Alguna aparición del literal cae a ~150 chars de un ancla
         (nombre de selección o línea): la cuota es de ESA selección,
-        no de otro mercado de la misma tabla."""
+        no de otro mercado de la misma tabla.
+
+        La aparición no puede SOLAPARSE con un ancla: si el modelo
+        confunde la línea con el precio ("Under 11 córners" -> cuota
+        11.0), el literal "11" caería justo dentro del ancla "11" de
+        la propia línea y colaría."""
         anchor_res = [
             re.compile(
                 (
@@ -1541,7 +1546,10 @@ class GeminiResearchProvider:
             for a in anchors
             if a
         ]
+        anchor_spans = [m.span() for ar in anchor_res for m in ar.finditer(text)]
         for m in re.finditer(re.escape(literal), text):
+            if any(m.start() < e and s < m.end() for s, e in anchor_spans):
+                continue
             window = text[max(0, m.start() - 150) : m.end() + 150]
             if any(ar.search(window) for ar in anchor_res):
                 return True
