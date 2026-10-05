@@ -191,6 +191,20 @@ def test_map_doble_oportunidad_equipo():
     assert m.choice_name == "1X"
 
 
+def test_map_doble_oportunidad_sin_mercado_dc():
+    """El proveedor solo trae 1X2 seco (betexplorer): un pick de
+    doble oportunidad NO puede caer a la victoria seca — X2 @1.5
+    contra el 2 seco @2.91 sería comparación inventada (bug real,
+    pick 5530)."""
+    snaps = [
+        _snap("Full time", "1", 2.10),
+        _snap("Full time", "X", 3.30),
+        _snap("Full time", "2", 2.91),
+    ]
+    pick = _pick("Getafe gana o empata el partido", mercado="doble oportunidad")
+    assert map_pick_choices(pick, _event(), snaps) is None
+
+
 def test_map_empate_no_valido():
     pick = _pick("Betis", mercado="resultado sin empate")
     m = map_pick_choices(pick, _event(), _futbol_snaps())

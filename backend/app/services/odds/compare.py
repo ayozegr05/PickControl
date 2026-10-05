@@ -283,6 +283,11 @@ def map_pick_choices(
             for row in dc:
                 if row.choice_name == "12":
                     return _group_rows(snapshots, row)
+        # El mercado está reconocido pero el proveedor no lo publica
+        # (p. ej. betexplorer solo trae 1X2 seco): miss honesto —
+        # comparar "gana o empata" @1.5 contra la victoria seca @2.91
+        # sería inventar la comparación (bug real: pick 5530).
+        return None
 
     if re.search(
         r"empate\s+no\s+v[aá]lido|resultado\s+sin\s+empate|draw\s+no\s+bet", text
