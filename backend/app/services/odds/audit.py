@@ -9,10 +9,19 @@ parser puede dejar filas antiguas apuntando a la opción equivocada
 sin que nadie lo note (pasó con doble oportunidad -> victoria seca y
 con "gana 2-0" -> ganador; ambos se detectaron auditando a mano).
 
-Clasificación por pick:
+Solo evalúa las filas escritas por FUENTES DE BACKFILL
+(`_BACKFILL_PROVIDERS`): son las únicas para las que la atribución
+afirma "este pick quedó resuelto". Las filas del snapshotter en vivo
+(espn, sofascore...) llevan `parsed_pick_id` solo como traza de
+quién disparó la captura — el pick puede poseer un bloque entero de
+mercados que no cubre su mercado, y eso no es un error sino un hueco
+de cobertura (se contabiliza aparte en `sin_backfill`).
+
+Clasificación por pick con filas de backfill:
 - `ok`: el mapeador casa el pick con una tripleta que el pick posee.
-- `sin_map`: el mapeador devuelve None — el pick posee filas que ya
-  no son compatibles con su mercado (regresión o atribución rota).
+- `sin_map`: el mapeador devuelve None — el pick posee filas de
+  backfill que ya no son compatibles con su mercado (regresión o
+  atribución rota).
 - `mal`: el mapeador casa con una tripleta DISTINTA a la guardada —
   la fila almacenada no es la que corresponde al pick.
 
@@ -40,10 +49,18 @@ _SAMPLE_MAX = 5
 class AuditReport:
     """Resultado de una pasada de auditoría sobre las filas atribuidas."""
 
+    # Picks con filas atribuidas (todas las fuentes).
     picks: int = 0
+    # De los picks con filas de backfill (los que el embudo cuenta
+    # "resueltos"): cuántos sigue casando el mapeador hoy.
     ok: int = 0
     sin_map: int = 0
     mal: int = 0
+    # Picks sin filas de backfill (solo traza del snapshotter):
+    # informativo — su mercado puede no estar capturado, pero nadie
+    # afirmó que estuvieran resueltos.
+    sin_backfill: int = 0
+    # Fila atribuida a un pick que ya no existe.
     sin_evento: int = 0
     ejemplos_mal: list[str] = field(default_factory=list)
     ejemplos_sin_map: list[str] = field(default_factory=list)
@@ -55,6 +72,7 @@ class AuditReport:
             "ok": self.ok,
             "sin_map": self.sin_map,
             "mal": self.mal,
+            "sin_backfill": self.sin_backfill,
             "sin_evento": self.sin_evento,
             "ejemplos_mal": self.ejemplos_mal,
             "ejemplos_sin_map": self.ejemplos_sin_map,
@@ -62,12 +80,15 @@ class AuditReport:
 
 
 async def audit_stored_snapshots(session: AsyncSession) -> AuditReport:
-    """Verifica que cada fila atribuida siga casando con su pick.
+    """Verifica que cada fila de backfill atribuida siga casando con
+    su pick.
 
     Una sola query de snapshots/picks/eventos — el volumen es
     administrable (cientos de filas, no millones) y se corre una vez
     por semana.
     """
+    from app.services.odds.historical_backfill import _BACKFILL_PROVIDERS
+
     report = AuditReport()
     attributed = list(
         (
@@ -81,15 +102,18 @@ async def audit_stored_snapshots(session: AsyncSession) -> AuditReport:
     if not attributed:
         return report
 
-    # Tripleta que posee cada pick y eventos donde tiene filas.
-    owned: dict[int, set[tuple[str, str, str | None]]] = {}
+    # Tripletas que posee cada pick, separadas por tipo de fuente, y
+    # eventos donde tiene filas.
+    owned_bf: dict[int, set[tuple[str, str, str | None]]] = {}
+    owned_any: dict[int, set[tuple[str, str, str | None]]] = {}
     pick_events: dict[int, set[str]] = {}
     event_ids: set[str] = set()
     for row in attributed:
         assert row.parsed_pick_id is not None
-        owned.setdefault(row.parsed_pick_id, set()).add(
-            (row.market_name, row.choice_name, row.choice_group)
-        )
+        triple = (row.market_name, row.choice_name, row.choice_group)
+        owned_any.setdefault(row.parsed_pick_id, set()).add(triple)
+        if row.provider in _BACKFILL_PROVIDERS:
+            owned_bf.setdefault(row.parsed_pick_id, set()).add(triple)
         pick_events.setdefault(row.parsed_pick_id, set()).add(row.event_ext_id)
         event_ids.add(row.event_ext_id)
 
@@ -117,13 +141,13 @@ async def audit_stored_snapshots(session: AsyncSession) -> AuditReport:
         p.id: p
         for p in (
             await session.exec(
-                select(ParsedPick).where(ParsedPick.id.in_(owned.keys()))
+                select(ParsedPick).where(ParsedPick.id.in_(owned_any.keys()))
             )
         ).all()
         if p.id is not None
     }
 
-    for pick_id, triples in owned.items():
+    for pick_id, triples in owned_any.items():
         report.picks += 1
         pick = picks.get(pick_id)
         label = f"pick {pick_id} ({pick.seleccion if pick else 'borrado'})"
@@ -131,6 +155,13 @@ async def audit_stored_snapshots(session: AsyncSession) -> AuditReport:
             # Pick borrado: la fila queda huerfana — no es mapeo
             # incorrecto, pero conviene contarlo aparte.
             report.sin_evento += 1
+            continue
+        bf_triples = owned_bf.get(pick_id)
+        if not bf_triples:
+            # Solo traza del snapshotter: el embudo no lo cuenta
+            # resuelto — su comparación se evalúa con todas las
+            # filas del evento al comparar, no con la propiedad.
+            report.sin_backfill += 1
             continue
         matched_ok = False
         mapped_none = True
@@ -149,7 +180,7 @@ async def audit_stored_snapshots(session: AsyncSession) -> AuditReport:
                 matched.market_name,
                 matched.choice_name,
                 matched.choice_group,
-            ) in triples:
+            ) in bf_triples:
                 matched_ok = True
                 break
         if matched_ok:
@@ -157,12 +188,12 @@ async def audit_stored_snapshots(session: AsyncSession) -> AuditReport:
         elif mapped_none:
             report.sin_map += 1
             if len(report.ejemplos_sin_map) < _SAMPLE_MAX:
-                report.ejemplos_sin_map.append(f"{label}: {sorted(triples)[:1]}")
+                report.ejemplos_sin_map.append(f"{label}: {sorted(bf_triples)[:1]}")
         else:
             report.mal += 1
             if len(report.ejemplos_mal) < _SAMPLE_MAX:
                 report.ejemplos_mal.append(
-                    f"{label}: guardado {sorted(triples)[:1]}, "
+                    f"{label}: guardado {sorted(bf_triples)[:1]}, "
                     f"el mapeador da {mapped_desc}"
                 )
     return report

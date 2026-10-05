@@ -32,9 +32,10 @@ def _snap(
     choice: str,
     group: str | None = None,
     cuota: float = 2.0,
+    provider: str = "betexplorer",
 ) -> OddsSnapshot:
     return OddsSnapshot(
-        provider="betexplorer",
+        provider=provider,
         event_ext_id="betexplorer:evt1",
         market_name=market,
         choice_name=choice,
@@ -149,6 +150,61 @@ async def test_audit_pick_borrado_es_sin_evento(session):
 async def test_audit_sin_filas_atribuidas(session):
     report = await audit_stored_snapshots(session)
     assert report.picks == 0
+
+
+@pytest.mark.asyncio
+async def test_audit_solo_snapshotter_es_informativo(session):
+    """Filas del snapshotter en vivo (espn...) atribuidas a un pick
+    cuyo mercado no está capturado: la traza "quién disparó" no
+    afirma resolución — cuenta en `sin_backfill`, no en sin_map/mal."""
+    event = OddsEvent(
+        event_ext_id="espn:evt9",
+        sport="futbol",
+        home_team="Malaga",
+        away_team="Deportivo La Coruna",
+    )
+    pick = _pick(
+        7,
+        mercado="over/under corners",
+        seleccion="menos de 11 corners",
+        linea=11.0,
+    )
+    snap = _snap(7, "1st half", "1", provider="espn")
+    snap.event_ext_id = "espn:evt9"
+    await _seed(session, event, pick, snap)
+
+    report = await audit_stored_snapshots(session)
+
+    assert report.picks == 1
+    assert report.sin_backfill == 1
+    assert report.mal == 0
+    assert report.sin_map == 0
+    assert report.ok == 0
+
+
+@pytest.mark.asyncio
+async def test_audit_mixta_snapshotter_y_backfill(session):
+    """Pick con fila de backfill correcta + traza espn del mismo
+    evento: la de backfill manda — ok aunque la traza sea de otro
+    mercado."""
+    event = OddsEvent(
+        event_ext_id="betexplorer:evt1",
+        sport="futbol",
+        home_team="Malaga",
+        away_team="Deportivo La Coruna",
+    )
+    pick = _pick(8, mercado="ganador", seleccion="Malaga gana")
+    await _seed(
+        session,
+        event,
+        pick,
+        _snap(8, "Full time", "1", provider="betexplorer"),
+        _snap(8, "1st half", "2", provider="espn"),
+    )
+
+    report = await audit_stored_snapshots(session)
+    assert report.ok == 1
+    assert report.sin_backfill == 0
 
 
 @pytest.mark.asyncio
