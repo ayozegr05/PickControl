@@ -602,6 +602,10 @@ TE_DETAIL_HTML = """
 <tr class="one"><td class="first tl"><a>x</a></td><td class="value">-4.5</td>
 <td class="k1"><div class="odds-in">1.85</div></td>
 <td class="k2"><div class="odds-in">1.95</div></td></tr>
+<tr class="odds-type"><td colspan="4">Asian Handicap +3.5 games</td></tr>
+<tr class="average"><td>Average odds</td><td class="value">+3.5</td>
+<td class="k1"><div class="odds-in">0</div></td>
+<td class="k2"><div class="odds-in">0</div></td></tr>
 </tbody></table></div>
 <div id="oddsMenu-4-data" class="none"><table class="odds-cs"><tbody>
 <tr class="odds-type"><td colspan="3">Correct Score 2:0 </td></tr>
@@ -631,6 +635,10 @@ def test_te_detail_parse_mercados():
     assert got[("Game handicap", "(-4.5) Jugador A", "4.5")] == 1.85
     # Marcador de sets: la opción es el marcador normalizado.
     assert got[("Correct score", "2-0", None)] == 5.75
+    # La fila "average" con odds-in 0 no se lee: la sección +3.5
+    # solo tiene esa fila -> ninguna opción (bug real: cuota 0.0).
+    assert all(c.choice_group != "3.5" for c in ch if c.market_name == "Game handicap")
+    assert all(c.points[0].cuota >= 1.01 for c in ch)
 
 
 def test_te_pick_needs_detail():

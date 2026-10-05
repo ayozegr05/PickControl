@@ -516,14 +516,21 @@ def te_market_choices(
 
 def _te_best_k(seg: str, kcol: str) -> Optional[float]:
     """Mejor (máxima) cuota de la columna k1/k2 entre las casas de la
-    sección."""
+    sección.
+
+    Solo filas de casa (`tr.one`/`tr.two`): la fila `tr.average`
+    ("Average odds") embebe `odds-in">0` cuando no hay dato — leerla
+    escribía cuota 0.0 (bug real: pick 4561)."""
     best: Optional[float] = None
-    for m in _TE_K.finditer(seg):
-        if m.group(1) != kcol:
-            continue
-        odd = float(m.group(2))
-        if best is None or odd > best:
-            best = odd
+    for rm in _TE_DATA_ROW.finditer(seg):
+        for m in _TE_K.finditer(rm.group(1)):
+            if m.group(1) != kcol:
+                continue
+            odd = float(m.group(2))
+            if odd < 1.01:
+                continue
+            if best is None or odd > best:
+                best = odd
     return best
 
 
