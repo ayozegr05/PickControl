@@ -604,6 +604,9 @@ class _BetExplorerSource(_StaticListingSource):
     def __init__(self) -> None:
         super().__init__()
         self._leagues: Optional[dict[str, list[static_pages.StaticMatch]]] = None
+        # Detalle de partido: (ext_id, bettype) -> opciones. None =
+        # fetch falló (transitorio: no marcar miss, reintenta luego).
+        self._markets: dict[tuple[str, str], Optional[list[HistoricalChoice]]] = {}
 
     @property
     def sport_ids(self) -> dict[str, int]:
@@ -649,6 +652,29 @@ class _BetExplorerSource(_StaticListingSource):
             self._days[day] = None
         return self._days[day]
 
+    async def _market(
+        self, http, fixture: static_pages.StaticMatch, bettype: str
+    ) -> Optional[list[HistoricalChoice]]:
+        """Opciones de un mercado del detalle del partido, cacheadas
+        por (partido, bettype) en la pasada: varios picks del mismo
+        partido comparten una sola descarga."""
+        key = (fixture.ext_id, bettype)
+        if key not in self._markets:
+            code = fixture.ext_id.split(":", 1)[-1]
+            html = await static_pages.fetch_betexplorer_market(http, code, bettype)
+            self._markets[key] = (
+                None
+                if html is None
+                else static_pages.be_market_choices(
+                    html,
+                    bettype,
+                    fixture.home_name,
+                    fixture.away_name,
+                    fixture.start,
+                )
+            )
+        return self._markets[key]
+
     async def choices(self, http, fixture: static_pages.StaticMatch, sport, picks):
         choices = static_pages.be_choices(fixture)
         if not choices and fixture.league_path:
@@ -663,7 +689,30 @@ class _BetExplorerSource(_StaticListingSource):
                     row.odds2,
                 )
                 choices = static_pages.be_choices(fixture)
-        return ("ok", choices) if choices else ("miss", [])
+        # Detalle del partido (/match-odds/): solo los bettypes que
+        # piden los picks — O/U con escalera exacta, doble oportunidad,
+        # BTTS, AH, DNB. Sin 1X2 del listado se pide también el "1x2"
+        # del detalle: el endpoint histórico lo sirve aunque el
+        # listado del día ya no embeba data-odd.
+        needed = {
+            bt
+            for pick in picks
+            if (bt := static_pages.be_pick_bettype(pick.mercado, pick.seleccion))
+        }
+        if not choices:
+            needed.add("1x2")
+        detail_failed = False
+        for bettype in sorted(needed):
+            rows = await self._market(http, fixture, bettype)
+            if rows is None:
+                detail_failed = True
+            else:
+                choices += rows
+        if not choices:
+            # Fallo transitorio del endpoint -> "error" (reintento), no
+            # "miss" — no se quema la marca hist del fixture.
+            return ("error", []) if detail_failed else ("miss", [])
+        return ("ok", choices)
 
 
 def _book_defs(books, book) -> list:

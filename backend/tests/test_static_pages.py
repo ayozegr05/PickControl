@@ -10,6 +10,7 @@ import pytest
 
 from app.models.odds_snapshot import OddsEvent, OddsSnapshot
 from app.models.parsed_pick import ParsedPick
+from app.services.odds import historical_backfill as hb
 from app.services.odds import static_pages as sp
 from app.services.odds.compare import map_pick_choices
 from app.services.odds.historical_backfill import (
@@ -293,6 +294,273 @@ def test_be_day_rows_portent_league_path():
     (découverte à la demande)."""
     rows, _ = sp._parse_betexplorer_day(BE_HTML)
     assert rows[0].league_path == "/football/spain/laliga2/"
+
+
+# --- Detalle de partido (/match-odds/) -------------------------------
+
+# Recortes del JSON {"odds": ...} real (Atl. Madrid-Real Madrid,
+# 2026-10-05): un tbody por línea, celda data-odd + data-pos por
+# columna, fila por casa — la mejor cuota es el MAX por columna.
+BE_OU_DETAIL_HTML = """
+<tbody id="all-odds-0.50">
+<tr data-bid="1"><td>n</td>
+<td class="table-main__detail-odds" data-odd="1.02"
+data-created="13,09,2026,15,19" data-pos="1"></td>
+<td class="table-main__detail-odds" data-odd="13.50" data-pos="2"></td></tr>
+</tbody>
+<tbody id="all-odds-2.50">
+<tr data-bid="1"><td>n</td>
+<td class="table-main__detail-odds" data-odd="1.95" data-pos="1"></td>
+<td class="table-main__detail-odds" data-odd="1.90" data-pos="2"></td></tr>
+<tr data-bid="2"><td>n</td>
+<td class="table-main__detail-odds" data-odd="2.02"
+data-created="3,10,2026,16,00" data-pos="1"></td>
+<td class="table-main__detail-odds" data-odd="1.85" data-pos="2"></td></tr>
+</tbody>
+<tbody id="all-odds-3.50">
+<tr data-bid="1"><td>n</td>
+<td class="table-main__detail-odds" data-odd="3.10" data-pos="1"></td>
+<td class="table-main__detail-odds" data-odd="1.30" data-pos="2"></td></tr>
+</tbody>
+"""
+
+# OJO: data-pos es el CÓDIGO del outcome, no el ordinal — "10"=1X,
+# "12"=12, "02"=X2, "y"/"n"=sí/no (real 2026-10-05).
+BE_DC_DETAIL_HTML = """
+<tbody id="all-odds-0">
+<tr data-bid="1"><td>n</td>
+<td class="table-main__detail-odds" data-odd="1.40" data-pos="10"></td>
+<td class="table-main__detail-odds" data-odd="2.80" data-pos="12"></td>
+<td class="table-main__detail-odds" data-odd="1.60" data-pos="02"></td></tr>
+<tr data-bid="2"><td>n</td>
+<td class="table-main__detail-odds" data-odd="1.45" data-pos="10"></td>
+<td class="table-main__detail-odds" data-odd="2.75" data-pos="12"></td>
+<td class="table-main__detail-odds" data-odd="1.65" data-pos="02"></td></tr>
+</tbody>
+"""
+
+BE_BTS_DETAIL_HTML = """
+<tbody id="all-odds-0">
+<tr data-bid="1"><td>n</td>
+<td class="table-main__detail-odds" data-odd="1.49" data-pos="y"></td>
+<td class="table-main__detail-odds" data-odd="2.64" data-pos="n"></td></tr>
+</tbody>
+"""
+
+
+def test_be_market_choices_ou_lineas_exactas():
+    """Cada línea O/U da su par Over/Under con la MEJOR cuota entre
+    casas y la línea en choice_group — nada de vecinas."""
+    choices = sp.be_market_choices(BE_OU_DETAIL_HTML, "ou")
+    got = {(c.choice_name, c.choice_group): c.points[0].cuota for c in choices}
+    assert got == {
+        ("Over", "0.5"): 1.02,
+        ("Under", "0.5"): 13.50,
+        ("Over", "2.5"): 2.02,  # mejor entre 1.95 y 2.02
+        ("Under", "2.5"): 1.90,
+        ("Over", "3.5"): 3.10,
+        ("Under", "3.5"): 1.30,
+    }
+    assert all(c.market_name == "Match goals" for c in choices)
+    # El timestamp del punto es el data-created de la celda ganadora.
+    over25 = next(
+        c for c in choices if c.choice_name == "Over" and c.choice_group == "2.5"
+    )
+    assert over25.points[0].captured_at == datetime(2026, 10, 3, 16, 0)
+
+
+def test_be_market_choices_doble_oportunidad():
+    choices = sp.be_market_choices(BE_DC_DETAIL_HTML, "dc")
+    got = {c.choice_name: c.points[0].cuota for c in choices}
+    assert got == {"1X": 1.45, "12": 2.80, "X2": 1.65}
+    assert all(
+        c.market_name == "Double chance" and c.choice_group is None for c in choices
+    )
+
+
+def test_be_market_choices_btts():
+    choices = sp.be_market_choices(BE_BTS_DETAIL_HTML, "bts")
+    got = {c.choice_name: c.points[0].cuota for c in choices}
+    assert got == {"Yes": 1.49, "No": 2.64}
+    assert all(c.market_name == "Both teams to score" for c in choices)
+
+
+def test_be_pick_bettype_routing():
+    assert sp.be_pick_bettype("over/under goles", "más de 2.5") == "ou"
+    assert sp.be_pick_bettype("goles", "más de 3.5 goles") == "ou"
+    assert sp.be_pick_bettype("doble oportunidad", "Granada gana o empata") == "dc"
+    assert sp.be_pick_bettype("ambos marcan", "sí") == "bts"
+    assert sp.be_pick_bettype("resultado", "no anotan ambos") == "bts"
+    assert sp.be_pick_bettype("hándicap asiático", "Betis -1.5") == "ah"
+    assert sp.be_pick_bettype("empate no válido", "Betis") == "ha"
+    # Mercados que BE no publica o que ya da el listado -> None (sin fetch).
+    assert sp.be_pick_bettype("córners", "más de 9.5 córners") is None
+    assert sp.be_pick_bettype("ganador", "Malaga gana") is None
+
+
+@pytest.mark.asyncio
+async def test_be_choices_detalle_lazy_compartido(monkeypatch):
+    """Dos picks del mismo partido (uno O/U, uno ganador): una sola
+    descarga del bettype 'ou', reutilizada, junto al 1X2 del listado."""
+    src = _BetExplorerSource()
+    fixture = sp.StaticMatch(
+        home_name="Malaga",
+        away_name="Deportivo La Coruna",
+        start=datetime(2026, 10, 3, 19, 30),
+        ext_id="betexplorer:hGycdKve",
+        tournament="",
+        odds1=2.10,
+        oddsX=3.30,
+        odds2=2.25,
+    )
+    calls = []
+
+    async def fake_market(http, code, bettype):
+        calls.append((code, bettype))
+        return BE_OU_DETAIL_HTML if bettype == "ou" else ""
+
+    monkeypatch.setattr(sp, "fetch_betexplorer_market", fake_market)
+    picks = [
+        ParsedPick(
+            id=11, mercado="over/under goles", seleccion="más de 2.5 goles", linea=2.5
+        ),
+        ParsedPick(id=12, mercado="ganador", seleccion="Malaga gana"),
+        ParsedPick(
+            id=13, mercado="over/under goles", seleccion="menos de 3.5", linea=3.5
+        ),
+    ]
+    status, choices = await src.choices(None, fixture, "futbol", picks)
+    assert status == "ok"
+    assert calls == [("hGycdKve", "ou")]
+    keys = {(c.market_name, c.choice_name, c.choice_group) for c in choices}
+    assert ("Full time", "1", None) in keys
+    assert ("Match goals", "Over", "2.5") in keys
+    assert ("Match goals", "Under", "3.5") in keys
+
+
+@pytest.mark.asyncio
+async def test_be_choices_sin_detalle_para_1x2(monkeypatch):
+    """Pick de ganador con listado 1X2 disponible: cero llamadas al
+    endpoint de detalle."""
+    src = _BetExplorerSource()
+    fixture = sp.StaticMatch(
+        home_name="A",
+        away_name="B",
+        start=datetime(2026, 10, 3),
+        ext_id="betexplorer:x9",
+        tournament="",
+        odds1=2.1,
+        oddsX=3.3,
+        odds2=2.25,
+    )
+    called = []
+
+    async def fake_market(http, code, bettype):
+        called.append(bettype)
+        return ""
+
+    monkeypatch.setattr(sp, "fetch_betexplorer_market", fake_market)
+    pick = ParsedPick(id=14, mercado="ganador", seleccion="A gana")
+    status, choices = await src.choices(None, fixture, "futbol", [pick])
+    assert status == "ok"
+    assert called == []
+    assert {c.choice_name for c in choices} == {"1", "X", "2"}
+
+
+@pytest.mark.asyncio
+async def test_be_choices_detalle_fallo_es_error_no_miss(monkeypatch):
+    """Fallo transitorio del endpoint -> status 'error' (sin marcar
+    hist, reintento próxima pasada), no 'miss' permanente."""
+    src = _BetExplorerSource()
+    fixture = sp.StaticMatch(
+        home_name="A",
+        away_name="B",
+        start=datetime(2026, 10, 3),
+        ext_id="betexplorer:x9",
+        tournament="",
+        odds1=None,
+        oddsX=None,
+        odds2=None,
+    )
+
+    async def fake_market(http, code, bettype):
+        return None  # timeout/5xx transitorio
+
+    monkeypatch.setattr(sp, "fetch_betexplorer_market", fake_market)
+    pick = ParsedPick(
+        id=15, mercado="over/under goles", seleccion="más de 2.5", linea=2.5
+    )
+    status, choices = await src.choices(None, fixture, "futbol", [pick])
+    assert status == "error"
+    assert choices == []
+
+
+@pytest.mark.asyncio
+async def test_fuente_be_detalle_resuelve_ou_con_atribucion(session, monkeypatch):
+    """E2E: dos picks del mismo fixture — la fila O/U se atribuye al
+    pick O/U y la de Full time al pick ganador (bug histórico del
+    trigger_pick)."""
+    src = _BetExplorerSource()
+    row = sp.StaticMatch(
+        home_name="Malaga",
+        away_name="Deportivo La Coruna",
+        start=datetime(2026, 10, 3, 19, 30),
+        ext_id="betexplorer:hGycdKve",
+        tournament="",
+        odds1=2.10,
+        oddsX=3.30,
+        odds2=2.25,
+    )
+    monkeypatch.setattr(src, "_days", {date(2026, 10, d): [row] for d in (2, 3, 4)})
+
+    async def fake_market(http, code, bettype):
+        return BE_OU_DETAIL_HTML if bettype == "ou" else ""
+
+    monkeypatch.setattr(sp, "fetch_betexplorer_market", fake_market)
+    # apply=True toca provider_state (marks): se neutraliza para que
+    # el test no escriba el archivo real.
+    monkeypatch.setattr(hb, "is_missed", lambda key: False)
+    monkeypatch.setattr(hb, "mark_missed", lambda key: None)
+    monkeypatch.setattr(hb, "clear_missed", lambda key: None)
+    pick_ou = ParsedPick(
+        id=21,
+        raw_message_id=1,
+        es_apuesta=True,
+        deporte="fútbol",
+        evento="Malaga - Deportivo",
+        mercado="over/under goles",
+        seleccion="más de 2.5 goles",
+        linea=2.5,
+        cuota=1.90,
+        fecha_evento=datetime(2026, 10, 3),
+    )
+    pick_w = ParsedPick(
+        id=22,
+        raw_message_id=1,
+        es_apuesta=True,
+        deporte="fútbol",
+        evento="Malaga - Deportivo",
+        mercado="ganador",
+        seleccion="Malaga gana",
+        cuota=2.0,
+        fecha_evento=datetime(2026, 10, 3),
+    )
+    report = BackfillReport()
+    await _run_source(src, [pick_ou, pick_w], set(), set(), session, None, True, report)
+
+    assert report.mapeados == 2
+    from sqlmodel import select
+
+    result = await session.exec(
+        select(OddsSnapshot).where(OddsSnapshot.event_ext_id == "betexplorer:hGycdKve")
+    )
+    written = result.all()
+    by_pick = {
+        (s.parsed_pick_id, s.market_name, s.choice_name, s.choice_group)
+        for s in written
+    }
+    assert (21, "Match goals", "Over", "2.5") in by_pick
+    assert (22, "Full time", "1", None) in by_pick
 
 
 def test_be_liga_parse_temporada():

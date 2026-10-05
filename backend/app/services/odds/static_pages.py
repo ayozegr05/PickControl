@@ -18,6 +18,10 @@ página ya trae la cuota de cierre embebida en la fila del partido:
     entera con `data-odd` 1X2 en cada fila — la vía histórica.
     Requiere el mapa de ligas `_BE_LEAGUES` (se extiende al aparecer
     ligas nuevas, mismo criterio que `_LEAGUE_PAGES` de football24h).
+  * `/match-odds/{code}/1/{bettype}/odds/`: endpoint JSON interno del
+    detalle de partido — escalera O/U completa, doble oportunidad,
+    BTTS, hándicap asiático y DNB con cuota de cierre por celda
+    (`data-odd`), sin render JS (sección al final del módulo).
 
 Las páginas son grandes (~0.5-1.7 MB) pero una descarga cubre TODOS
 los picks del día — sin cuota, sin rate-limit real (cortesía: un
@@ -591,6 +595,189 @@ def be_choices(row: StaticMatch) -> list[HistoricalChoice]:
     return choices
 
 
+# ---------------------------------------------------------------------------
+# BetExplorer: mercados del detalle de partido (endpoint JSON interno)
+# ---------------------------------------------------------------------------
+
+# La página de detalle es un shell SPA vacío, pero el AJAX que la
+# rellena es público y estático:
+#   GET /match-odds/{event_code}/1/{bettype}/odds/?lang=en
+# devuelve {"odds": "<html>"} con un tbody por línea
+# (`id="all-odds-{línea}"` — "0" en mercados sin línea), una fila por
+# casa de apuestas y una celda `data-odd` (cierre) por columna
+# (`data-pos` = índice 1..N; `data-created` = timestamp de la cuota).
+# Descubierto en /res/js/all.min.js 2026-10-05; sport_id 1 = fútbol.
+# Sin FlareSolverr: fetch directo con X-Requested-With.
+_BE_MARKET_URL = (
+    "https://www.betexplorer.com/match-odds/{code}/1/{bettype}/odds/?lang=en"
+)
+
+# bettype -> (market_name, {data-pos -> etiqueta}, tiene líneas).
+# OJO: `data-pos` es el CÓDIGO del outcome, no el ordinal — "0"=X,
+# "10"=1X, "02"=X2, "y"/"n"=sí/no (verificado contra el HTML real
+# 2026-10-05). "__HOME__"/"__AWAY__" se sustituyen por los nombres del
+# fixture — el mapeador de hándicap casa por nombre + |línea|.
+_BE_MARKET_SPECS: dict[str, tuple[str, dict[str, str], bool]] = {
+    "1x2": ("Full time", {"1": "1", "0": "X", "2": "2"}, False),
+    "ou": ("Match goals", {"1": "Over", "2": "Under"}, True),
+    "ah": ("Asian handicap", {"1": "__HOME__", "2": "__AWAY__"}, True),
+    "ha": ("Draw no bet", {"1": "1", "2": "2"}, False),
+    "dc": ("Double chance", {"10": "1X", "12": "12", "02": "X2"}, False),
+    "bts": ("Both teams to score", {"y": "Yes", "n": "No"}, False),
+}
+
+_BE_DETAIL_TBODY = re.compile(r'<tbody id="all-odds-([^"]*)">(.*?)</tbody>', re.S)
+_BE_DETAIL_TD = re.compile(r'<td\b[^>]*\bdata-odd="([0-9]+(?:\.[0-9]+)?)"[^>]*>', re.S)
+_BE_DETAIL_POS = re.compile(r'data-pos="([a-z0-9]+)"')
+_BE_DETAIL_CREATED = re.compile(
+    r'data-created="(\d{1,2}),(\d{1,2}),(\d{4}),(\d{1,2}),(\d{1,2})"'
+)
+
+# Pick -> bettype del endpoint. "" = mercado que BE no publica (córners,
+# tarjetas): se reconoce para NO pedir el detalle — sería una descarga
+# para nada, el mapeador no puede casar "Corners 2-Way" con "Match goals".
+_BE_PICK_RULES = (
+    (re.compile(r"c[oó]rner|esquina|tarjeta|card|booking", re.IGNORECASE), ""),
+    (re.compile(r"over|under|m[áa]s\s+de|menos\s+de", re.IGNORECASE), "ou"),
+    (re.compile(r"doble\s+oportunidad|double\s+chance", re.IGNORECASE), "dc"),
+    (
+        re.compile(
+            r"ambos\s+marcan|no\s+(?:anotan|marcan)\s+ambos|btts", re.IGNORECASE
+        ),
+        "bts",
+    ),
+    (
+        re.compile(
+            r"empate\s+no\s+v[aá]lido|draw\s+no\s+bet|" r"resultado\s+sin\s+empate",
+            re.IGNORECASE,
+        ),
+        "ha",
+    ),
+    (re.compile(r"h[aá]ndicap", re.IGNORECASE), "ah"),
+)
+
+
+def be_pick_bettype(mercado: object, seleccion: object) -> Optional[str]:
+    """bettype del endpoint de detalle que puede cubrir el pick.
+
+    None para mercados 1X2 (ya los da el listado) y para mercados que
+    BetExplorer no publica (córners, tarjetas, props) — en esos casos
+    pedir el detalle sería una descarga desperdiciada."""
+    text = f"{mercado or ''} {seleccion or ''}"
+    for pattern, bettype in _BE_PICK_RULES:
+        if pattern.search(text):
+            return bettype or None
+    return None
+
+
+async def fetch_betexplorer_market(
+    http: httpx.AsyncClient, code: str, bettype: str
+) -> Optional[str]:
+    """HTML de la tabla de un mercado del detalle, o None.
+
+    None cubre tanto el error de red como un mercado no servido: el
+    caller lo trata como transitorio (status "error", reintento en la
+    próxima pasada) — nunca marca `hist` permanentemente."""
+    url = _BE_MARKET_URL.format(code=code, bettype=bettype)
+    try:
+        resp = await http.get(
+            url,
+            headers={**_HEADERS, "X-Requested-With": "XMLHttpRequest"},
+            timeout=_TIMEOUT,
+        )
+    except httpx.HTTPError as exc:
+        logger.info(
+            "[STATIC_ODDS] betexplorer mercado %s/%s falló: %r",
+            code,
+            bettype,
+            exc,
+        )
+        return None
+    if resp.status_code != 200:
+        return None
+    try:
+        html = resp.json().get("odds")
+    except ValueError:
+        return None
+    return html if isinstance(html, str) and html else None
+
+
+def _be_detail_created(cell: str) -> Optional[datetime]:
+    """Timestamp `data-created="d,m,YYYY,H,M"` de la celda de cuota."""
+    m = _BE_DETAIL_CREATED.search(cell)
+    if not m:
+        return None
+    d, mo, y, h, mi = (int(g) for g in m.groups())
+    try:
+        return datetime(y, mo, d, h, mi)
+    except ValueError:
+        return None
+
+
+def be_market_choices(
+    html: str,
+    bettype: str,
+    home: str = "",
+    away: str = "",
+    fallback: Optional[datetime] = None,
+) -> list[HistoricalChoice]:
+    """Mejor cuota de cierre por (línea, columna) de la tabla del
+    endpoint /match-odds/.
+
+    - Un tbody por línea ("all-odds-2.50"); "all-odds-0" en mercados
+      sin línea (DC, BTS, 1X2, DNB).
+    - Por columna (`data-pos`) se queda el `data-odd` MÁXIMO entre las
+      casas — la misma convención que la celda `odds_best` de la web y
+      que el data-odd del listado.
+    - AH: choice_name "(-{línea}) {local}" / "(+{línea}) {visitante}";
+      el mapeador compara |línea|."""
+    spec = _BE_MARKET_SPECS.get(bettype)
+    if spec is None:
+        return []
+    market, labels, lined = spec
+    choices: list[HistoricalChoice] = []
+    for tm in _BE_DETAIL_TBODY.finditer(html):
+        group: Optional[str] = None
+        if lined:
+            try:
+                group = f"{abs(float(tm.group(1))):g}"
+            except ValueError:
+                continue
+        best: dict[str, tuple[float, Optional[datetime]]] = {}
+        for cell in _BE_DETAIL_TD.finditer(tm.group(2)):
+            tag = cell.group(0)
+            pos_m = _BE_DETAIL_POS.search(tag)
+            if not pos_m or pos_m.group(1) not in labels:
+                continue
+            odd = float(cell.group(1))
+            pos = pos_m.group(1)
+            prev = best.get(pos)
+            if prev is None or odd > prev[0]:
+                best[pos] = (odd, _be_detail_created(tag))
+        for pos in sorted(best):
+            odd, created = best[pos]
+            label = labels[pos]
+            if label == "__HOME__":
+                label = f"(-{group}) {home}"
+            elif label == "__AWAY__":
+                label = f"(+{group}) {away}"
+            choices.append(
+                HistoricalChoice(
+                    market_name=market,
+                    choice_name=label,
+                    choice_group=group,
+                    points=[
+                        PricePoint(
+                            captured_at=created or fallback or utc_now(),
+                            cuota=odd,
+                            suspended=False,
+                        )
+                    ],
+                )
+            )
+    return choices
+
+
 __all__ = [
     "NAME_TE",
     "NAME_BE",
@@ -599,6 +786,9 @@ __all__ = [
     "fetch_tennisexplorer_upcoming",
     "fetch_betexplorer_day",
     "fetch_betexplorer_league",
+    "fetch_betexplorer_market",
+    "be_market_choices",
+    "be_pick_bettype",
     "te_match",
     "be_match",
     "te_choices",
