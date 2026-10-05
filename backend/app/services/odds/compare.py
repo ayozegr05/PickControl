@@ -353,6 +353,21 @@ def map_pick_choices(
             if matched is not None:
                 return matched
 
+    # "gana 2-0" / "3-1" = marcador de sets (el extractor lo etiqueta
+    # a veces como mercado "ganador", pero el precio real es el de
+    # marcador, ~1.5-2.0, no el de la victoria seca ~1.15). Si el
+    # proveedor no publica mercado de marcador -> miss honesto, no
+    # comparar contra el Full time (bug real: picks 662/4007/4551).
+    score_m = re.search(r"\b(\d)\s*-\s*(\d)\b", pick.seleccion or "")
+    if score_m:
+        target = f"{score_m.group(1)}-{score_m.group(2)}"
+        for row in _rows_of_market(
+            snapshots, ("Correct score", "Set score", "Set betting")
+        ):
+            if target in (row.choice_name or "").replace(" ", ""):
+                return _group_rows(snapshots, row)
+        return None
+
     # Por defecto: mercado ganador ("Full time" en ambos deportes).
     # Un pick de descanso nunca se compara con la cuota del FT.
     if team and not ht_pick:

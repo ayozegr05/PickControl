@@ -205,6 +205,31 @@ def test_map_doble_oportunidad_sin_mercado_dc():
     assert map_pick_choices(pick, _event(), snaps) is None
 
 
+def test_map_gana_marcador_no_es_ganador():
+    """ "gana 2-0" = marcador de sets (~1.5-2.0), NO la victoria
+    seca (~1.15): sin mercado de marcador en el proveedor -> None.
+    Casos reales: picks 662/4007/4551 casados mal a Full time."""
+    snaps = [
+        _snap("Full time", "1", 1.16),
+        _snap("Full time", "2", 4.5),
+    ]
+    pick = _pick("Mannarino gana 2-0", mercado="ganador")
+    assert map_pick_choices(pick, _event(), snaps) is None
+
+
+def test_map_gana_marcador_con_mercado():
+    """Si el proveedor publica 'Correct score', casa la puntuación."""
+    snaps = [
+        _snap("Full time", "1", 1.16),
+        _snap("Correct score", "2-0", 1.55),
+        _snap("Correct score", "2-1", 3.1),
+    ]
+    pick = _pick("Betis gana 2-0", mercado="ganador")
+    m = map_pick_choices(pick, _event(), snaps)
+    assert m is not None
+    assert (m.market_name, m.choice_name) == ("Correct score", "2-0")
+
+
 def test_map_empate_no_valido():
     pick = _pick("Betis", mercado="resultado sin empate")
     m = map_pick_choices(pick, _event(), _futbol_snaps())
