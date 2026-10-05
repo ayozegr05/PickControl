@@ -567,16 +567,66 @@ class _StaticListingSource:
 class _TennisExplorerSource(_StaticListingSource):
     """tennisexplorer.com: listado diario estático con cuotas de
     ganador — cubre ATP/WTA/**ITF** (el hueco que ninguna API ni
-    bet365 toca). Fetch directo, sin key ni cuota."""
+    bet365 toca). Fetch directo, sin key ni cuota.
+
+    El detalle de partido (/match-detail/?id= — el `ext_id` ya lo
+    guarda el listado) es también estático y trae TODOS los mercados
+    en una página: O/U de sets/juegos, hándicap de juegos/sets y
+    marcador exacto de sets ("gana 2-0"). Se descarga lazy, solo si
+    algún pick del partido pide algo más que el ganador — una llamada
+    compartida por todos sus picks."""
 
     name = static_pages.NAME_TE
     fetcher = staticmethod(static_pages.fetch_tennisexplorer_day)
     matcher = staticmethod(static_pages.te_match)
     choicer = staticmethod(static_pages.te_choices)
 
+    def __init__(self) -> None:
+        super().__init__()
+        # ext_id -> opciones del detalle. None = fetch falló
+        # (transitorio: status "error", reintento próxima pasada).
+        self._details: dict[str, Optional[list[HistoricalChoice]]] = {}
+
     @property
     def sport_ids(self) -> dict[str, int]:
         return {"tenis": 0}
+
+    async def _detail(
+        self, http, fixture: static_pages.StaticMatch
+    ) -> Optional[list[HistoricalChoice]]:
+        if fixture.ext_id not in self._details:
+            code = fixture.ext_id.split(":", 1)[-1]
+            html = await static_pages.fetch_tennisexplorer_detail(http, code)
+            self._details[fixture.ext_id] = (
+                None
+                if html is None
+                else static_pages.te_market_choices(
+                    html, fixture.home_name, fixture.away_name, fixture.start
+                )
+            )
+        return self._details[fixture.ext_id]
+
+    async def choices(self, http, fixture: static_pages.StaticMatch, sport, picks):
+        choices = static_pages.te_choices(fixture)
+        need = any(
+            static_pages.te_pick_needs_detail(pick.mercado, pick.seleccion)
+            for pick in picks
+        )
+        if need or not choices:
+            detail = await self._detail(http, fixture)
+            if detail is None:
+                # Transitorio: si no hay nada del listado no quemamos
+                # el fixture con un miss permanente.
+                return ("error", []) if not choices else ("ok", choices)
+            # El "Full time" de la pestaña duplica el del listado:
+            # se descarta si ya venía (mismo key).
+            have = {(c.market_name, c.choice_name, c.choice_group) for c in choices}
+            choices += [
+                c
+                for c in detail
+                if (c.market_name, c.choice_name, c.choice_group) not in have
+            ]
+        return ("ok", choices) if choices else ("miss", [])
 
 
 class _BetExplorerSource(_StaticListingSource):

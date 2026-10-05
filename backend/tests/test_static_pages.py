@@ -563,6 +563,143 @@ async def test_fuente_be_detalle_resuelve_ou_con_atribucion(session, monkeypatch
     assert (22, "Full time", "1", None) in by_pick
 
 
+# --- Detalle TennisExplorer (/match-detail/) -------------------------
+
+# Recortes del detalle real (Djokovic-Zverev, 2026-10-04): pestañas
+# oddsMenu-N-data, secciones tr.odds-type, filas por casa con la
+# cuota de cierre en td.k1/td.k2 > div.odds-in.
+TE_DETAIL_HTML = """
+<div id="oddsMenu-1-data"><table><tbody>
+<tr class="head"><td class="tl"></td><td class="k1">A</td><td class="k2">B</td></tr>
+<tr class="one"><td class="first tl"><a>x</a></td>
+<td class="k1"><div class="odds-in oup">3.10<div class="odds-change-div"></div></div></td>
+<td class="k2"><div class="odds-in odown">1.40</div></td></tr>
+<tr class="two"><td class="first tl"><a>y</a></td>
+<td class="k1"><div class="odds-in">3.20</div></td>
+<td class="k2"><div class="odds-in">1.36</div></td></tr>
+</tbody></table></div>
+<div id="oddsMenu-2-data" class="none"><table class="odds-ou"><tbody>
+<tr class="odds-type"><td colspan="4">Over/Under 2.5 sets</td></tr>
+<tr class="odds-head"><td class="tl"></td><td class="value">Total</td>
+<td class="k1">Over</td><td class="k2">Under</td></tr>
+<tr class="one"><td class="first tl"><a>x</a></td><td class="value">2.5</td>
+<td class="k1"><div class="odds-in">2.50</div></td>
+<td class="k2"><div class="odds-in">1.48</div></td></tr>
+<tr class="odds-type"><td colspan="4">Over/Under 22.5 games</td></tr>
+<tr class="one"><td class="first tl"><a>x</a></td><td class="value">22.5</td>
+<td class="k1"><div class="odds-in">1.95</div></td>
+<td class="k2"><div class="odds-in">1.80</div></td></tr>
+<tr class="two"><td class="first tl"><a>y</a></td><td class="value">22.5</td>
+<td class="k1"><div class="odds-in">1.90</div></td>
+<td class="k2"><div class="odds-in">1.87</div></td></tr>
+</tbody></table></div>
+<div id="oddsMenu-3-data" class="none"><table><tbody>
+<tr class="odds-type"><td colspan="4">Asian Handicap -1.5 sets</td></tr>
+<tr class="one"><td class="first tl"><a>x</a></td><td class="value">-1.5</td>
+<td class="k1"><div class="odds-in">2.10</div></td>
+<td class="k2"><div class="odds-in">1.70</div></td></tr>
+<tr class="odds-type"><td colspan="4">Asian Handicap -4.5 games</td></tr>
+<tr class="one"><td class="first tl"><a>x</a></td><td class="value">-4.5</td>
+<td class="k1"><div class="odds-in">1.85</div></td>
+<td class="k2"><div class="odds-in">1.95</div></td></tr>
+</tbody></table></div>
+<div id="oddsMenu-4-data" class="none"><table class="odds-cs"><tbody>
+<tr class="odds-type"><td colspan="3">Correct Score 2:0 </td></tr>
+<tr class="one"><td class="first tl"><a>x</a></td><td class="value">2:0</td>
+<td class="k1"><div class="odds-in">5.50</div></td></tr>
+<tr class="two"><td class="first tl"><a>y</a></td><td class="value">2:0</td>
+<td class="k1"><div class="odds-in">5.75</div></td></tr>
+</tbody></table></div>
+"""
+
+
+def test_te_detail_parse_mercados():
+    ch = sp.te_market_choices(TE_DETAIL_HTML, "Jugador A", "Jugador B")
+    got = {
+        (c.market_name, c.choice_name, c.choice_group): c.points[0].cuota for c in ch
+    }
+    # Full time: mejor cuota entre casas (3.20 > 3.10).
+    assert got[("Full time", "1", None)] == 3.20
+    assert got[("Full time", "2", None)] == 1.40
+    # O/U sets y juegos en mercados distintos con su línea exacta.
+    assert got[("Total sets", "Over", "2.5")] == 2.50
+    assert got[("Total games won", "Over", "22.5")] == 1.95
+    assert got[("Total games won", "Under", "22.5")] == 1.87
+    # Hándicap con signo por lado.
+    assert got[("Set handicap", "(-1.5) Jugador A", "1.5")] == 2.10
+    assert got[("Set handicap", "(+1.5) Jugador B", "1.5")] == 1.70
+    assert got[("Game handicap", "(-4.5) Jugador A", "4.5")] == 1.85
+    # Marcador de sets: la opción es el marcador normalizado.
+    assert got[("Correct score", "2-0", None)] == 5.75
+
+
+def test_te_pick_needs_detail():
+    assert sp.te_pick_needs_detail("over/under juegos", "más de 22.5")
+    assert sp.te_pick_needs_detail("ganador", "Fils gana 2-0")
+    assert sp.te_pick_needs_detail("hándicap juegos", "Borges +3.5")
+    assert not sp.te_pick_needs_detail("ganador", "Djokovic gana")
+
+
+@pytest.mark.asyncio
+async def test_fuente_te_detalle_lazy_y_fallo(monkeypatch):
+    """El detalle solo se pide cuando un pick lo necesita, se cachea
+    por partido, y un fallo transitorio devuelve 'error' (no miss)."""
+    src = _TennisExplorerSource()
+    fixture = sp.StaticMatch(
+        home_name="Djokovic N.",
+        away_name="Zverev A.",
+        start=datetime(2026, 10, 4, 17, 0),
+        ext_id="tennisexplorer:3338963",
+        tournament="",
+        odds1=1.40,
+        oddsX=None,
+        odds2=3.10,
+    )
+    calls = []
+
+    async def fake_detail(http, code):
+        calls.append(code)
+        return TE_DETAIL_HTML
+
+    monkeypatch.setattr(sp, "fetch_tennisexplorer_detail", fake_detail)
+    p_ou = ParsedPick(
+        id=31, mercado="over/under juegos", seleccion="más de 22.5", linea=22.5
+    )
+    p_w = ParsedPick(id=32, mercado="ganador", seleccion="Djokovic gana")
+    status, choices = await src.choices(None, fixture, "tenis", [p_ou, p_w])
+    assert status == "ok"
+    assert calls == ["3338963"]
+    keys = {(c.market_name, c.choice_name, c.choice_group) for c in choices}
+    assert ("Total games won", "Over", "22.5") in keys
+    assert ("Full time", "1", None) in keys
+    # Segunda llamada: cache, sin refetch.
+    await src.choices(None, fixture, "tenis", [p_ou])
+    assert calls == ["3338963"]
+
+    # Pick ganador puro con listado disponible: cero fetch.
+    status, _ = await src.choices(None, fixture, "tenis", [p_w])
+    assert calls == ["3338963"]
+
+    # Fallo del detalle sin cuota de listado -> "error", no "miss".
+    fixture2 = sp.StaticMatch(
+        home_name="A",
+        away_name="B",
+        start=datetime(2026, 10, 4),
+        ext_id="tennisexplorer:9",
+        tournament="",
+        odds1=None,
+        oddsX=None,
+        odds2=None,
+    )
+
+    async def fail_detail(http, code):
+        return None
+
+    monkeypatch.setattr(sp, "fetch_tennisexplorer_detail", fail_detail)
+    status, _ = await src.choices(None, fixture2, "tenis", [p_ou])
+    assert status == "error"
+
+
 def test_be_liga_parse_temporada():
     """La página /results/ de una liga trae la temporada entera con
     `data-odd` y fecha "DD.MM." (año inferido del calendario)."""

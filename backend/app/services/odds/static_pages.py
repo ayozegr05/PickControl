@@ -383,6 +383,150 @@ def te_choices(row: StaticMatch) -> list[HistoricalChoice]:
     return choices
 
 
+# --- Detalle de partido (/match-detail/?id=) --------------------------
+# La página de detalle es ESTÁTICA (594 KB, sin JS): la sección
+# "Betting odds" trae 4 pestañas embebidas — Home/Away, Over/Under
+# (sets + escalera de juegos), Asian Handicap (sets/juegos) y Correct
+# Score. Una sola descarga cubre todos los mercados del partido; cada
+# pestaña son secciones `tr.odds-type` con una fila por casa y la
+# cuota de cierre en `td.k1`/`td.k2` (`div.odds-in` primer número —
+# el histórico de apertura queda en el tooltip `odds-change-div`).
+_TE_DETAIL_URL = "https://www.tennisexplorer.com/match-detail/?id={code}"
+_TE_DETAIL_TAB = re.compile(
+    r'id="oddsMenu-(\d)-data"[^>]*>(.*?)(?=id="oddsMenu-\d-data|$)', re.S
+)
+_TE_SECTION = re.compile(r'<tr class="odds-type">\s*<td[^>]*>([^<]+)</td>')
+_TE_DATA_ROW = re.compile(r'<tr class="(?:one|two)">(.*?)</tr>', re.S)
+_TE_VALUE = re.compile(r'<td class="value">([^<]+)</td>')
+_TE_K = re.compile(
+    r'<td class="k([12])">.*?<div class="odds-in[^"]*">' r"([0-9]+(?:\.[0-9]+)?)",
+    re.S,
+)
+_TE_OU_TITLE = re.compile(r"Over/Under\s+([\d.]+)\s+(set|sets|games)", re.I)
+_TE_AH_TITLE = re.compile(r"Asian Handicap\s+(-?[\d.]+)\s+(set|sets|games)", re.I)
+_TE_CS_TITLE = re.compile(r"Correct Score\s+(\d+):(\d+)", re.I)
+
+# Pick -> ¿el detalle puede ayudar? Ganador puro lo da el listado;
+# O/U, hándicap y marcador de sets solo existen en la pestaña.
+_TE_DETAIL_PICK = re.compile(
+    r"over|under|m[áa]s\s+de|menos\s+de|juego|h[aá]ndicap|\b\d\s*-\s*\d\b",
+    re.IGNORECASE,
+)
+
+
+def te_pick_needs_detail(mercado: object, seleccion: object) -> bool:
+    """True si el pick pide un mercado que solo vive en el detalle
+    (O/U juegos/sets, hándicap, marcador de sets)."""
+    return bool(_TE_DETAIL_PICK.search(f"{mercado or ''} {seleccion or ''}"))
+
+
+async def fetch_tennisexplorer_detail(
+    http: httpx.AsyncClient, code: str
+) -> Optional[str]:
+    """HTML del detalle de partido, o None (transitorio: el caller lo
+    trata como 'error', no como miss)."""
+    url = _TE_DETAIL_URL.format(code=code)
+    try:
+        resp = await http.get(url, headers=_HEADERS, timeout=_TIMEOUT)
+    except httpx.HTTPError as exc:
+        logger.info("[STATIC_ODDS] tennisexplorer detalle %s: %r", code, exc)
+        return None
+    if resp.status_code != 200:
+        return None
+    return resp.text or None
+
+
+def _te_section_choices(
+    title: str, home: str, away: str
+) -> list[tuple[str, str, Optional[str], str]]:
+    """(market, choice_name, group, k-col) por sección `odds-type`."""
+    m = _TE_OU_TITLE.search(title)
+    if m:
+        market = "Total sets" if "set" in m.group(2).lower() else "Total games won"
+        return [
+            (market, "Over", f"{float(m.group(1)):g}", "1"),
+            (market, "Under", f"{float(m.group(1)):g}", "2"),
+        ]
+    m = _TE_AH_TITLE.search(title)
+    if m:
+        line = float(m.group(1))
+        market = "Set handicap" if "set" in m.group(2).lower() else "Game handicap"
+        group = f"{abs(line):g}"
+        return [
+            (market, f"({line:+g}) {home}", group, "1"),
+            (market, f"({-line:+g}) {away}", group, "2"),
+        ]
+    m = _TE_CS_TITLE.search(title)
+    if m:
+        return [("Correct score", f"{m.group(1)}-{m.group(2)}", None, "1")]
+    return []
+
+
+def te_market_choices(
+    html: str,
+    home: str = "",
+    away: str = "",
+    fallback: Optional[datetime] = None,
+) -> list[HistoricalChoice]:
+    """Mejor cuota de cierre por opción del detalle de TennisExplorer.
+
+    Cada fila es una casa; se queda el MÁX por columna — la misma
+    convención que el listado y que `be_market_choices`. La pestaña
+    Home/Away también emite "Full time" (respaldo cuando el listado
+    no traía cuota)."""
+    choices: list[HistoricalChoice] = []
+    ts = fallback or utc_now()
+    for tm in _TE_DETAIL_TAB.finditer(html):
+        tab, seg = tm.group(1), tm.group(2)
+        if tab == "1":
+            # Home/Away: una sección implícita, k1=local k2=visitante.
+            sections = [
+                (
+                    "",
+                    seg,
+                    [("Full time", "1", None, "1"), ("Full time", "2", None, "2")],
+                )
+            ]
+        elif tab in ("2", "3", "4"):
+            # split conserva los títulos: [pre, t1, cuerpo1, t2, cuerpo2...]
+            parts = _TE_SECTION.split(seg)
+            sections = [
+                (parts[i], parts[i + 1], None) for i in range(1, len(parts) - 1, 2)
+            ]
+        else:
+            continue
+        for title, body, preset in sections:
+            specs = (
+                preset if preset is not None else _te_section_choices(title, home, away)
+            )
+            for market, name, group, kcol in specs:
+                odd = _te_best_k(body, kcol)
+                if odd is None:
+                    continue
+                choices.append(
+                    HistoricalChoice(
+                        market_name=market,
+                        choice_name=name,
+                        choice_group=group,
+                        points=[PricePoint(captured_at=ts, cuota=odd, suspended=False)],
+                    )
+                )
+    return choices
+
+
+def _te_best_k(seg: str, kcol: str) -> Optional[float]:
+    """Mejor (máxima) cuota de la columna k1/k2 entre las casas de la
+    sección."""
+    best: Optional[float] = None
+    for m in _TE_K.finditer(seg):
+        if m.group(1) != kcol:
+            continue
+        odd = float(m.group(2))
+        if best is None or odd > best:
+            best = odd
+    return best
+
+
 # ---------------------------------------------------------------------------
 # BetExplorer (fútbol)
 # ---------------------------------------------------------------------------
@@ -784,6 +928,9 @@ __all__ = [
     "StaticMatch",
     "fetch_tennisexplorer_day",
     "fetch_tennisexplorer_upcoming",
+    "fetch_tennisexplorer_detail",
+    "te_market_choices",
+    "te_pick_needs_detail",
     "fetch_betexplorer_day",
     "fetch_betexplorer_league",
     "fetch_betexplorer_market",

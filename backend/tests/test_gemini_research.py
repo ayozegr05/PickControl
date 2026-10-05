@@ -520,6 +520,40 @@ class TestFlareSolverrFallback:
         monkeypatch.setattr(get_settings(), "flaresolverr_url", None)
         assert await provider._fetch_via_flaresolverr("https://x.com") is None
 
+    async def test_circuito_abierto_tras_n_fallos(self, provider, monkeypatch):
+        """N timeouts seguidos abren el circuito: las llamadas
+        siguientes se devuelven None sin tocar FlareSolverr — el
+        goteo de la pasada no encola minutos de basura en la VM."""
+        import httpx
+
+        import app.services.results.gemini_research as gr
+
+        monkeypatch.setattr(get_settings(), "flaresolverr_url", "http://flare:8191")
+        monkeypatch.setattr(gr, "_flare_fails", 0)
+        monkeypatch.setattr(gr, "_flare_open_until", None)
+        calls = []
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, json=None):
+                calls.append(url)
+                raise httpx.ReadTimeout("boom")
+
+        monkeypatch.setattr(
+            "app.services.results.gemini_research.httpx.AsyncClient",
+            lambda **k: _Client(),
+        )
+        for _ in range(gr._FLARE_FAIL_THRESHOLD + 3):
+            assert await provider._fetch_via_flaresolverr("https://x.com") is None
+        # Solo los primeros N llegaron a FlareSolverr; el resto
+        # salió cortocircuitado.
+        assert len(calls) == gr._FLARE_FAIL_THRESHOLD
+
 
 class TestFindFixture:
     """Reconstrucción del cruce cuando el pick solo guardó el torneo."""

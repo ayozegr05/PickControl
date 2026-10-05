@@ -70,6 +70,38 @@ _MAX_VERIFIED_URLS = 3
 # timeout del POST tiene que cubrir el maxTimeout que le pedimos.
 _FLARESOLVERR_MAX_MS = 60000
 _FLARESOLVERR_TIMEOUT = 75.0
+# Circuit breaker del FlareSolverr: un solve puede tardar ~90 s de
+# CPU del único núcleo de la VM y las peticiones se ENCOLAN (cola
+# vista a 58 y subiendo — la pasada LLM inundaba el servicio con
+# búsquedas que todas expiraban). Tras N fallos seguidos se abre
+# _FLARE_OPEN y las siguientes llamadas devuelven None sin preguntar.
+_FLARE_FAIL_THRESHOLD = 3
+_FLARE_OPEN = timedelta(minutes=15)
+_flare_fails = 0
+_flare_open_until: Optional[datetime] = None
+
+
+def _flare_circuit_open() -> bool:
+    global _flare_open_until
+    if _flare_open_until is not None and _flare_open_until > utc_now():
+        return True
+    _flare_open_until = None
+    return False
+
+
+def _flare_report_fail() -> None:
+    global _flare_fails, _flare_open_until
+    _flare_fails += 1
+    if _flare_fails >= _FLARE_FAIL_THRESHOLD and not _flare_circuit_open():
+        _flare_open_until = utc_now() + _FLARE_OPEN
+        logger.warning(
+            "[GEMINI] FlareSolverr %d fallos seguidos — circuito abierto "
+            "%d min (las llamadas se saltan, no se encolan)",
+            _flare_fails,
+            int(_FLARE_OPEN.total_seconds() / 60),
+        )
+
+
 # Cooldown propio tras un 429: el free tier de Gemini limita por ritmo
 # (RPM), no por día — aparcar hasta mañana (comportamiento estándar de
 # `mark_rate_limited`) dejaría al investigador muerto por una ráfaga.
@@ -385,25 +417,29 @@ _ODDS_MARKET_NAMES = (
 # la query, DDG suele devolver directamente la pestaña del comparador
 # donde vive esa línea en vez de la portada 1X2 del partido.
 _MARKET_SEARCH_TERMS: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
+    # SIN "oddsportal": el dominio redirige a la SPA de CuotasAhora —
+    # cada consulta terminaba en un render de FlareSolverr que no
+    # resolvía nada y saturaba la cola (la fase 2 de BetExplorer ya
+    # cubre ou/dc/bts/ah por endpoint estático).
     (
         re.compile(r"c[oó]rner|corner", re.I),
-        ("oddspedia corners", "oddsportal corners", "betexplorer corners"),
+        ("oddspedia corners", "betexplorer corners"),
     ),
     (
         re.compile(r"tarjeta|card|booking", re.I),
-        ("oddspedia cards", "oddsportal cards", "betexplorer cards"),
+        ("oddspedia cards", "betexplorer cards"),
     ),
     (
         re.compile(r"h[aá]ndicap|handicap|spread", re.I),
-        ("oddsportal handicap", "betexplorer asian handicap"),
+        ("betexplorer asian handicap", "oddspedia handicap"),
     ),
     (
         re.compile(r"ambos|btts", re.I),
-        ("oddsportal btts", "oddspedia ambos marcan"),
+        ("oddspedia ambos marcan", "betexplorer btts"),
     ),
     (
         re.compile(r"gol|over|under|m[aá]s de|menos de|total", re.I),
-        ("oddsportal over under", "oddspedia goles", "betexplorer over under"),
+        ("betexplorer over under", "oddspedia goles"),
     ),
 )
 
@@ -1120,7 +1156,12 @@ class GeminiResearchProvider:
         POST /v1 {"cmd": "request.get", url} -> solution.response con la
         página ya renderizada por un Chromium que resuelve el challenge
         de Cloudflare. Solo se usa cuando el fetch directo falla: un
-        solve cuesta segundos de CPU del único núcleo de la VM."""
+        solve cuesta segundos de CPU del único núcleo de la VM. El
+        circuito `_flare_*` corta el goteo cuando el servicio va
+        saturado: N fallos seguidos -> llamadas saltadas un rato."""
+        global _flare_fails
+        if _flare_circuit_open():
+            return None
         base = getattr(get_settings(), "flaresolverr_url", None)
         if not base:
             return None
@@ -1137,13 +1178,20 @@ class GeminiResearchProvider:
             data = resp.json()
         except (httpx.HTTPError, ValueError) as exc:
             logger.info("[GEMINI] FlareSolverr %s falló: %r", url, exc)
+            _flare_report_fail()
             return None
         solution = data.get("solution") or {}
         status = solution.get("status") or 0
         if data.get("status") != "ok" or not (200 <= status < 400):
             logger.info("[GEMINI] FlareSolverr %s no resuelto (status=%s)", url, status)
+            _flare_report_fail()
             return None
-        return solution.get("response") or None
+        response = solution.get("response") or None
+        if response:
+            _flare_fails = 0
+        else:
+            _flare_report_fail()
+        return response
 
     async def _fetch_page_text(self, url: str) -> Optional[str]:
         """Descarga la página y devuelve su texto visible truncado.
