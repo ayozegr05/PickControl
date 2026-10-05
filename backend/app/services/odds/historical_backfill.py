@@ -995,6 +995,10 @@ async def backfill_breakdown(session) -> dict:
         },
         "ultima_pasada": loop_summary("odds_backfill"),
         "ultimas_pasadas": loop_history("odds_backfill"),
+        # Auditoría semanal de consistencia (odds/audit.py): picks
+        # auditados y cuántas filas guardadas sigue casando el
+        # mapeador — la red de seguridad de las comparaciones.
+        "ultima_auditoria": loop_summary("odds_audit"),
     }
 
 

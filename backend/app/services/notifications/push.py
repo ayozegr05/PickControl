@@ -267,6 +267,58 @@ async def notify_provider_rate_limited(provider_name: str) -> None:
         )
 
 
+async def notify_odds_audit_mismatch(report) -> int:
+    """Push "filas de cuotas mal mapeadas" SOLO a admins.
+
+    Disparada por la auditoría semanal de `odds/audit.py`: el mapeador
+    re-ejecutado sobre las filas guardadas casó una opción distinta a
+    la almacenada — firma de regresión en parser/extractor/mapeo que
+    hay que revisar. `report` es un AuditReport (import perezoso para
+    no acoplar push -> odds)."""
+    try:
+        if not _enabled(get_settings()):
+            return 0
+        async with AsyncSessionLocal() as session:
+            rows = list(
+                (
+                    await session.exec(
+                        select(DeviceToken)
+                        .join(User, User.id == DeviceToken.user_id)
+                        .where(User.role == UserRole.ADMIN)
+                        .where(DeviceToken.enabled == True)  # noqa: E712
+                    )
+                ).all()
+            )
+
+            def message(token: str) -> dict:
+                return {
+                    "to": token,
+                    "title": "Auditoría de cuotas: filas mal mapeadas",
+                    "body": (
+                        f"{report.mal} de {report.picks} picks con fila "
+                        f"no casan con el mapeador actual "
+                        f"({report.ok} ok, {report.sin_map} sin mapa). "
+                        "Revisar ejemplos en /system/providers."
+                    ),
+                    "data": {
+                        "type": "odds_audit_mismatch",
+                        "mal": report.mal,
+                    },
+                }
+
+            sent = await _send(session, rows, message)
+            if sent:
+                logger.info(
+                    "[PUSH] Auditoría de cuotas (%s mal) notificada a %d admins.",
+                    report.mal,
+                    sent,
+                )
+            return sent
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[PUSH] notify_odds_audit_mismatch falló: %s", exc)
+        return 0
+
+
 async def notify_scraper_broken(source_name: str, detail: str) -> None:
     """Push "listado de cuotas roto" SOLO a admins.
 

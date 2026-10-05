@@ -54,6 +54,11 @@ _BACKLOG_INTERVAL_SECONDS = 24 * 3600
 # da para más y así no se machaca el fallback.
 _GEMINI_ODDS_INTERVAL_SECONDS = 3 * 60
 _GEMINI_ONLY_INTERVAL_SECONDS = 20 * 60
+# Auditoría de consistencia de las filas de cuotas almacenadas: una
+# vez por semana re-pasa el mapeador sobre los picks con fila
+# atribuida; si `mal > 0` manda push a admins (red de seguridad ante
+# regresiones de parser/extractor — ver `odds/audit.py`).
+_ODDS_AUDIT_INTERVAL_SECONDS = 7 * 24 * 3600
 
 
 async def _run_telegram_listener() -> None:
@@ -191,6 +196,22 @@ async def _run_odds_backfill_loop() -> None:
                         report.filas,
                     )
                 mark_loop_ran("odds_backfill")
+            # Auditoría semanal de las filas almacenadas: va dentro del
+            # mismo loop pero con su propio `loop_due` — corre aunque
+            # el backfill no sea debido aún en este ciclo.
+            if loop_due("odds_audit", _ODDS_AUDIT_INTERVAL_SECONDS):
+                from app.services.odds.audit import run_odds_audit
+
+                async with AsyncSessionLocal() as session:
+                    audit = await run_odds_audit(session)
+                mark_loop_ran("odds_audit")
+                logger.info(
+                    "[ODDS_AUDIT] %s picks auditados: %s ok, %s sin " "mapeo, %s mal.",
+                    audit.picks,
+                    audit.ok,
+                    audit.sin_map,
+                    audit.mal,
+                )
         except Exception as exc:  # noqa: BLE001
             logger.error("[ODDS_BACKFILL] Error en el ciclo de backfill: %s", exc)
         await asyncio.sleep(interval_seconds)

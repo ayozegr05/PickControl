@@ -50,6 +50,10 @@ class BackfillStatus(BaseModel):
     # Últimas pasadas del loop (más reciente al final) — permite
     # comparar ritmo entre ejecuciones sin mirar logs.
     ultimas_pasadas: list[dict] | None = None
+    # Última auditoría semanal de consistencia: {picks, ok, sin_map,
+    # mal, ejemplos} — cuántas filas guardadas sigue casando el
+    # mapeador hoy.
+    ultima_auditoria: dict | None = None
 
 
 class ProvidersStatus(BaseModel):
