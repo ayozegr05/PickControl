@@ -1072,9 +1072,12 @@ async def _run_source(
         )
         by_key = {(c.market_name, c.choice_name, c.choice_group): c for c in choices}
 
-        matched_keys: set[tuple] = set()
+        # key -> pick que casó esa opción: la fila se atribuye al
+        # pick real, no al primero del grupo (un pick O/U que no
+        # mapea nada no puede quedar "resuelto" por la fila del
+        # ganador de otro pick del mismo partido).
+        matched_keys: dict[tuple, int] = {}
         matched_pick_ids: set[int] = set()
-        trigger_pick = event_picks[0]
         for pick in event_picks:
             matched = map_pick_choices(pick, event, virtual)
             if matched is None:
@@ -1085,7 +1088,7 @@ async def _run_source(
                 )
                 continue
             key = (matched.market_name, matched.choice_name, matched.choice_group)
-            matched_keys.add(key)
+            matched_keys.setdefault(key, pick.id)
             matched_pick_ids.add(pick.id)
             report.mapeados += 1
             choice = by_key[key]
@@ -1104,7 +1107,7 @@ async def _run_source(
             if ext_id not in registered:
                 session.add(event)
                 registered.add(ext_id)
-            for key in matched_keys:
+            for key, owner_id in matched_keys.items():
                 for point in downsample(by_key[key].points):
                     session.add(
                         OddsSnapshot(
@@ -1117,7 +1120,7 @@ async def _run_source(
                             cuota_apertura=by_key[key].cuota_apertura,
                             suspended=point.suspended,
                             captured_at=point.captured_at,
-                            parsed_pick_id=trigger_pick.id,
+                            parsed_pick_id=owner_id,
                         )
                     )
                     report.filas += 1
