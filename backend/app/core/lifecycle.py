@@ -165,6 +165,16 @@ async def _run_rescue_loop() -> None:
                 # de ruido, evento = torneo, 1X como hándicap...).
                 await run_repair_cycle()
                 mark_loop_ran("rescue")
+            # Auditoría diaria de falsos rechazos: re-extrae una muestra
+            # de `metodo='rejected'` reciente por la cascada gratuita y
+            # recupera (con dedup) los que sí eran apuesta.
+            if loop_due("reject_audit", 24 * 3600):
+                from app.services.maintenance.reject_audit import (
+                    run_reject_audit,
+                )
+
+                await run_reject_audit()
+                mark_loop_ran("reject_audit")
         except Exception as exc:  # noqa: BLE001
             logger.error("[RESCUE] Error en el ciclo de rescate: %s", exc)
         await asyncio.sleep(interval_seconds)

@@ -407,3 +407,45 @@ async def notify_ingest_down(detail: str, raws_ventana: int) -> None:
                 )
     except Exception as exc:  # noqa: BLE001
         logger.warning("[PUSH] notify_ingest_down falló: %s", exc)
+
+
+async def notify_rejects_recovered(count: int, detail: str) -> None:
+    """Push "falsos rechazos recuperados" SOLO a admins.
+
+    Disparada por `maintenance/reject_audit.py`: la auditoría diaria
+    re-extrajo rechazos recientes y alguno resultó ser apuesta real —
+    el pipeline se habría perdido ese pick. Información de operación,
+    no para usuarios normales."""
+    try:
+        if not _enabled(get_settings()):
+            return
+        async with AsyncSessionLocal() as session:
+            rows = list(
+                (
+                    await session.exec(
+                        select(DeviceToken)
+                        .join(User, User.id == DeviceToken.user_id)
+                        .where(User.role == UserRole.ADMIN)
+                        .where(DeviceToken.enabled == True)  # noqa: E712
+                    )
+                ).all()
+            )
+
+            def message(token: str) -> dict:
+                return {
+                    "to": token,
+                    "title": "Picks recuperados de rechazos",
+                    "body": (
+                        f"La auditoría recuperó {count} apuesta(s) que "
+                        f"habían sido rechazadas: {detail}."
+                    ),
+                    "data": {"type": "rejects_recovered"},
+                }
+
+            sent = await _send(session, rows, message)
+            if sent:
+                logger.info(
+                    "[PUSH] Rechazos recuperados notificados a %d admins.", sent
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[PUSH] notify_rejects_recovered falló: %s", exc)
