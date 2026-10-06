@@ -5,7 +5,9 @@ OCR y la extracción muerta durante ~14h sin que nadie se enterara.
 Las señales son dos contadores baratos en BD sobre las últimas horas:
 
 - fotos recientes sin `extracted_text` (la cadena OCR caída),
-- raws `processed=False` (excepciones en la extracción/persistencia).
+- raws `processed=False` (excepciones en la extracción/persistencia),
+- silencio total: ningún raw en ≥18h (listener/cuenta Telegram muerta —
+  el hueco nocturno habitual ronda 12h y no debe dispararlo).
 
 Con cualquiera por encima del umbral se notifica a admins por push,
 con cooldown persistido para no spamear mientras dure la caída.
@@ -14,7 +16,7 @@ con cooldown persistido para no spamear mientras dure la caída.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, or_, select
 
@@ -37,6 +39,10 @@ _GRACE = timedelta(minutes=10)
 # suelto problemático, suficientemente bajos para pillar un día muerto.
 _OCR_FAIL_THRESHOLD = 5
 _PROC_FAIL_THRESHOLD = 8
+# Silencio de entrada: si el raw más reciente de CUALQUIER canal lleva
+# >=18h, el listener está caído o la cuenta desconectada (los canales
+# publican a diario; la noche tranquila ronda 12h).
+_SILENCE_THRESHOLD = timedelta(hours=18)
 # Un aviso cada 6h mientras siga roto (persistido en provider_state).
 _ALERT_COOLDOWN = timedelta(hours=6)
 _ALERT_MARK = "ingest-health"
@@ -49,6 +55,9 @@ class IngestHealth:
     raws_ventana: int
     fotos_sin_ocr: int
     raws_sin_procesar: int
+    # Timestamp del raw más reciente (None = BD sin raws: sistema
+    # recién instalado, no alerta).
+    ultimo_raw: datetime | None = None
 
 
 async def check_ingest_health(session) -> IngestHealth:
@@ -83,10 +92,14 @@ async def check_ingest_health(session) -> IngestHealth:
             )
         )
     ).scalar()
+    ultimo_raw = (
+        await session.exec(select(func.max(TelegramRawMessage.received_at)))
+    ).scalar()
     return IngestHealth(
         raws_ventana=raws_ventana,
         fotos_sin_ocr=fotos_sin_ocr,
         raws_sin_procesar=raws_sin_procesar,
+        ultimo_raw=ultimo_raw,
     )
 
 
@@ -102,6 +115,11 @@ async def run_ingest_healthcheck() -> None:
             problems.append(f"{health.fotos_sin_ocr} fotos sin OCR")
         if health.raws_sin_procesar >= _PROC_FAIL_THRESHOLD:
             problems.append(f"{health.raws_sin_procesar} raws sin procesar")
+        if health.ultimo_raw is not None:
+            silencio = utc_now() - health.ultimo_raw
+            if silencio >= _SILENCE_THRESHOLD:
+                horas = int(silencio.total_seconds() // 3600)
+                problems.append(f"sin mensajes nuevos en {horas}h")
         if not problems:
             return
         if is_rate_limited(_ALERT_MARK):

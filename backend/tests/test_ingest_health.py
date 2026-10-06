@@ -92,6 +92,31 @@ class TestRunHealthcheck:
         await ih.run_ingest_healthcheck()
         assert len(avisos) == 1
 
+    async def test_silencio_total_avisa(self, session, monkeypatch):
+        """Listener muerto: raws antiguos procesados OK, pero el más
+        reciente lleva >18h → alerta aunque no haya fallos de OCR."""
+        avisos = []
+
+        async def fake_notify(detail, raws):
+            avisos.append(detail)
+
+        monkeypatch.setattr(ih, "notify_ingest_down", fake_notify)
+        monkeypatch.setattr(ih, "AsyncSessionLocal", lambda: _session_ctx(session))
+        # Todo procesado y con OCR, pero de hace 30h — silencio total.
+        session.add(
+            _raw(
+                1,
+                media_path="a.jpg",
+                extracted_text="texto",
+                received_at=utc_now() - timedelta(hours=30),
+            )
+        )
+        await session.commit()
+
+        await ih.run_ingest_healthcheck()
+        assert len(avisos) == 1
+        assert "sin mensajes nuevos" in avisos[0]
+
     async def test_no_avisa_bajo_umbral(self, session, monkeypatch):
         avisos = []
 
