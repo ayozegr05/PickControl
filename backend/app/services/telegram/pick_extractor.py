@@ -1114,46 +1114,75 @@ def _strip_slip_chrome(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
+_JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+
 async def _llm_extract(
     text: str,
-    api_key: str,
+    api_key: Optional[str],
     informante: Optional[str] = None,
     fecha_referencia: Optional[datetime] = None,
 ) -> Optional[ExtractedPick]:
-    client = AsyncOpenAI(api_key=api_key)
+    """Extracción por LLM: OpenAI si hay key y responde; si falla (o no
+    hay key) cae a la cascada gratuita Groq→Cerebras→OpenRouter. El pick
+    lleva `metodo="llm"` con OpenAI y `llm-{motor}` con la cascada, así
+    se puede comparar quién extrajo qué en BD.
+    """
     text = _strip_slip_chrome(text)
     fecha_str = (
         fecha_referencia.strftime("%Y-%m-%d %H:%M")
         if fecha_referencia
         else "desconocida"
     )
-    response = await call_with_retry(
-        lambda: client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": (
-                        f"Canal: {informante or 'desconocido'}\n"
-                        f"Fecha del mensaje: {fecha_str}\n\n"
-                        f"Mensaje:\n{text}"
-                    ),
-                },
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.0,
-        ),
-        f"extracción LLM ({informante or 'desconocido'})",
+    user_content = (
+        f"Canal: {informante or 'desconocido'}\n"
+        f"Fecha del mensaje: {fecha_str}\n\n"
+        f"Mensaje:\n{text}"
     )
+    content: Optional[str] = None
+    engine: Optional[str] = None
 
-    content = response.choices[0].message.content
+    if api_key:
+        try:
+            client = AsyncOpenAI(api_key=api_key)
+            response = await call_with_retry(
+                lambda: client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "user", "content": user_content},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.0,
+                ),
+                f"extracción LLM ({informante or 'desconocido'})",
+            )
+            content = response.choices[0].message.content
+        except Exception as exc:  # noqa: BLE001
+            # Cuota agotada, red caída... la cascada gratuita cubre la
+            # ingesta; la alerta operativa la da el benchmark/logs.
+            logger.warning("[LLM] OpenAI falló (%s) — probando cascada gratuita", exc)
+            content = None
+
+    if content is None:
+        from app.services.results import compat_llm
+
+        compat = await compat_llm.extract_text(
+            f"{_SYSTEM_PROMPT}\n\n{user_content}", purpose="ingesta"
+        )
+        if compat:
+            content, engine = compat
+
     if not content:
         return None
 
-    data = json.loads(content)
+    try:
+        data = json.loads(_JSON_FENCE.sub("", content.strip()))
+    except json.JSONDecodeError as exc:
+        logger.warning("[LLM] JSON ilegible (%s): %s", engine or "openai", exc)
+        return None
     pick = ExtractedPick(**data)
-    pick.metodo = "llm"
+    pick.metodo = f"llm-{engine}" if engine else "llm"
     pick.confianza = 0.75 if pick.es_apuesta else 0.0
     pick.informante = pick.informante or informante
     if pick.fecha_evento is None:
@@ -1323,7 +1352,9 @@ async def extract_pick(
                     if not getattr(rule_result, field):
                         setattr(rule_result, field, getattr(llm_result, field))
                 if llm_result.evento:
-                    rule_result.metodo = "rule+llm"
+                    # "rule+llm" con OpenAI, "rule+llm-groq" con la
+                    # cascada — se ve quién aportó el campo extra.
+                    rule_result.metodo = f"rule+{llm_result.metodo}"[:20]
         rule_result.fecha_evento = _sanitize_event_date(
             rule_result.fecha_evento, fecha_referencia
         )

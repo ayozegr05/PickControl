@@ -570,6 +570,7 @@ class TestRuleLlmEnrichment:
                 evento="Clement Chidekh vs Harold Mayot",
                 mercado="ganador",
                 seleccion="Chidekh gana",
+                metodo="llm",
             )
 
         monkeypatch.setattr(
@@ -1041,3 +1042,96 @@ class TestCompoundSelection:
         )
         result = _ensure_combinada_shape(pick)
         assert result.patas == []
+
+
+class TestLlmExtractFallback:
+    """`_llm_extract`: OpenAI primero; si falla (o no hay key) la cascada
+    gratuita Groq->Cerebras->OpenRouter cubre la ingesta, y el pick lleva
+    el motor en `metodo` para poder auditar quién extrajo qué."""
+
+    async def test_openai_cae_a_cascada(self, monkeypatch):
+        from app.services.results import compat_llm
+        from app.services.telegram import pick_extractor as pe
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("429 credit_balance_exhausted")
+
+        monkeypatch.setattr(pe, "call_with_retry", boom)
+        seen = {}
+
+        async def fake_extract(prompt, *, purpose="", settings=None):
+            seen["prompt"] = prompt
+            seen["purpose"] = purpose
+            return (
+                '{"es_apuesta": true, "deporte": "fútbol", '
+                '"evento": "Betis - Getafe", "mercado": "ganador", '
+                '"seleccion": "Betis gana", "cuota": 2.0, "stake": 2}',
+                "groq",
+            )
+
+        monkeypatch.setattr(compat_llm, "extract_text", fake_extract)
+
+        pick = await pe._llm_extract("Betis gana cuota 2.0", "key-viva")
+        assert pick is not None
+        assert pick.metodo == "llm-groq"
+        assert pick.mercado == "ganador"
+        # El prompt de la cascada lleva system + user concatenados.
+        assert "Betis gana cuota 2.0" in seen["prompt"]
+        assert seen["purpose"] == "ingesta"
+
+    async def test_sin_key_va_directo_a_cascada(self, monkeypatch):
+        from app.services.results import compat_llm
+        from app.services.telegram import pick_extractor as pe
+
+        async def boom(*args, **kwargs):
+            raise AssertionError("no debería llamar a OpenAI sin key")
+
+        monkeypatch.setattr(pe, "call_with_retry", boom)
+
+        async def fake_extract(prompt, *, purpose="", settings=None):
+            return (
+                '{"es_apuesta": false}',
+                "cerebras",
+            )
+
+        monkeypatch.setattr(compat_llm, "extract_text", fake_extract)
+
+        pick = await pe._llm_extract("hola foro", None)
+        assert pick is not None
+        assert pick.metodo == "llm-cerebras"
+        assert pick.es_apuesta is False
+
+    async def test_cascada_con_fences_markdown(self, monkeypatch):
+        """Los compat a veces envuelven el JSON en ```json ...```."""
+        from app.services.results import compat_llm
+        from app.services.telegram import pick_extractor as pe
+
+        async def fake_extract(prompt, *, purpose="", settings=None):
+            return (
+                '```json\n{"es_apuesta": true, "mercado": "ganador",'
+                ' "seleccion": "X gana"}\n```',
+                "openrouter",
+            )
+
+        monkeypatch.setattr(compat_llm, "extract_text", fake_extract)
+
+        pick = await pe._llm_extract("X gana", None)
+        assert pick is not None
+        assert pick.es_apuesta is True
+        assert pick.metodo == "llm-openrouter"
+
+    async def test_todo_muerto_devuelve_none(self, monkeypatch):
+        from app.services.results import compat_llm
+        from app.services.telegram import pick_extractor as pe
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("openai roto")
+
+        monkeypatch.setattr(pe, "call_with_retry", boom)
+
+        async def fake_extract(prompt, *, purpose="", settings=None):
+            return None
+
+        monkeypatch.setattr(compat_llm, "extract_text", fake_extract)
+
+        assert await pe._llm_extract("X gana", "key") is None
