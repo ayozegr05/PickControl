@@ -364,3 +364,46 @@ async def notify_scraper_broken(source_name: str, detail: str) -> None:
                 )
     except Exception as exc:  # noqa: BLE001
         logger.warning("[PUSH] notify_scraper_broken(%s) falló: %s", source_name, exc)
+
+
+async def notify_ingest_down(detail: str, raws_ventana: int) -> None:
+    """Push "ingesta posiblemente caída" SOLO a admins.
+
+    Disparada por `maintenance/ingest_health.py`: mensajes entrando pero
+    fotos sin OCR o raws sin procesar — firma de que la cadena de
+    extracción está rota (p. ej. OpenAI sin crédito). Información de
+    operación, no para usuarios normales."""
+    try:
+        if not _enabled(get_settings()):
+            return
+        async with AsyncSessionLocal() as session:
+            rows = list(
+                (
+                    await session.exec(
+                        select(DeviceToken)
+                        .join(User, User.id == DeviceToken.user_id)
+                        .where(User.role == UserRole.ADMIN)
+                        .where(DeviceToken.enabled == True)  # noqa: E712
+                    )
+                ).all()
+            )
+
+            def message(token: str) -> dict:
+                return {
+                    "to": token,
+                    "title": "Ingesta posiblemente caída",
+                    "body": (
+                        f"{detail} ({raws_ventana} raws en las últimas "
+                        f"3h). Revisar OCR/extracción."
+                    ),
+                    "data": {"type": "ingest_down", "detail": detail},
+                }
+
+            sent = await _send(session, rows, message)
+            if sent:
+                logger.info(
+                    "[PUSH] Ingesta caída notificada a %d dispositivos admin.",
+                    sent,
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[PUSH] notify_ingest_down falló: %s", exc)

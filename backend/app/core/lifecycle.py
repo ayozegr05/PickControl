@@ -59,6 +59,9 @@ _GEMINI_ONLY_INTERVAL_SECONDS = 20 * 60
 # atribuida; si `mal > 0` manda push a admins (red de seguridad ante
 # regresiones de parser/extractor — ver `odds/audit.py`).
 _ODDS_AUDIT_INTERVAL_SECONDS = 7 * 24 * 3600
+# Healthcheck de ingesta: dentro del loop del snapshotter (30 min) —
+# detecta "entran mensajes pero no sale nada" (OCR/extracción caídos).
+_INGEST_HEALTH_INTERVAL_SECONDS = 30 * 60
 
 
 async def _run_telegram_listener() -> None:
@@ -126,11 +129,16 @@ async def _run_odds_snapshotter_loop() -> None:
     settings = get_settings()
     interval_seconds = settings.odds_snapshot_interval_minutes * 60
 
+    from app.services.maintenance.ingest_health import run_ingest_healthcheck
+
     while True:
         try:
             if loop_due("odds_snapshotter", interval_seconds):
                 await run_odds_snapshot_cycle()
                 mark_loop_ran("odds_snapshotter")
+            if loop_due("ingest_health", _INGEST_HEALTH_INTERVAL_SECONDS):
+                await run_ingest_healthcheck()
+                mark_loop_ran("ingest_health")
         except Exception as exc:  # noqa: BLE001
             logger.error("[ODDS_SNAPSHOTTER] Error en el ciclo de snapshots: %s", exc)
         await asyncio.sleep(interval_seconds)
