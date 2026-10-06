@@ -205,7 +205,7 @@ def _compare(
         )
 
 
-async def _bench_picks(limit: int, engines: list[str]):
+async def _bench_picks(limit: int, engines: list[str], solo_ocr: bool):
     settings = get_settings()
     async with AsyncSessionLocal() as session:
         picks = (
@@ -216,7 +216,7 @@ async def _bench_picks(limit: int, engines: list[str]):
                     .where(ParsedPick.metodo.like("llm%"))
                     .where(ParsedPick.combinada_id.is_(None))
                     .order_by(ParsedPick.id.desc())
-                    .limit(limit)
+                    .limit(limit * 4 if solo_ocr else limit)
                 )
             )
             .scalars()
@@ -233,6 +233,17 @@ async def _bench_picks(limit: int, engines: list[str]):
             .all()
         )
         raw_by_id = {r.id: r for r in raws}
+        if solo_ocr:
+            # Solo picks cuyo raw pasó por el OCR de OpenAI
+            # (extracted_text presente): todos los motores leen
+            # exactamente el mismo texto extraído — comparación de
+            # extracción honesta.
+            picks = [
+                p
+                for p in picks
+                if p.raw_message_id in raw_by_id
+                and raw_by_id[p.raw_message_id].extracted_text
+            ][:limit]
         n_legs: dict[int, int] = {}
         comb_parents = [p.id for p in picks if p.es_combinada and p.id]
         if comb_parents:
@@ -374,13 +385,18 @@ def main():
         action="store_true",
         help="Benchmark de OCR (Gemini vs OpenAI guardado)",
     )
+    ap.add_argument(
+        "--solo-ocr",
+        action="store_true",
+        help="Solo picks cuyo raw pasó por el OCR de OpenAI (mismo input para todos)",
+    )
     args = ap.parse_args()
 
     if args.ocr:
         asyncio.run(_bench_ocr(args.limit))
         return
     engines = [e.strip() for e in args.engines.split(",") if e.strip()]
-    scores, n = asyncio.run(_bench_picks(args.limit, engines))
+    scores, n = asyncio.run(_bench_picks(args.limit, engines, args.solo_ocr))
     _print_report(scores, n)
 
 
