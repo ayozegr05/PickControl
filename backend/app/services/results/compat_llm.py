@@ -73,7 +73,7 @@ _ENDPOINTS: tuple[Endpoint, ...] = (
     Endpoint(
         "openrouter",
         "https://openrouter.ai/api/v1",
-        "meta-llama/llama-3.3-70b-instruct:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
         "openrouter_api_key",
     ),
 )
