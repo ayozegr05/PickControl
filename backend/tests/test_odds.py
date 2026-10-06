@@ -273,6 +273,21 @@ def test_map_empate_no_valido():
     assert (m.market_name, m.choice_name) == ("Draw no bet", "1")
 
 
+def test_map_dnb_sin_mercado_no_cae_a_ganador():
+    """Pick DNB sin filas "Draw no bet" en el evento -> None. Antes
+    el bloque caía al fallback de ganador y comparaba la cuota DNB
+    contra la victoria seca (precios distintos) — caso real: pick
+    5429 tras re-etiquetar, el mapper daba Full time/Atlético-MG."""
+    snaps = [
+        _snap("Full time", "1", 1.6),
+        _snap("Full time", "X", 3.8),
+        _snap("Full time", "2", 5.5),
+        _snap("Double chance", "X2", 2.3),
+    ]
+    pick = _pick("Getafe gana", mercado="resultado sin empate")
+    assert map_pick_choices(pick, _event(), snaps) is None
+
+
 def test_map_handicap():
     pick = _pick("Real Betis -0.5", mercado="hándicap asiático", linea=-0.5)
     m = map_pick_choices(pick, _event(), _futbol_snaps())

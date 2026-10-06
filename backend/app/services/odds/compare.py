@@ -295,12 +295,17 @@ def map_pick_choices(
         r"resultado\s+sin\s+empate|draw\s+no\s+bet|sin\s+empate",
         text,
     ):
+        # DNB es un mercado propio con su precio (el empate devuelve
+        # la apuesta): si el proveedor no publica "Draw no bet" no se
+        # puede comparar contra la victoria seca — miss honesto, igual
+        # que con el marcador exacto.
         if team:
             matched = _match_side(
                 _rows_of_market(snapshots, ("Draw no bet",)), event, team
             )
             if matched is not None:
                 return matched
+        return None
 
     if re.search(r"primer\s+set|1er\s+set|set\s+1", text) and team:
         matched = _match_side(
