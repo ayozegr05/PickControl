@@ -658,12 +658,83 @@ async def find_repair_candidates(session, limit: int = 10) -> list[int]:
     return candidates[:limit]
 
 
+async def fix_dnb_labels(session, limit: int = 100) -> list[int]:
+    """Re-etiqueta determinista DC->DNB sobre TODOS los picks (también
+    los ya liquidados: el mercado es un hecho de la extracción, no del
+    resultado). Devuelve los ids corregidos.
+
+    No necesita LLM: la fuente (texto/OCR del raw) prueba "resultado
+    sin empate" y la selección no trae señal de doble oportunidad —
+    el mercado se corrige en sitio y queda en el historial del pick
+    vía `metodo` + el diff visible en BD.
+    """
+    candidates = list(
+        (
+            await session.exec(
+                select(ParsedPick)
+                .where(ParsedPick.es_apuesta == True)  # noqa: E712
+                .where(ParsedPick.mercado != None)  # noqa: E711
+                .where(
+                    ParsedPick.mercado.ilike("%doble%oportunidad%")
+                    | ParsedPick.mercado.ilike("%double%chance%")
+                )
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    ambiguous = [p for p in candidates if not _DC_EXPLICIT.search(p.seleccion or "")]
+    if not ambiguous:
+        return []
+    raws = list(
+        (
+            await session.exec(
+                select(TelegramRawMessage).where(
+                    TelegramRawMessage.id.in_(
+                        p.raw_message_id for p in ambiguous if p.raw_message_id
+                    )
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    raw_by_id = {r.id: r for r in raws}
+    fixed: list[int] = []
+    for pick in ambiguous:
+        raw = raw_by_id.get(pick.raw_message_id)
+        source = (
+            " ".join(t for t in ((raw.text or ""), (raw.extracted_text or "")) if t)
+            if raw
+            else ""
+        )
+        if not _DNB_IN_SOURCE.search(source):
+            continue
+        pick.mercado = "resultado sin empate"
+        pick.metodo = f"{pick.metodo or 'llm'}+dnbcorr"[:20]
+        session.add(pick)
+        fixed.append(pick.id or 0)
+    return fixed
+
+
 async def run_repair_cycle(limit: int = 10) -> list[RepairReport]:
     """Pasada periódica de autorregulación: busca filas sospechosas y
     las re-extrae desde su raw guardado. Corre desde el loop de rescue
     (mismo intervalo); sin candidatos no gasta ni una llamada LLM."""
     async with AsyncSessionLocal() as session:
         ids = await find_repair_candidates(session, limit)
+        # Re-etiquetado determinista DC->DNB (sin LLM): picks ya
+        # liquidados también — el mercado es un hecho de la
+        # extracción, no del resultado.
+        dnb_fixed = await fix_dnb_labels(session)
+        if dnb_fixed:
+            await session.commit()
+            logger.info(
+                "[REPAIR] %s picks re-etiquetados DC->DNB (fuente DNB): %s",
+                len(dnb_fixed),
+                dnb_fixed,
+            )
     if not ids:
         return []
     logger.info("[REPAIR] Ciclo: %s picks sospechosos — re-extrayendo", len(ids))

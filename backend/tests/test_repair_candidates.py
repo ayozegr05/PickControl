@@ -162,6 +162,87 @@ class TestDnbMarketFix:
         assert new.mercado == "doble oportunidad"
 
 
+class TestFixDnbLabels:
+    """Barrido determinista sobre la BD: picks DC ambiguos cuya fuente
+    prueba DNB se re-etiquetan en sitio (también liquidados)."""
+
+    async def test_reliquida_dc_ambiguo_con_fuente_dnb(self, session):
+        from app.models.parsed_pick import ParsedPick
+        from app.models.telegram_raw_message import TelegramRawMessage
+        from app.services.maintenance.repair import fix_dnb_labels
+
+        raw = TelegramRawMessage(
+            id=901,
+            channel_id=-1001,
+            message_id=1,
+            channel_name="canal",
+            text="IRLANDA GANA EL PARTIDO EMPATE NO CUENTA",
+        )
+        pick = ParsedPick(
+            id=901,
+            raw_message_id=901,
+            es_apuesta=True,
+            acierto=True,  # ya liquidado — también se re-etiqueta
+            mercado="doble oportunidad",
+            seleccion="Irlanda gana",
+        )
+        session.add_all([raw, pick])
+        await session.commit()
+
+        fixed = await fix_dnb_labels(session)
+        await session.commit()
+        await session.refresh(pick)
+
+        assert fixed == [901]
+        assert pick.mercado == "resultado sin empate"
+        assert "dnbcorr" in (pick.metodo or "")
+
+    async def test_no_toca_dc_explicito_ni_fuente_limpia(self, session):
+        from app.models.parsed_pick import ParsedPick
+        from app.models.telegram_raw_message import TelegramRawMessage
+        from app.services.maintenance.repair import fix_dnb_labels
+
+        raws = [
+            TelegramRawMessage(
+                id=902,
+                channel_id=-1001,
+                message_id=2,
+                channel_name="c",
+                text="doble oportunidad levante o empate",
+            ),
+            TelegramRawMessage(
+                id=903,
+                channel_id=-1001,
+                message_id=3,
+                channel_name="c",
+                text="LEVANTE GANA EL PARTIDO",
+            ),
+        ]
+        picks = [
+            # Selección explícita + fuente con "sin empate": no es
+            # ambigua, no se toca.
+            ParsedPick(
+                id=902,
+                raw_message_id=902,
+                es_apuesta=True,
+                mercado="doble oportunidad",
+                seleccion="Levante y empate",
+            ),
+            # Ambigua pero fuente sin DNB: no se toca.
+            ParsedPick(
+                id=903,
+                raw_message_id=903,
+                es_apuesta=True,
+                mercado="doble oportunidad",
+                seleccion="Levante gana",
+            ),
+        ]
+        session.add_all(raws + picks)
+        await session.commit()
+
+        assert await fix_dnb_labels(session) == []
+
+
 class _Leg:
     """Pata mínima para probar supersede/herencia sin BD."""
 
