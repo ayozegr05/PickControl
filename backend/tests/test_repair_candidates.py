@@ -1,11 +1,14 @@
 """Detección de picks pendientes con extracción rota (ciclo repair)."""
 
 from app.services.maintenance.repair import (
+    _dc_ambiguous_dnb,
+    _dnb_market_fix,
     _inherit_leg_verdicts,
     _pick_needs_repair,
     _supersede_legs,
     _tournament_only,
 )
+from app.services.telegram.pick_extractor import ExtractedPick
 
 
 class _P:
@@ -91,6 +94,72 @@ class TestPickNeedsRepair:
             evento="Neumayer vs Manzano", mercado="ganador", seleccion="Neumayer gana"
         )
         assert not _pick_needs_repair(p, [])
+
+
+class TestDcAmbiguousDnb:
+    """El extractor confundió 'resultado sin empate' (DNB) con 'doble
+    oportunidad' — la fuente lo delata (casos reales 5429/5645)."""
+
+    def test_slip_resultado_sin_empate(self):
+        p = _P(mercado="doble oportunidad", seleccion="Atlético Mineiro gana")
+        assert _dc_ambiguous_dnb(p, "Atlético Mineiro 1.50 Resultado sin empate")
+
+    def test_texto_empate_no_cuenta(self):
+        p = _P(mercado="doble oportunidad", seleccion="Irlanda gana")
+        assert _dc_ambiguous_dnb(p, "IRLANDA GANA EL PARTIDO EMPATE NO CUENTA")
+
+    def test_draw_no_bet_en_ingles(self):
+        p = _P(mercado="double chance", seleccion="Arsenal gana")
+        assert _dc_ambiguous_dnb(p, "Arsenal draw no bet @1.60")
+
+    def test_seleccion_explicita_no_es_ambigua(self):
+        """'X o empate' ya dice empate — no es extracción truncada."""
+        p = _P(mercado="doble oportunidad", seleccion="Levante y empate")
+        assert not _dc_ambiguous_dnb(p, "Resultado sin empate Levante")
+
+    def test_mercado_no_dc_no_dispara(self):
+        p = _P(mercado="ganador", seleccion="Levante gana")
+        assert not _dc_ambiguous_dnb(p, "Resultado sin empate Levante")
+
+    def test_fuente_sin_dnb_no_dispara(self):
+        p = _P(mercado="doble oportunidad", seleccion="Levante gana")
+        assert not _dc_ambiguous_dnb(p, "Doble oportunidad Levante o empate")
+
+
+class TestDnbMarketFix:
+    """Override determinista tras la re-extracción: si la fuente prueba
+    DNB, el mercado se corrige aunque el LLM repita 'doble oportunidad'."""
+
+    def test_corrige_mercado(self):
+        new = ExtractedPick(
+            es_apuesta=True, mercado="doble oportunidad", seleccion="Irlanda gana"
+        )
+        assert _dnb_market_fix("EMPATE NO CUENTA", new) == 1
+        assert new.mercado == "resultado sin empate"
+
+    def test_corrige_patas_de_combinada(self):
+        new = ExtractedPick(
+            es_apuesta=True,
+            mercado="combinada",
+            patas=[
+                ExtractedPick(
+                    es_apuesta=True,
+                    mercado="doble oportunidad",
+                    seleccion="X gana",
+                ),
+                ExtractedPick(es_apuesta=True, mercado="ganador", seleccion="Y gana"),
+            ],
+        )
+        assert _dnb_market_fix("resultado sin empate", new) == 1
+        assert new.patas[0].mercado == "resultado sin empate"
+        assert new.patas[1].mercado == "ganador"
+
+    def test_fuente_sin_dnb_no_toca(self):
+        new = ExtractedPick(
+            es_apuesta=True, mercado="doble oportunidad", seleccion="X y empate"
+        )
+        assert _dnb_market_fix("doble oportunidad X y empate", new) == 0
+        assert new.mercado == "doble oportunidad"
 
 
 class _Leg:

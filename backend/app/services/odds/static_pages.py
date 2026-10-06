@@ -799,7 +799,9 @@ _BE_PICK_RULES = (
     ),
     (
         re.compile(
-            r"empate\s+no\s+v[aá]lido|draw\s+no\s+bet|" r"resultado\s+sin\s+empate",
+            r"empate\s+no\s+v[aá]lido|empate\s+no\s+cuenta|"
+            r"empate\s+no\s+vale|draw\s+no\s+bet|"
+            r"resultado\s+sin\s+empate|sin\s+empate",
             re.IGNORECASE,
         ),
         "ha",

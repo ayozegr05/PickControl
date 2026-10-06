@@ -256,6 +256,105 @@ async def test_run_odds_audit_registra_y_avisa(session, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_odds_audit_sana_atribucion(session, monkeypatch):
+    """Sanación: la fila mal atribuida queda libre (parsed_pick_id=NULL)
+    y la fila correcta del mismo evento se re-sella al pick."""
+    from sqlmodel import select
+
+    event = OddsEvent(
+        event_ext_id="betexplorer:evt1",
+        sport="futbol",
+        home_team="Malaga",
+        away_team="Deportivo La Coruna",
+    )
+    pick = _pick(
+        9,
+        mercado="over/under goles",
+        seleccion="más de 2.5 goles",
+        linea=2.5,
+    )
+    await _seed(
+        session,
+        event,
+        pick,
+        _snap(9, "Full time", "2"),  # atribución rota
+        _snap(None, "Match goals", "Over", "2.5"),  # la buena, libre
+    )
+
+    report = await run_odds_audit(session)
+
+    assert report.mal == 1
+    assert report.desatribuidas == 1
+    assert report.reselladas == 1
+    rows = (await session.exec(select(OddsSnapshot))).all()
+    by_market = {r.market_name: r.parsed_pick_id for r in rows}
+    assert by_market["Full time"] is None  # desatribuida
+    assert by_market["Match goals"] == 9  # re-sellada al pick
+
+
+@pytest.mark.asyncio
+async def test_audit_heal_false_no_toca_filas(session):
+    """Con heal=False la auditoría solo informa (dry-run)."""
+    from sqlmodel import select
+
+    event = OddsEvent(
+        event_ext_id="betexplorer:evt1",
+        sport="futbol",
+        home_team="Malaga",
+        away_team="Deportivo La Coruna",
+    )
+    pick = _pick(
+        10,
+        mercado="over/under goles",
+        seleccion="más de 2.5 goles",
+        linea=2.5,
+    )
+    await _seed(
+        session,
+        event,
+        pick,
+        _snap(10, "Full time", "2"),
+        _snap(None, "Match goals", "Over", "2.5"),
+    )
+
+    report = await run_odds_audit(session, heal=False)
+
+    assert report.mal == 1
+    assert report.desatribuidas == 0
+    rows = (await session.exec(select(OddsSnapshot))).all()
+    by_market = {r.market_name: r.parsed_pick_id for r in rows}
+    assert by_market["Full time"] == 10  # intacta
+    assert by_market["Match goals"] is None  # intacta
+
+
+@pytest.mark.asyncio
+async def test_audit_sin_map_desatribuye(session):
+    """sin_map: la fila de backfill queda libre y el pick vuelve a la
+    cola (ya no cuenta como resuelto)."""
+    from sqlmodel import select
+
+    event = OddsEvent(
+        event_ext_id="betexplorer:evt1",
+        sport="futbol",
+        home_team="Malaga",
+        away_team="Deportivo La Coruna",
+    )
+    pick = _pick(
+        11,
+        mercado="doble oportunidad",
+        seleccion="Malaga o empate",
+    )
+    await _seed(session, event, pick, _snap(11, "Full time", "1"))
+
+    report = await run_odds_audit(session)
+
+    assert report.sin_map == 1
+    assert report.desatribuidas == 1
+    row = (await session.exec(select(OddsSnapshot))).one()
+    assert row.parsed_pick_id is None
+
+
+@pytest.mark.asyncio
 async def test_run_odds_audit_limpio_no_avisa(session, monkeypatch):
     """Sin filas mal mapeadas no hay push."""
     event = OddsEvent(

@@ -205,6 +205,42 @@ def test_map_doble_oportunidad_sin_mercado_dc():
     assert map_pick_choices(pick, _event(), snaps) is None
 
 
+def test_map_doble_oportunidad_ambigua_no_adivina():
+    """mercado='doble oportunidad' con selección 'X gana' (sin señal
+    de empate ni 'o'): NO se adivina 1X/X2 por el lado — los casos
+    reales (5429/5645) eran 'resultado sin empate' mal extraídos, y
+    adivinar habría comparado contra la pata equivocada."""
+    pick = _pick("Getafe gana", mercado="doble oportunidad")
+    assert map_pick_choices(pick, _event(), _futbol_snaps()) is None
+
+
+def test_map_doble_oportunidad_gana_o_empata():
+    """'gana o empata' (variante verbal de 'o empate') sigue casando
+    con 1X/X2 — la señal 'empat' es explícita, no es adivinanza."""
+    pick = _pick("Getafe gana o empata", mercado="doble oportunidad")
+    m = map_pick_choices(pick, _event(), _futbol_snaps())
+    assert m is not None
+    assert (m.market_name, m.choice_name) == ("Double chance", "X2")
+
+
+def test_map_doble_oportunidad_gana_cualquiera_es_12():
+    """'EquipoA o EquipoB' (gana cualquiera) casa con la opción 12."""
+    snaps = _futbol_snaps() + [_snap("Double chance", "12", 1.9)]
+    pick = _pick("Betis o Getafe", mercado="doble oportunidad")
+    m = map_pick_choices(pick, _event(), snaps)
+    assert m is not None
+    assert m.choice_name == "12"
+
+
+def test_map_empate_no_cuenta_es_dnb():
+    """'empate no cuenta'/'empate no válido' = Draw no bet (variante
+    que el regex no cubría — el texto del pick 5645 lo dice así)."""
+    pick = _pick("Getafe gana el partido, empate no cuenta", mercado="ganador")
+    m = map_pick_choices(pick, _event(), _futbol_snaps())
+    assert m is not None
+    assert (m.market_name, m.choice_name) == ("Draw no bet", "2")
+
+
 def test_map_gana_marcador_no_es_ganador():
     """ "gana 2-0" = marcador de sets (~1.5-2.0), NO la victoria
     seca (~1.15): sin mercado de marcador en el proveedor -> None.

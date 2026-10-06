@@ -386,6 +386,11 @@ async def repair_pick(session, pick: ParsedPick, *, apply: bool) -> RepairReport
         report.detail = "extract_pick devolvió None"
         return report
 
+    # Corrección determinista DC->DNB: la fuente prueba "resultado
+    # sin empate" aunque la re-extracción repita el error (caso real:
+    # picks 5429/5645 resueltos contra el mercado equivocado).
+    dnb_fixed = _dnb_market_fix(source, new) if new.es_apuesta else 0
+
     report.new = _new_snapshot(new)
     if not new.es_apuesta:
         report.action = "rejected"
@@ -424,12 +429,14 @@ async def repair_pick(session, pick: ParsedPick, *, apply: bool) -> RepairReport
             f"combinada {was_combinada}->{n_patas >= 2}, "
             f"{len(superseded_legs)} patas viejas excluidas, {n_patas} nuevas, "
             f"{inherited} veredictos heredados"
+            + (f" [mercado DC->DNB x{dnb_fixed}]" if dnb_fixed else "")
             + (" [vía reglas: LLM rechazó]" if rules_fallback else "")
         )
     else:
         report.action = "repaired"
         report.detail = (
             f"combinada {was_combinada}->{n_patas >= 2}, {n_patas} patas nuevas"
+            + (f" [mercado DC->DNB x{dnb_fixed}]" if dnb_fixed else "")
             + (" [vía reglas: LLM rechazó]" if rules_fallback else "")
         )
     return report
@@ -472,6 +479,22 @@ _CROSS = re.compile(r"\bvs\.?\b|\s-\s", re.IGNORECASE)
 # Selección "1X"/"X2" guardada como hándicap: es doble oportunidad.
 _DC_IN_HANDICAP = re.compile(r"\b(?:1x|x2)\b", re.IGNORECASE)
 
+# Confusión DC<->DNB del extractor: el pick quedó etiquetado "doble
+# oportunidad" pero el texto fuente dice "resultado sin empate" /
+# "empate no cuenta" — mercado distinto (Draw No Bet devuelve la
+# apuesta con empate; DC 1X/X2 la gana). Casos reales: picks 5429
+# ("Resultado sin empate" en el OCR del slip) y 5645 ("EMPATE NO
+# CUENTA" en el texto) — ambos resueltos contra cuota DC errónea.
+_DNB_IN_SOURCE = re.compile(
+    r"sin\s+empate|empate\s+no\s+(?:cuenta|v[aá]lido|vale)|"
+    r"empate\s+anula|draw\s+no\s+bet",
+    re.IGNORECASE,
+)
+_DC_LABEL = re.compile(r"doble\s+oportunidad|double\s+chance", re.IGNORECASE)
+# La selección que ya trae señal explícita ("y empate", "o empata")
+# no es ambigua: solo se reparan las truncadas a "X gana".
+_DC_EXPLICIT = re.compile(r"empat\w*|draw|\bo\b|\by\b|/|\b12\b", re.IGNORECASE)
+
 # Pata cuya "selección" es ruido de publi/afiliación, no una apuesta:
 # URL, handle de Telegram o CTA de marketing. El extractor viejo coló
 # boletos-anuncio enteros como combinadas (caso #1741: "LLEVA TUS
@@ -489,6 +512,31 @@ def _tournament_only(evento: Optional[str]) -> bool:
     return bool(
         evento and _COMPETITION_WORD.search(evento) and not _CROSS.search(evento)
     )
+
+
+def _dc_ambiguous_dnb(pick: ParsedPick, source: str) -> bool:
+    """True si el pick lleva etiqueta "doble oportunidad" con selección
+    sin señal explícita y la fuente dice que era Draw No Bet."""
+    if not _DC_LABEL.search(pick.mercado or ""):
+        return False
+    if _DC_EXPLICIT.search(pick.seleccion or ""):
+        return False
+    return bool(_DNB_IN_SOURCE.search(source))
+
+
+def _dnb_market_fix(source: str, new: ExtractedPick) -> int:
+    """Override determinista post-extracción: si la fuente prueba DNB
+    y la re-extracción siguió diciendo "doble oportunidad", se corrige
+    el mercado sin LLM (la selección no se toca: "Irlanda gana" ya
+    da el equipo para `_match_side` sobre el mercado "Draw no bet")."""
+    if not _DNB_IN_SOURCE.search(source):
+        return 0
+    fixed = 0
+    for tgt in [new, *new.patas]:
+        if tgt.mercado and _DC_LABEL.search(tgt.mercado):
+            tgt.mercado = "resultado sin empate"
+            fixed += 1
+    return fixed
 
 
 def _pick_needs_repair(pick: ParsedPick, active_legs: list[ParsedPick]) -> bool:
@@ -570,6 +618,43 @@ async def find_repair_candidates(session, limit: int = 10) -> list[int]:
         for p in parents
         if p.id is not None and _pick_needs_repair(p, legs_by_parent.get(p.id, []))
     ]
+
+    # DC ambiguo ("X gana" sin más) con fuente que prueba DNB: el
+    # extractor confundió los mercados — candidato aunque la fila no
+    # tenga otra señal de extracción rota. La consulta del raw solo
+    # se hace para el subconjunto DC-ambíguo (suele ser vacío).
+    dc_ambiguous = [
+        p
+        for p in parents
+        if p.id is not None
+        and p.id not in candidates
+        and _DC_LABEL.search(p.mercado or "")
+        and not _DC_EXPLICIT.search(p.seleccion or "")
+    ]
+    if dc_ambiguous:
+        raws = (
+            (
+                await session.exec(
+                    select(TelegramRawMessage).where(
+                        TelegramRawMessage.id.in_(
+                            p.raw_message_id for p in dc_ambiguous
+                        )
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        raw_by_id = {r.id: r for r in raws}
+        for p in dc_ambiguous:
+            raw = raw_by_id.get(p.raw_message_id)
+            source = (
+                " ".join(t for t in ((raw.text or ""), (raw.extracted_text or "")) if t)
+                if raw
+                else ""
+            )
+            if _dc_ambiguous_dnb(p, source):
+                candidates.append(p.id)
     return candidates[:limit]
 
 

@@ -220,6 +220,12 @@ class _HistorySource(Protocol):
     """Una fuente de cuotas históricas para el backfill."""
 
     name: str  # provider en odds_snapshots / prefijo de claves de miss
+    # True si puede ofrecer datos NUEVOS sobre un evento ya procesado
+    # (los listados estáticos descargan el detalle de partido lazy
+    # por mercado: un pick re-etiquetado DNB en un evento "done" aún
+    # puede recibir su fila "Draw no bet"). Las APIs traen todo el
+    # mercado en una llamada — un evento hecho no tiene nada nuevo.
+    revisit_done: bool = False
 
     @property
     def sport_ids(self) -> dict[str, int]: ...
@@ -537,6 +543,10 @@ class _StaticListingSource:
     fetcher: Any = None
     matcher: Any = None
     choicer: Any = None
+    # Detalle lazy por mercado: un evento "done" puede seguir sirviendo
+    # mercados que no se pidieron antes (reparación DC->DNB, picks que
+    # llegan tarde a un partido ya auditado en 1X2).
+    revisit_done = True
 
     def __init__(self) -> None:
         self._days: dict[date, Optional[list[static_pages.StaticMatch]]] = {}
@@ -1032,7 +1042,7 @@ async def _run_source(
         sport = _canonical_sport(pick.deporte)
         if sport not in source.sport_ids:
             continue
-        if pick.odds_event_id in done:
+        if pick.odds_event_id in done and not getattr(source, "revisit_done", False):
             continue
         if resolved_picks is not None and pick.id in resolved_picks:
             continue
@@ -1105,7 +1115,7 @@ async def _run_source(
                         if other.name != source.name:
                             clear_missed(f"{other.name}|nofixture|{pick.id}")
             ext_id = source.ext_id(fixture)
-            if ext_id in done:
+            if ext_id in done and not getattr(source, "revisit_done", False):
                 continue
             slot = fixtures_picks.setdefault(
                 source.fixture_key(fixture), (fixture, sport, [])
@@ -1210,7 +1220,56 @@ async def _run_source(
             if ext_id not in registered:
                 session.add(event)
                 registered.add(ext_id)
+            # Eventos revisitados (fuentes lazy): las opciones ya
+            # escritas no se duplican — una fila libre del mismo key
+            # se re-sella al pick que casó (cubre el caso del pick
+            # re-etiquetado cuya fila buena ya existía sin dueño).
+            existing_keys: set[tuple] = set()
+            if ext_id in done:
+                existing_keys = {
+                    (r[0], r[1], r[2])
+                    for r in (
+                        await session.exec(
+                            select(
+                                OddsSnapshot.market_name,
+                                OddsSnapshot.choice_name,
+                                OddsSnapshot.choice_group,
+                            )
+                            .where(OddsSnapshot.event_ext_id == ext_id)
+                            .where(OddsSnapshot.provider == source.name)
+                        )
+                    ).all()
+                }
             for key, owner_id in matched_keys.items():
+                if key in existing_keys:
+                    free = (
+                        await session.exec(
+                            select(OddsSnapshot)
+                            .where(OddsSnapshot.provider == source.name)
+                            .where(OddsSnapshot.event_ext_id == ext_id)
+                            .where(OddsSnapshot.market_name == key[0])
+                            .where(OddsSnapshot.choice_name == key[1])
+                            .where(
+                                (OddsSnapshot.choice_group == key[2])
+                                if key[2] is not None
+                                else (OddsSnapshot.choice_group == None)  # noqa: E711
+                            )
+                            .where(OddsSnapshot.parsed_pick_id == None)  # noqa: E711
+                        )
+                    ).all()
+                    if free:
+                        for row in free:
+                            row.parsed_pick_id = owner_id
+                            session.add(row)
+                        report.detalles.append(
+                            f"  ~ pick {owner_id}: {key[0]}/{key[1]} "
+                            f"re-sellado ({len(free)} filas libres) "
+                            f"[{source.name}]"
+                        )
+                        continue
+                    # Todas atribuidas a picks hermanos: se escribe la
+                    # copia propia (misma convención que el snapshotter,
+                    # una fila por pick resuelto) cayendo al write de abajo.
                 for point in downsample(by_key[key].points):
                     session.add(
                         OddsSnapshot(

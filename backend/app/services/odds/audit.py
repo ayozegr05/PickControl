@@ -64,6 +64,17 @@ class AuditReport:
     sin_evento: int = 0
     ejemplos_mal: list[str] = field(default_factory=list)
     ejemplos_sin_map: list[str] = field(default_factory=list)
+    # --- datos internos para la sanación (run_odds_audit) ---
+    # Picks por categoría y, para cada `mal`, (event_ext_id, tripleta
+    # correcta) que el mapeador eligió — sirve para re-sellar la fila
+    # buena si hay alguna libre en el evento.
+    mal_ids: list[int] = field(default_factory=list)
+    sin_map_ids: list[int] = field(default_factory=list)
+    mal_targets: dict[int, tuple[str, tuple[str, str, str | None]]] = field(
+        default_factory=dict
+    )
+    desatribuidas: int = 0
+    reselladas: int = 0
 
     def as_dict(self) -> dict:
         """Resumen compacto para `record_loop_summary`."""
@@ -74,6 +85,8 @@ class AuditReport:
             "mal": self.mal,
             "sin_backfill": self.sin_backfill,
             "sin_evento": self.sin_evento,
+            "desatribuidas": self.desatribuidas,
+            "reselladas": self.reselladas,
             "ejemplos_mal": self.ejemplos_mal,
             "ejemplos_sin_map": self.ejemplos_sin_map,
         }
@@ -166,6 +179,7 @@ async def audit_stored_snapshots(session: AsyncSession) -> AuditReport:
         matched_ok = False
         mapped_none = True
         mapped_desc = ""
+        mapped_target: tuple[str, tuple[str, str, str | None]] | None = None
         for ext_id in pick_events.get(pick_id, ()):
             event = events.get(ext_id)
             rows = rows_by_event.get(ext_id, [])
@@ -176,6 +190,11 @@ async def audit_stored_snapshots(session: AsyncSession) -> AuditReport:
                 continue
             mapped_none = False
             mapped_desc = f"{matched.market_name}/{matched.choice_name}"
+            if mapped_target is None:
+                mapped_target = (
+                    ext_id,
+                    (matched.market_name, matched.choice_name, matched.choice_group),
+                )
             if (
                 matched.market_name,
                 matched.choice_name,
@@ -187,10 +206,14 @@ async def audit_stored_snapshots(session: AsyncSession) -> AuditReport:
             report.ok += 1
         elif mapped_none:
             report.sin_map += 1
+            report.sin_map_ids.append(pick_id)
             if len(report.ejemplos_sin_map) < _SAMPLE_MAX:
                 report.ejemplos_sin_map.append(f"{label}: {sorted(bf_triples)[:1]}")
         else:
             report.mal += 1
+            report.mal_ids.append(pick_id)
+            if mapped_target:
+                report.mal_targets[pick_id] = mapped_target
             if len(report.ejemplos_mal) < _SAMPLE_MAX:
                 report.ejemplos_mal.append(
                     f"{label}: guardado {sorted(bf_triples)[:1]}, "
@@ -199,10 +222,78 @@ async def audit_stored_snapshots(session: AsyncSession) -> AuditReport:
     return report
 
 
-async def run_odds_audit(session: AsyncSession) -> AuditReport:
-    """Pasada completa: audita, registra el resumen y avisa si hay
-    filas mal mapeadas. Pensada para el loop semanal de lifecycle."""
+async def _heal_attributions(
+    session: AsyncSession, report: AuditReport
+) -> tuple[int, int]:
+    """Des-atribuye las filas de backfill de picks `mal`/`sin_map` y
+    re-sella la fila correcta cuando hay una libre en el evento.
+
+    `parsed_pick_id` en una fila de backfill afirma "esta fila resuelve
+    a ese pick" — si el mapeador ya no la casa, la afirmación es falsa
+    y se corrige (la fila sigue existiendo como dato de mercado). El
+    pick queda de nuevo "no resuelto" en el embudo... salvo que la
+    tripleta correcta exista ya libre en el mismo evento, en cuyo caso
+    se le re-sella y queda resuelto bien.
+
+    Devuelve (desatribuidas, reselladas)."""
+    from app.services.odds.historical_backfill import _BACKFILL_PROVIDERS
+
+    cleared_ids = report.mal_ids + report.sin_map_ids
+    if not cleared_ids:
+        return 0, 0
+    stale = list(
+        (
+            await session.exec(
+                select(OddsSnapshot)
+                .where(OddsSnapshot.parsed_pick_id.in_(cleared_ids))
+                .where(OddsSnapshot.provider.in_(_BACKFILL_PROVIDERS))
+            )
+        ).all()
+    )
+    for row in stale:
+        row.parsed_pick_id = None
+        session.add(row)
+
+    restamped = 0
+    for pick_id, (ext_id, triple) in report.mal_targets.items():
+        market, choice, group = triple
+        # Solo filas de backfill: son las que cuentan como "resuelto"
+        # en el embudo (`_resolved_pick_ids` filtra por provider).
+        free = list(
+            (
+                await session.exec(
+                    select(OddsSnapshot)
+                    .where(OddsSnapshot.event_ext_id == ext_id)
+                    .where(OddsSnapshot.provider.in_(_BACKFILL_PROVIDERS))
+                    .where(OddsSnapshot.market_name == market)
+                    .where(OddsSnapshot.choice_name == choice)
+                    .where(
+                        (OddsSnapshot.choice_group == group)
+                        if group is not None
+                        else (OddsSnapshot.choice_group == None)  # noqa: E711
+                    )
+                    .where(OddsSnapshot.parsed_pick_id == None)  # noqa: E711
+                    .limit(1)
+                )
+            ).all()
+        )
+        if free:
+            free[0].parsed_pick_id = pick_id
+            session.add(free[0])
+            restamped += 1
+    return len(stale), restamped
+
+
+async def run_odds_audit(session: AsyncSession, *, heal: bool = True) -> AuditReport:
+    """Pasada completa: audita, sana las atribuciones rotas (los picks
+    afectados vuelven a la cola o quedan re-sellados a su fila real),
+    registra el resumen y avisa si hubo filas mal mapeadas."""
     report = await audit_stored_snapshots(session)
+    if heal and (report.mal or report.sin_map):
+        report.desatribuidas, report.reselladas = await _heal_attributions(
+            session, report
+        )
+        await session.commit()
     record_loop_summary("odds_audit", report.as_dict())
     if report.mal:
         from app.services.notifications.push import notify_odds_audit_mismatch

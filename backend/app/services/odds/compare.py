@@ -263,34 +263,37 @@ def map_pick_choices(
                 for row in dc:
                     if row.choice_name.lower() == code:
                         return _group_rows(snapshots, row)
-        # "Equipo o/y empate": el equipo decide el lado (1X o X2).
-        if re.search(r"\bempate\b|\bdraw\b", low):
-            dc_team = re.sub(r"\b(empate|draw|o|y|e|or|and)\b", " ", low).strip()
+        # "Equipo o/y empate", "equipo gana o empata": la mención al
+        # empate decide 1X/X2 por el lado del equipo.
+        if re.search(r"empat\w*|\bdraw\b", low):
+            dc_team = re.sub(
+                r"\b(empat\w*|draw|o|y|e|or|and|gan\w*|el|la|los|las|"
+                r"partido|doble|oportunidad|double|chance)\b",
+                " ",
+                low,
+            ).strip()
             if dc_team:
                 side = _side_index(dc_team, event)
                 code = {0: "1X", 1: "X2"}.get(side)
                 for row in dc:
                     if code and row.choice_name == code:
                         return _group_rows(snapshots, row)
-        elif team:
-            side = _side_index(team, event)
-            code = {0: "1X", 1: "X2"}.get(side)
-            for row in dc:
-                if code and row.choice_name == code:
-                    return _group_rows(snapshots, row)
         # "EquipoA o EquipoB" (gana cualquiera) -> 12.
-        if re.search(r"\s+o\s+|\s*/\s*|\s+or\s+", low):
+        elif re.search(r"\s+o\s+|\s*/\s*|\s+or\s+|cualquiera", low):
             for row in dc:
                 if row.choice_name == "12":
                     return _group_rows(snapshots, row)
-        # El mercado está reconocido pero el proveedor no lo publica
-        # (p. ej. betexplorer solo trae 1X2 seco): miss honesto —
-        # comparar "gana o empata" @1.5 contra la victoria seca @2.91
-        # sería inventar la comparación (bug real: pick 5530).
+        # Sin señal explícita (empate/o/12) NO se adivina por el lado
+        # del equipo: una selección truncada ("X gana") compararía la
+        # cuota contra la pata equivocada — y de hecho los casos reales
+        # (picks 5429/5645) eran "resultado sin empate" mal extraído,
+        # otro mercado distinto. Miss honesto antes que inventar.
         return None
 
     if re.search(
-        r"empate\s+no\s+v[aá]lido|resultado\s+sin\s+empate|draw\s+no\s+bet", text
+        r"empate\s+no\s+v[aá]lido|empate\s+no\s+cuenta|empate\s+no\s+vale|"
+        r"resultado\s+sin\s+empate|draw\s+no\s+bet|sin\s+empate",
+        text,
     ):
         if team:
             matched = _match_side(
