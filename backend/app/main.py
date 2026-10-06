@@ -16,11 +16,13 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.lifecycle import lifespan
 from app.core.logging import configure_logging, get_logger
+from app.db.postgres import AsyncSessionLocal
 
 
 def _parse_cors_origins(origins: str) -> list[str]:
@@ -90,5 +92,8 @@ app.include_router(api_router, prefix="/api/v1")
 
 @app.get("/")
 async def root() -> dict[str, str]:
-    """Equivalente a `app.get("/", ...)` en app.js."""
+    """Healthcheck público (UptimeRobot): SELECT 1 para detectar también
+    "app viva pero BD muerta", no solo "proceso caído"."""
+    async with AsyncSessionLocal() as session:
+        await session.exec(text("SELECT 1"))
     return {"message": "Servidor funcionando"}
