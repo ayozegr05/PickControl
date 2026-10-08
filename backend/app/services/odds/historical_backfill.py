@@ -51,10 +51,11 @@ El CLI `scripts/backfill_historical_odds.py` es solo un wrapper de
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Optional, Protocol
+from typing import Any, Optional, Protocol, Union
 
 import httpx
 from sqlalchemy import distinct, func
@@ -799,6 +800,47 @@ class _SofaFixture:
         return f"sofascore:{self.event_id}"
 
 
+@dataclass
+class _SofaSearchSpace:
+    """Marcador de "modo búsqueda": los listados `scheduled-events`
+    no están disponibles (directo vetado por Cloudflare a nivel IP,
+    espejos sin cuota o sin ruta de calendario) y los picks del cubo
+    se resuelven por búsqueda dual de evento contra allsportsapi2 —
+    las peticiones salen de servidores de RapidAPI, no de nuestra VM.
+    No es un listado: `match()` lo detecta y resuelve pick a pick."""
+
+    sport: str
+    provider: SofaScoreOddsProvider
+    http: httpx.AsyncClient
+
+
+# Retorno de `match()` en modo búsqueda cuando la API falla (cuota o
+# red): el loop lo cuenta "sin revisar" como un error de fixtures —
+# NO marca `nofixture`, porque no sabemos si el evento existe.
+_SEARCH_FAILED = object()
+
+# Tolerancia del modo búsqueda: la búsqueda dual devuelve TODAS las
+# ediciones históricas del enfrentamiento (Suecia-Polonia se repite
+# cada año); la fecha del pick desambigúa — mismo margen que el
+# listado del loop (±1 día).
+_SEARCH_DATE_TOLERANCE = timedelta(days=1)
+
+
+def _split_event_hint(hint: str) -> tuple[str, str]:
+    """ "Suecia - Polonia" / "A vs B" -> ("Suecia", "Polonia")."""
+    parts = re.split(r"[/+&]|\s+-\s+|\s+vs?\.?\s+", hint, maxsplit=1)
+    home = parts[0].strip() if parts else ""
+    away = parts[1].strip() if len(parts) > 1 else ""
+    return home, away
+
+
+def _search_query(hint: str) -> str:
+    """Consulta para `/api/search/{q}`: "Suecia - Polonia" ->
+    "Sweden Poland" (los eventos se buscan con ambos nombres)."""
+    home, away = _split_event_hint(_translate_countries(hint))
+    return f"{home} {away}".strip()
+
+
 class _SofaScoreHistSource:
     """Sofascore: listado del día (`scheduled-events`) + odds completas
     por evento (`/api/v1/event/{id}/odds/1/all`).
@@ -830,12 +872,17 @@ class _SofaScoreHistSource:
     _MIN_SCORE = 0.6
     _SPORT_IDS = {"futbol": 1, "tenis": 2, "baloncesto": 3}
     _SLUGS = {1: "football", 2: "tennis", 3: "basketball"}
+    _SPORT_NAMES = {v: k for k, v in _SPORT_IDS.items()}
     # Convención football_csv: la apertura se ancla a inicio-7d.
     _OPENING_ANCHOR = timedelta(days=7)
 
     def __init__(self, settings) -> None:
         self._listing: list = []
         self._odds: list = []
+        # Provider de esquema propio que además sirve la búsqueda dual
+        # de eventos (`/api/search/{local} {visitante}`) — el plan B
+        # para cuando los listados por día están vetados.
+        self._search_provider: Optional[SofaScoreOddsProvider] = None
         sports = frozenset(self._SPORT_IDS)
         rapidapi_key = getattr(settings, "rapidapi_tennis_key", None)
         if rapidapi_key:
@@ -850,14 +897,13 @@ class _SofaScoreHistSource:
             # Cuota dedicada de odds (esquema propio, solo tenis+futbol).
             allsports_host = getattr(settings, "rapidapi_allsports_host", None)
             if allsports_host:
-                self._odds.append(
-                    SofaScoreOddsProvider(
-                        name="allsportsapi2",
-                        api_key=rapidapi_key,
-                        api_host=allsports_host,
-                        sports=frozenset({"tenis", "futbol"}),
-                    )
+                self._search_provider = SofaScoreOddsProvider(
+                    name="allsportsapi2",
+                    api_key=rapidapi_key,
+                    api_host=allsports_host,
+                    sports=frozenset({"tenis", "futbol"}),
                 )
+                self._odds.append(self._search_provider)
             if getattr(settings, "rapidapi_sofascore6_enabled", False):
                 self._odds.append(
                     SofaScoreNativeOddsProvider(
@@ -872,7 +918,9 @@ class _SofaScoreHistSource:
             t_direct = direct_transport()
             self._listing.append(t_direct)
             self._odds.append(SofaScoreNativeOddsProvider(t_direct, sports))
-        self._days: dict[tuple[int, date], Optional[list[_SofaFixture]]] = {}
+        self._days: dict[
+            tuple[int, date], Optional[Union[list[_SofaFixture], _SofaSearchSpace]]
+        ] = {}
 
     @property
     def sport_ids(self) -> dict[str, int]:
@@ -897,7 +945,10 @@ class _SofaScoreHistSource:
 
     async def fixtures(self, http, sport_id: int, day: date):
         """Todos los eventos del día; None = error/listing no disponible
-        (reintento próxima pasada — un día vacío legítimo devuelve [])."""
+        (reintento próxima pasada — un día vacío legítimo devuelve []).
+        Si NINGÚN transporte de listado responde y hay provider de
+        búsqueda configurado, devuelve `_SofaSearchSpace`: los picks
+        del cubo se resolverán por búsqueda dual de evento."""
         key = (sport_id, day)
         if key in self._days:
             return self._days[key]
@@ -915,10 +966,21 @@ class _SofaScoreHistSource:
                     continue
                 found = [f for f in (self._parse_event(e) for e in events) if f]
                 break
+        if found is None and self._search_provider is not None:
+            space = _SofaSearchSpace(
+                sport=self._SPORT_NAMES.get(sport_id, "futbol"),
+                provider=self._search_provider,
+                http=http,
+            )
+            self._days[key] = space
+            return space
         self._days[key] = found
         return found
 
     def match(self, fixtures, hint, dt, sofascore_id):
+        if isinstance(fixtures, _SofaSearchSpace):
+            # Modo búsqueda: el loop espera la corrutina devuelta.
+            return self._search_match(fixtures, hint, dt, sofascore_id)
         if sofascore_id is not None:
             for f in fixtures:
                 if f.event_id == sofascore_id:
@@ -936,6 +998,51 @@ class _SofaScoreHistSource:
             score = max(match_score(h, f.home_name, f.away_name) for h in hints)
             if score > best_score:
                 best, best_score = f, score
+        return best if best_score >= self._MIN_SCORE else None
+
+    async def _search_match(self, space: _SofaSearchSpace, hint, dt, sofascore_id):
+        """Resolución por búsqueda dual cuando el listado del día no
+        está disponible: `/api/search/{local} {visitante}` devuelve
+        entidades `event` de TODAS las ediciones del enfrentamiento —
+        se filtra por fecha del pick (±1d) y se puntúa como el match
+        normal. Devuelve `_SEARCH_FAILED` si la API falla (transitorio:
+        sin marca `nofixture`, reintenta en la próxima pasada)."""
+        if sofascore_id is not None:
+            # El snapshotter en vivo ya identificó el evento — misma
+            # familia de ids: gratis, sin llamada de búsqueda.
+            home, away = _split_event_hint(hint)
+            return _SofaFixture(sofascore_id, home, away, dt)
+        provider = space.provider
+        if is_rate_limited(provider.NAME):
+            return _SEARCH_FAILED
+        query = _search_query(hint)
+        if not query:
+            return None
+        results = await provider._search(space.http, space.sport, query)
+        if results is None:
+            return _SEARCH_FAILED
+        hints = [hint]
+        translated = _translate_countries(hint)
+        if translated != hint:
+            hints.append(translated)
+        day = dt.date() if isinstance(dt, datetime) else dt
+        best: Optional[_SofaFixture] = None
+        best_score = 0.0
+        for res in results:
+            if res.get("type") != "event":
+                continue
+            fx = self._parse_event(res.get("entity") or {})
+            if fx is None:
+                continue
+            if (
+                day is not None
+                and fx.start is not None
+                and abs(fx.start - dt) > _SEARCH_DATE_TOLERANCE
+            ):
+                continue
+            score = max(match_score(h, fx.home_name, fx.away_name) for h in hints)
+            if score > best_score:
+                best, best_score = fx, score
         return best if best_score >= self._MIN_SCORE else None
 
     def ext_id(self, fixture: _SofaFixture) -> str:
@@ -1280,6 +1387,7 @@ async def _run_source(
         # Un día por llamada y la caché del cliente dedup los días
         # compartidos entre buckets vecinos.
         fixtures: list = []
+        search_space: Optional[_SofaSearchSpace] = None
         api_error = False
         for delta in (-1, 0, 1):
             day_fixtures = await source.fixtures(
@@ -1288,6 +1396,9 @@ async def _run_source(
             if day_fixtures is None:
                 api_error = True
                 break
+            if isinstance(day_fixtures, _SofaSearchSpace):
+                search_space = search_space or day_fixtures
+                continue
             fixtures += day_fixtures
         if api_error:
             report.sin_revisar += len(day_picks)
@@ -1296,11 +1407,25 @@ async def _run_source(
                 f"{day}: {len(day_picks)} picks sin revisar"
             )
             continue
+        # Con listado vacío y modo búsqueda disponible, los picks se
+        # resuelven evento a evento contra allsportsapi2.
+        match_space = search_space if not fixtures else None
         for pick in day_picks:
             hint = _lookup_hint(pick, sport) or ""
-            fixture = source.match(
-                fixtures, hint, pick.fecha_evento, _sofascore_id(pick)
+            found = source.match(
+                match_space if match_space is not None else fixtures,
+                hint,
+                pick.fecha_evento,
+                _sofascore_id(pick),
             )
+            fixture = await found if inspect.isawaitable(found) else found
+            if fixture is _SEARCH_FAILED:
+                report.sin_revisar += 1
+                report.detalles.append(
+                    f"  ! [{source.name}] error de API resolviendo "
+                    f"pick {pick.id} — reintento próxima pasada"
+                )
+                continue
             if fixture is None:
                 report.sin_fixture += 1
                 report.detalles.append(
