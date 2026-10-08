@@ -53,7 +53,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional, Protocol
 
 import httpx
@@ -75,6 +75,7 @@ from app.services.odds import (
     static_pages,
     tennisdata,
 )
+from app.services.odds.base import MarketChoice
 from app.services.odds.compare import map_pick_choices
 from app.services.odds.event_rescue import looks_like_match_hint, rescue_evento
 from app.services.odds.oddsfeed import (
@@ -97,6 +98,7 @@ from app.services.odds.oddspapi import (
     match_fixture as oddspapi_match,
 )
 from app.services.odds.snapshotter import _canonical_sport, _lookup_hint
+from app.services.odds.sofascore import SofaScoreOddsProvider
 from app.services.results import compat_llm
 from app.services.results.base import (
     clear_missed,
@@ -108,10 +110,18 @@ from app.services.results.base import (
     loop_history,
     loop_summary,
     mark_missed,
+    match_score,
     rate_limited_until,
     record_loop_summary,
 )
+from app.services.results.espn import _translate_countries
 from app.services.results.gemini_research import GeminiResearchProvider
+from app.services.results.sofascore_native import (
+    SofaScoreNativeOddsProvider,
+    direct_transport,
+    rapidapi_transport,
+    sofascore6_transport,
+)
 
 # La histórico del pick solo existe si el evento ya pasó (con margen
 # para no pillar partidos en vivo a mitad de curva).
@@ -775,6 +785,211 @@ class _BetExplorerSource(_StaticListingSource):
         return ("ok", choices)
 
 
+@dataclass
+class _SofaFixture:
+    """Fixture Sofascore mínimo para el contrato de fuente."""
+
+    event_id: int
+    home_name: str
+    away_name: str
+    start: Optional[datetime]
+
+    @property
+    def ext_id(self) -> str:
+        return f"sofascore:{self.event_id}"
+
+
+class _SofaScoreHistSource:
+    """Sofascore: listado del día (`scheduled-events`) + odds completas
+    por evento (`/api/v1/event/{id}/odds/1/all`).
+
+    Cubre lo que las fuentes anteriores no tenían: selecciones
+    nacionales, femenino, ligas exóticas y mercados extra del partido
+    (córners, tarjetas, BTTS, escalera O/U completa, props de jugador
+    cuando la casa los ofreció). Los eventos terminados siguen
+    sirviendo apertura (`initialFractionalValue`) y cierre — dos
+    puntos de curva reales, misma convención de anclas que el CSV
+    (apertura a inicio-7d, cierre al inicio).
+
+    Transportes:
+    - Listado por día: solo rutas nativas — sportapi7 (si está
+      suscrito) y el directo curl_cffi. Los espejos de esquema propio
+      (allsportsapi2/sofascore6) no tienen listado por fecha.
+    - Odds por evento: primero allsportsapi2 (cuota dedicada del
+      snapshotter), luego los nativos sportapi7/sofascore6 y el
+      directo al final (expone la IP a Cloudflare — último recurso,
+      mismo orden que el snapshotter).
+
+    `revisit_done=True`: un evento ya auditado en 1X2 por las páginas
+    estáticas puede recibir aquí córners/tarjetas/props — una llamada
+    trae TODOS los mercados.
+    """
+
+    name = "sofascore"
+    revisit_done = True
+    _MIN_SCORE = 0.6
+    _SPORT_IDS = {"futbol": 1, "tenis": 2, "baloncesto": 3}
+    _SLUGS = {1: "football", 2: "tennis", 3: "basketball"}
+    # Convención football_csv: la apertura se ancla a inicio-7d.
+    _OPENING_ANCHOR = timedelta(days=7)
+
+    def __init__(self, settings) -> None:
+        self._listing: list = []
+        self._odds: list = []
+        sports = frozenset(self._SPORT_IDS)
+        rapidapi_key = getattr(settings, "rapidapi_tennis_key", None)
+        if rapidapi_key:
+            if getattr(settings, "rapidapi_sportapi7_enabled", False):
+                t7 = rapidapi_transport(
+                    "sportapi7",
+                    settings.rapidapi_sportapi7_host,
+                    rapidapi_key,
+                )
+                self._listing.append(t7)
+                self._odds.append(SofaScoreNativeOddsProvider(t7, sports))
+            # Cuota dedicada de odds (esquema propio, solo tenis+futbol).
+            allsports_host = getattr(settings, "rapidapi_allsports_host", None)
+            if allsports_host:
+                self._odds.append(
+                    SofaScoreOddsProvider(
+                        name="allsportsapi2",
+                        api_key=rapidapi_key,
+                        api_host=allsports_host,
+                        sports=frozenset({"tenis", "futbol"}),
+                    )
+                )
+            if getattr(settings, "rapidapi_sofascore6_enabled", False):
+                self._odds.append(
+                    SofaScoreNativeOddsProvider(
+                        sofascore6_transport(
+                            settings.rapidapi_sofascore6_host,
+                            rapidapi_key,
+                        ),
+                        sports,
+                    )
+                )
+        if getattr(settings, "sofascore_direct_enabled", True):
+            t_direct = direct_transport()
+            self._listing.append(t_direct)
+            self._odds.append(SofaScoreNativeOddsProvider(t_direct, sports))
+        self._days: dict[tuple[int, date], Optional[list[_SofaFixture]]] = {}
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return self._SPORT_IDS
+
+    @staticmethod
+    def _parse_event(raw: dict) -> Optional[_SofaFixture]:
+        eid = raw.get("id")
+        home = (raw.get("homeTeam") or {}).get("name") or ""
+        away = (raw.get("awayTeam") or {}).get("name") or ""
+        ts = raw.get("startTimestamp")
+        if not eid or not home or not away:
+            return None
+        start = (
+            datetime.fromtimestamp(ts, timezone.utc).replace(tzinfo=None)
+            if ts
+            else None
+        )
+        return _SofaFixture(
+            event_id=int(eid), home_name=home, away_name=away, start=start
+        )
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        """Todos los eventos del día; None = error/listing no disponible
+        (reintento próxima pasada — un día vacío legítimo devuelve [])."""
+        key = (sport_id, day)
+        if key in self._days:
+            return self._days[key]
+        slug = self._SLUGS.get(sport_id)
+        found: Optional[list[_SofaFixture]] = None
+        if slug:
+            for transport in self._listing:
+                data = await transport.get_json(
+                    f"/api/v1/sport/{slug}/scheduled-events/{day:%Y-%m-%d}"
+                )
+                if data is None:
+                    continue
+                events = data.get("events")
+                if events is None:
+                    continue
+                found = [f for f in (self._parse_event(e) for e in events) if f]
+                break
+        self._days[key] = found
+        return found
+
+    def match(self, fixtures, hint, dt, sofascore_id):
+        if sofascore_id is not None:
+            for f in fixtures:
+                if f.event_id == sofascore_id:
+                    return f
+        # Los tipsters escriben selecciones en español ("Suecia -
+        # Polonia") y Sofascore las nombra en inglés — se puntúa con
+        # la traducción y con el original y se queda la mejor.
+        hints = [hint]
+        translated = _translate_countries(hint)
+        if translated != hint:
+            hints.append(translated)
+        best: Optional[_SofaFixture] = None
+        best_score = 0.0
+        for f in fixtures:
+            score = max(match_score(h, f.home_name, f.away_name) for h in hints)
+            if score > best_score:
+                best, best_score = f, score
+        return best if best_score >= self._MIN_SCORE else None
+
+    def ext_id(self, fixture: _SofaFixture) -> str:
+        return fixture.ext_id
+
+    def fixture_key(self, fixture: _SofaFixture) -> str:
+        return fixture.ext_id
+
+    @staticmethod
+    def _to_choices(rows: list[MarketChoice], start) -> list[HistoricalChoice]:
+        """MarketChoice (cierre + apertura) -> HistoricalChoice con la
+        curva de dos puntos (convención del CSV). Sin precio no hay fila."""
+        out: list[HistoricalChoice] = []
+        for c in rows:
+            points: list[PricePoint] = []
+            if c.cuota_apertura:
+                points.append(
+                    PricePoint(
+                        captured_at=start - _SofaScoreHistSource._OPENING_ANCHOR,
+                        cuota=c.cuota_apertura,
+                        suspended=c.suspended,
+                    )
+                )
+            if c.cuota:
+                points.append(
+                    PricePoint(captured_at=start, cuota=c.cuota, suspended=c.suspended)
+                )
+            if points:
+                out.append(
+                    HistoricalChoice(
+                        market_name=c.market_name,
+                        choice_name=c.choice_name,
+                        choice_group=c.choice_group,
+                        points=points,
+                    )
+                )
+        return out
+
+    async def choices(self, http, fixture: _SofaFixture, sport, picks):
+        """Todas las opciones del evento por la cadena de transportes.
+        [] explícito (evento sin mercados) = miss definitivo; todos
+        None = error transitorio (cuota/red) -> reintento."""
+        saw_empty = False
+        for provider in self._odds:
+            rows = await provider.fetch_odds(fixture.ext_id, sport)
+            if rows is None:
+                continue
+            choices = self._to_choices(rows, fixture.start or utc_now())
+            if choices:
+                return "ok", choices
+            saw_empty = True
+        return ("miss", []) if saw_empty else ("error", [])
+
+
 def _book_defs(books, book) -> list:
     """Las (idx, choice_name, choice_group) del market_book dado."""
     for candidate, defs in books:
@@ -788,6 +1003,7 @@ _BACKFILL_PROVIDERS = (
     tennisdata.NAME,
     static_pages.NAME_TE,
     static_pages.NAME_BE,
+    _SofaScoreHistSource.name,
     oddspapi.NAME,
     oddsfeed.NAME,
     *_LLM_EXTRACTOR_PROVIDERS,
@@ -844,6 +1060,7 @@ def _sources(settings) -> list[_HistorySource]:
         _TennisDataSource(),
         _TennisExplorerSource(),
         _BetExplorerSource(),
+        _SofaScoreHistSource(settings),
     ]
     if settings.rapidapi_tennis_key:
         sources.append(

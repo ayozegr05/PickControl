@@ -122,7 +122,8 @@ async def _engine_gemini(prompt: str, settings) -> str | None:
 
 
 async def _engine_compat(name: str, prompt: str, settings) -> str | None:
-    ep = next((e for e in compat_llm._ENDPOINTS if e.name == name), None)
+    eps = (*compat_llm._ENDPOINTS, compat_llm._GROQ_INGESTA)
+    ep = next((e for e in eps if e.name == name), None)
     key = getattr(settings, ep.env_key, None) if ep else None
     if not ep or not key:
         return None
@@ -205,7 +206,9 @@ def _compare(
         )
 
 
-async def _bench_picks(limit: int, engines: list[str], solo_ocr: bool):
+async def _bench_picks(
+    limit: int, engines: list[str], solo_ocr: bool, sleep: float = 0
+):
     settings = get_settings()
     async with AsyncSessionLocal() as session:
         picks = (
@@ -273,6 +276,8 @@ async def _bench_picks(limit: int, engines: list[str], solo_ocr: bool):
             continue
         prompt = _user_content(text, raw.channel_name, raw.received_at)
         for engine in engines:
+            if sleep:
+                await asyncio.sleep(sleep)
             if engine == "openai":
                 content = await _engine_openai(prompt, settings)
             elif engine == "gemini":
@@ -390,13 +395,21 @@ def main():
         action="store_true",
         help="Solo picks cuyo raw pasó por el OCR de OpenAI (mismo input para todos)",
     )
+    ap.add_argument(
+        "--sleep",
+        type=float,
+        default=0,
+        help="Segundos entre llamadas de motor (los free tiers tienen RPM bajo — sin pausa una ráfaga de 30 se come el límite y mide cuota, no calidad)",
+    )
     args = ap.parse_args()
 
     if args.ocr:
         asyncio.run(_bench_ocr(args.limit))
         return
     engines = [e.strip() for e in args.engines.split(",") if e.strip()]
-    scores, n = asyncio.run(_bench_picks(args.limit, engines, args.solo_ocr))
+    scores, n = asyncio.run(
+        _bench_picks(args.limit, engines, args.solo_ocr, args.sleep)
+    )
     _print_report(scores, n)
 
 
