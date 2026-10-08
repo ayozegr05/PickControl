@@ -78,6 +78,20 @@ _ENDPOINTS: tuple[Endpoint, ...] = (
     ),
 )
 
+# Pool de cuota separado SOLO para la ingesta: los límites de Groq son
+# por modelo — compartir gpt-oss-120b entre picks y el pipeline de
+# cuotas producía ~30% de 429 diarios (ráfagas por minuto). Con
+# `purpose="ingesta"` este endpoint va primero (marca propia
+# `llm-compat-groq-ingesta`, stats propias en extract_stats); si cae,
+# la cascada normal sigue como red. qwen3.8-27b verificado en vivo:
+# JSON limpio para el prompt de picks; gpt-oss-20b devuelve vacío.
+_GROQ_INGESTA = Endpoint(
+    "groq-ingesta",
+    "https://api.groq.com/openai/v1",
+    "qwen/qwen3.8-27b",
+    "groq_api_key",
+)
+
 
 def _mark(endpoint: Endpoint) -> str:
     return f"{_MARK}-{endpoint.name}"
@@ -108,10 +122,13 @@ async def extract_text(
     None si ningún endpoint configurado/vivo responde — el fallback
     (Gemini) corre por cuenta de quien llama.
 
-    `purpose` etiqueta la llamada ('cuotas'/'resultados'/'stats') para
-    el desglose por propósito en la vista de sistema."""
+    `purpose` etiqueta la llamada ('cuotas'/'resultados'/'stats'/
+    'ingesta') para el desglose por propósito en la vista de sistema.
+    Con 'ingesta' se intenta antes el pool separado `_GROQ_INGESTA`:
+    los picks de Telegram no compiten por la cuota de gpt-oss-120b."""
     s = settings or get_settings()
-    for endpoint in _ENDPOINTS:
+    endpoints = (_GROQ_INGESTA, *_ENDPOINTS) if purpose == "ingesta" else _ENDPOINTS
+    for endpoint in endpoints:
         key = getattr(s, endpoint.env_key, None)
         if not key or is_rate_limited(_mark(endpoint)):
             continue

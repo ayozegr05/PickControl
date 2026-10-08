@@ -117,6 +117,52 @@ class TestExtractText:
         s = _settings(groq="k", cerebras="k", openrouter="k")
         assert await compat_llm.extract_text("p", settings=s) is None
 
+    async def test_ingesta_usa_pool_separado_primero(self, monkeypatch):
+        calls = []
+
+        async def fake(ep, key, prompt, purpose=""):
+            calls.append(ep.name)
+            return "ok"
+
+        monkeypatch.setattr(compat_llm, "_call", fake)
+        s = _settings(groq="k1")
+        assert await compat_llm.extract_text("p", purpose="ingesta", settings=s) == (
+            "ok",
+            "groq-ingesta",
+        )
+        assert calls == ["groq-ingesta"]
+
+    async def test_ingesta_cae_a_cascada_si_pool_aparcado(self, monkeypatch):
+        results_base.mark_cooldown(
+            "llm-compat-groq-ingesta", utc_now() + timedelta(hours=1)
+        )
+        calls = []
+
+        async def fake(ep, key, prompt, purpose=""):
+            calls.append(ep.name)
+            return "ok"
+
+        monkeypatch.setattr(compat_llm, "_call", fake)
+        s = _settings(groq="k1")
+        assert await compat_llm.extract_text("p", purpose="ingesta", settings=s) == (
+            "ok",
+            "groq",
+        )
+        # groq-ingesta ni se intenta (aparcado), groq compartido responde.
+        assert calls == ["groq"]
+
+    async def test_otros_propositos_no_usan_pool_ingesta(self, monkeypatch):
+        calls = []
+
+        async def fake(ep, key, prompt, purpose=""):
+            calls.append(ep.name)
+            return "ok"
+
+        monkeypatch.setattr(compat_llm, "_call", fake)
+        s = _settings(groq="k1")
+        await compat_llm.extract_text("p", purpose="cuotas", settings=s)
+        assert calls == ["groq"]
+
 
 class TestCall:
     async def test_200_devuelve_content(self, monkeypatch):
