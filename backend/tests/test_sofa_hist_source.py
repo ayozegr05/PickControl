@@ -44,12 +44,12 @@ class _OddsProvider:
         return self._responses.pop(0) if self._responses else None
 
 
-def _source(listing=None, odds=None, search_provider=None) -> _SofaScoreHistSource:
+def _source(listing=None, odds=None, search_providers=None) -> _SofaScoreHistSource:
     src = _SofaScoreHistSource.__new__(_SofaScoreHistSource)
     src._listing = listing or []
     src._odds = odds or []
     src._days = {}
-    src._search_provider = search_provider
+    src._search_providers = search_providers or []
     return src
 
 
@@ -58,9 +58,11 @@ class _SearchProvider:
     `/api/search` (None = error de API transitorio)."""
 
     NAME = "allsportsapi2"
+    SUPPORTED_SPORTS = frozenset({"futbol", "tenis"})
 
-    def __init__(self, responses: list):
+    def __init__(self, responses: list, name: str = "allsportsapi2"):
         self._responses = list(responses)
+        self.NAME = name
         self.queries: list[str] = []
 
     async def _search(self, client, sport: str, name: str):
@@ -216,10 +218,10 @@ def _search_result(eid: int, home: str, away: str, ts=None) -> dict:
 async def test_fixtures_search_space_si_listado_vetado():
     t = _ListingTransport({})  # todo None: Cloudflare vetó la IP
     provider = _SearchProvider([])
-    src = _source(listing=[t], search_provider=provider)
+    src = _source(listing=[t], search_providers=[provider])
     out = await src.fixtures(None, 1, date(2026, 10, 6))
     assert isinstance(out, _SofaSearchSpace)
-    assert out.sport == "futbol" and out.provider is provider
+    assert out.sport == "futbol" and out.providers == [provider]
 
 
 async def test_fixtures_sin_search_provider_sigue_dando_none():
@@ -246,8 +248,8 @@ async def test_search_match_resuelve_evento_por_fecha(monkeypatch):
             ]
         ]
     )
-    space = _SofaSearchSpace(sport="futbol", provider=provider, http=None)
-    src = _source(search_provider=provider)
+    space = _SofaSearchSpace(sport="futbol", providers=[provider], http=None)
+    src = _source(search_providers=[provider])
     coro = src.match(space, "Suecia - Polonia", datetime(2026, 10, 6, 20, 0), None)
     fx = await coro
     assert fx is not None and fx.event_id == 1
@@ -270,8 +272,8 @@ async def test_search_match_none_si_nada_en_fecha(monkeypatch):
             ]
         ]
     )
-    space = _SofaSearchSpace(sport="futbol", provider=provider, http=None)
-    src = _source(search_provider=provider)
+    space = _SofaSearchSpace(sport="futbol", providers=[provider], http=None)
+    src = _source(search_providers=[provider])
     coro = src.match(space, "Suecia - Polonia", datetime(2026, 10, 6, 20, 0), None)
     assert await coro is None
 
@@ -281,17 +283,45 @@ async def test_search_match_error_api_es_transitorio(monkeypatch):
         "app.services.odds.historical_backfill.is_rate_limited", lambda name: False
     )
     provider = _SearchProvider([None])  # fallo de API
-    space = _SofaSearchSpace(sport="futbol", provider=provider, http=None)
-    src = _source(search_provider=provider)
+    space = _SofaSearchSpace(sport="futbol", providers=[provider], http=None)
+    src = _source(search_providers=[provider])
     coro = src.match(space, "Suecia - Polonia", datetime(2026, 10, 6, 20, 0), None)
     assert await coro is _SEARCH_FAILED
 
 
 async def test_search_match_atajo_sofascore_id_sin_buscar():
     provider = _SearchProvider([])  # no debe llamarse
-    space = _SofaSearchSpace(sport="futbol", provider=provider, http=None)
-    src = _source(search_provider=provider)
+    space = _SofaSearchSpace(sport="futbol", providers=[provider], http=None)
+    src = _source(search_providers=[provider])
     coro = src.match(space, "Suecia - Polonia", datetime(2026, 10, 6, 20, 0), 42)
     fx = await coro
     assert fx is not None and fx.event_id == 42 and fx.ext_id == "sofascore:42"
+    assert provider.queries == []
+
+
+async def test_search_match_cadena_providers_primero_falla_segundo_rescata(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.services.odds.historical_backfill.is_rate_limited", lambda name: False
+    )
+    caido = _SearchProvider([None], name="footapi7")  # error de API
+    vivo = _SearchProvider([[_search_result(7, "Sweden", "Poland")]])
+    space = _SofaSearchSpace(sport="futbol", providers=[caido, vivo], http=None)
+    src = _source(search_providers=[caido, vivo])
+    coro = src.match(space, "Suecia - Polonia", datetime(2026, 10, 6, 20, 0), None)
+    fx = await coro
+    assert fx is not None and fx.event_id == 7
+    assert caido.queries and vivo.queries
+
+
+async def test_search_match_todos_aparcados_es_transitorio(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.odds.historical_backfill.is_rate_limited", lambda name: True
+    )
+    provider = _SearchProvider([])
+    space = _SofaSearchSpace(sport="futbol", providers=[provider], http=None)
+    src = _source(search_providers=[provider])
+    coro = src.match(space, "Suecia - Polonia", datetime(2026, 10, 6, 20, 0), None)
+    assert await coro is _SEARCH_FAILED
     assert provider.queries == []

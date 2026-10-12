@@ -805,12 +805,12 @@ class _SofaSearchSpace:
     """Marcador de "modo búsqueda": los listados `scheduled-events`
     no están disponibles (directo vetado por Cloudflare a nivel IP,
     espejos sin cuota o sin ruta de calendario) y los picks del cubo
-    se resuelven por búsqueda dual de evento contra allsportsapi2 —
-    las peticiones salen de servidores de RapidAPI, no de nuestra VM.
+    se resuelven por búsqueda dual de evento contra los mirrors
+    RapidAPI — las peticiones salen de sus servidores, no de la VM.
     No es un listado: `match()` lo detecta y resuelve pick a pick."""
 
     sport: str
-    provider: SofaScoreOddsProvider
+    providers: list
     http: httpx.AsyncClient
 
 
@@ -879,10 +879,13 @@ class _SofaScoreHistSource:
     def __init__(self, settings) -> None:
         self._listing: list = []
         self._odds: list = []
-        # Provider de esquema propio que además sirve la búsqueda dual
-        # de eventos (`/api/search/{local} {visitante}`) — el plan B
-        # para cuando los listados por día están vetados.
-        self._search_provider: Optional[SofaScoreOddsProvider] = None
+        # Providers de esquema propio que además sirven la búsqueda
+        # dual de eventos (`/api/search/{local} {visitante}`) — el
+        # plan B para cuando los listados por día están vetados. Van
+        # primero los hosts con cuota propia y holgada (footapi7,
+        # tennisapi1) y después la dedicada compartida con el
+        # snapshotter (allsportsapi2 — la más disputada).
+        self._search_providers: list[SofaScoreOddsProvider] = []
         sports = frozenset(self._SPORT_IDS)
         rapidapi_key = getattr(settings, "rapidapi_tennis_key", None)
         if rapidapi_key:
@@ -894,16 +897,37 @@ class _SofaScoreHistSource:
                 )
                 self._listing.append(t7)
                 self._odds.append(SofaScoreNativeOddsProvider(t7, sports))
+            footapi_host = getattr(settings, "rapidapi_footapi_host", None)
+            if footapi_host:
+                p = SofaScoreOddsProvider(
+                    name="footapi7",
+                    api_key=rapidapi_key,
+                    api_host=footapi_host,
+                    sports=frozenset({"futbol"}),
+                )
+                self._odds.append(p)
+                self._search_providers.append(p)
+            tennis1_host = getattr(settings, "rapidapi_tennisapi1_host", None)
+            if tennis1_host:
+                p = SofaScoreOddsProvider(
+                    name="tennisapi1",
+                    api_key=rapidapi_key,
+                    api_host=tennis1_host,
+                    sports=frozenset({"tenis"}),
+                )
+                self._odds.append(p)
+                self._search_providers.append(p)
             # Cuota dedicada de odds (esquema propio, solo tenis+futbol).
             allsports_host = getattr(settings, "rapidapi_allsports_host", None)
             if allsports_host:
-                self._search_provider = SofaScoreOddsProvider(
+                p = SofaScoreOddsProvider(
                     name="allsportsapi2",
                     api_key=rapidapi_key,
                     api_host=allsports_host,
                     sports=frozenset({"tenis", "futbol"}),
                 )
-                self._odds.append(self._search_provider)
+                self._odds.append(p)
+                self._search_providers.append(p)
             if getattr(settings, "rapidapi_sofascore6_enabled", False):
                 self._odds.append(
                     SofaScoreNativeOddsProvider(
@@ -966,10 +990,10 @@ class _SofaScoreHistSource:
                     continue
                 found = [f for f in (self._parse_event(e) for e in events) if f]
                 break
-        if found is None and self._search_provider is not None:
+        if found is None and self._search_providers:
             space = _SofaSearchSpace(
                 sport=self._SPORT_NAMES.get(sport_id, "futbol"),
-                provider=self._search_provider,
+                providers=self._search_providers,
                 http=http,
             )
             self._days[key] = space
@@ -1012,13 +1036,29 @@ class _SofaScoreHistSource:
             # familia de ids: gratis, sin llamada de búsqueda.
             home, away = _split_event_hint(hint)
             return _SofaFixture(sofascore_id, home, away, dt)
-        provider = space.provider
-        if is_rate_limited(provider.NAME):
-            return _SEARCH_FAILED
         query = _search_query(hint)
         if not query:
             return None
-        results = await provider._search(space.http, space.sport, query)
+        # Primero los hosts cuya cuota está libre y son del deporte
+        # del pick; allsportsapi2 (compartida con el snapshotter) va
+        # al final de su grupo. Ningún resultado utilizable y todos
+        # en error -> _SEARCH_FAILED (transitorio, no miss).
+        providers = sorted(
+            space.providers,
+            key=lambda p: 0 if space.sport in p.SUPPORTED_SPORTS else 1,
+        )
+        results = None
+        saw_live = False
+        for provider in providers:
+            if is_rate_limited(provider.NAME):
+                continue
+            saw_live = True
+            results = await provider._search(space.http, space.sport, query)
+            if results is not None:
+                break
+        else:
+            if not saw_live:
+                return _SEARCH_FAILED
         if results is None:
             return _SEARCH_FAILED
         hints = [hint]
@@ -1086,7 +1126,14 @@ class _SofaScoreHistSource:
         [] explícito (evento sin mercados) = miss definitivo; todos
         None = error transitorio (cuota/red) -> reintento."""
         saw_empty = False
-        for provider in self._odds:
+        # Los hosts especializados del deporte van primero (footapi7,
+        # tennisapi1 — cuota propia holgada); la dedicada compartida
+        # con el snapshotter y los nativos directos quedan de reserva.
+        ordered = sorted(
+            self._odds,
+            key=lambda p: 0 if sport in getattr(p, "SUPPORTED_SPORTS", ()) else 1,
+        )
+        for provider in ordered:
             rows = await provider.fetch_odds(fixture.ext_id, sport)
             if rows is None:
                 continue
