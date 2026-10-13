@@ -266,13 +266,32 @@ class _OddsPapiSource:
 
     def __init__(self, api_key: str, api_host: str) -> None:
         self._client = OddsPapiClient(api_key=api_key, api_host=api_host)
+        # Días cubiertos por llamada: el loop pide ±1 día por cubo y
+        # cada /fixtures cuesta cuota mensual — una llamada de rango
+        # de 3 días deja servidos los tres deltas (y los cubos vecinos
+        # de días consecutivos) por el precio de una.
+        self._covered_days: dict[int, dict[date, list[OddsPapiFixture]]] = {}
 
     @property
     def sport_ids(self) -> dict[str, int]:
         return oddspapi.SPORT_IDS
 
     async def fixtures(self, http, sport_id: int, day: date):
-        return await self._client.fixtures(http, sport_id, day, day)
+        days = self._covered_days.setdefault(sport_id, {})
+        if day in days:
+            return days[day]
+        events = await self._client.fixtures(
+            http, sport_id, day - timedelta(days=1), day + timedelta(days=1)
+        )
+        if events is None:
+            return None
+        by_day: dict[date, list[OddsPapiFixture]] = {}
+        for fixture in events:
+            d = fixture.start.date() if fixture.start else day
+            by_day.setdefault(d, []).append(fixture)
+        for d in (day - timedelta(days=1), day, day + timedelta(days=1)):
+            days[d] = by_day.get(d, [])
+        return days[day]
 
     def match(self, fixtures, hint, dt, sofascore_id):
         return oddspapi_match(fixtures, hint, dt, sofascore_id)
