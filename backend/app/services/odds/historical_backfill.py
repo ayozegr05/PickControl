@@ -34,9 +34,13 @@ Reglas de negocio:
 - Idempotente: un evento que ya tiene filas de CUALQUIER fuente de
   backfill se salta entero (una auditoría por evento basta).
 - Fixtures sin historial quedan marcados como miss definitivo POR
-  FUENTE ("<prov>|hist|<id>"), y los picks sin fixture casado como
-  miss "<prov>|nofixture|<pick>" — una fuente puede cubrir eventos
-  que la otra no, así que los misses no se comparten.
+  FUENTE ("<prov>|hist|<id>"), los picks sin fixture casado como
+  miss "<prov>|nofixture|<pick>", y los picks cuyo fixture existe
+  pero sin opción comparable como "<prov>|nomarket|<pick>" — una
+  fuente puede cubrir eventos o mercados que la otra no, así que
+  los misses no se comparten. Sin la marca `nomarket`, cada pasada
+  re-descargaría las odds del fixture solo para no mapear de nuevo
+  (props y líneas alternas que la fuente jamás publicará).
 - No se inventan valores: un pick sin opción casada solo informa.
 - `pick.odds_event_id` vacío se rellena con el id de la fuente que
   casó y se registra en `odds_events` — igual que el snapshotter.
@@ -1286,7 +1290,9 @@ def _pick_pending(
     sport = _canonical_sport(pick.deporte)
     covering = [s for s in _sources(settings) if sport in s.sport_ids]
     sources_missed = all(
-        is_missed(f"{s.name}|nofixture|{pick.id}") or _source_quota_parked(s)
+        is_missed(f"{s.name}|nofixture|{pick.id}")
+        or is_missed(f"{s.name}|nomarket|{pick.id}")
+        or _source_quota_parked(s)
         for s in covering
     )
     if not sources_missed:
@@ -1342,7 +1348,9 @@ async def backfill_breakdown(session) -> dict:
         owing = [
             s
             for s in sources
-            if sport in s.sport_ids and not is_missed(f"{s.name}|nofixture|{pick.id}")
+            if sport in s.sport_ids
+            and not is_missed(f"{s.name}|nofixture|{pick.id}")
+            and not is_missed(f"{s.name}|nomarket|{pick.id}")
         ]
         live_owing = [s for s in owing if s.name not in parked]
         for s in live_owing:
@@ -1423,6 +1431,7 @@ async def _run_source(
         )
         return
     nofixture_key = f"{source.name}|nofixture|{{}}"
+    nomarket_key = f"{source.name}|nomarket|{{}}"
     hist_key = f"{source.name}|hist|{{}}"
 
     # Resolución pick -> fixture agrupada por (deporte, día): una
@@ -1436,7 +1445,9 @@ async def _run_source(
             continue
         if resolved_picks is not None and pick.id in resolved_picks:
             continue
-        if is_missed(nofixture_key.format(pick.id)):
+        if is_missed(nofixture_key.format(pick.id)) or is_missed(
+            nomarket_key.format(pick.id)
+        ):
             continue
         buckets.setdefault(
             (source.sport_ids[sport], pick.fecha_evento.date()), []
@@ -1522,6 +1533,7 @@ async def _run_source(
                     for other in _sources(get_settings()):
                         if other.name != source.name:
                             clear_missed(f"{other.name}|nofixture|{pick.id}")
+                            clear_missed(f"{other.name}|nomarket|{pick.id}")
             ext_id = source.ext_id(fixture)
             if ext_id in done and not getattr(source, "revisit_done", False):
                 continue
@@ -1607,6 +1619,12 @@ async def _run_source(
                     f"  - pick {pick.id}: sin opción comparable "
                     f"({pick.mercado} / {pick.seleccion}) [{source.name}]"
                 )
+                if apply:
+                    # Miss definitivo por fuente: el evento existe y
+                    # sus mercados ya se descargaron — este pick nunca
+                    # casará aquí. Sin la marca, cada pasada rebusca y
+                    # re-descarga el fixture quemando cuota en vano.
+                    mark_missed(nomarket_key.format(pick.id))
                 continue
             key = (matched.market_name, matched.choice_name, matched.choice_group)
             matched_keys.setdefault(key, pick.id)

@@ -15,6 +15,8 @@ from app.services.odds.historical_backfill import (
     BackfillReport,
     _run_source,
 )
+from app.services.odds.oddspapi import HistoricalChoice, PricePoint
+from app.services.results.base import is_missed
 
 pytestmark = pytest.mark.asyncio
 
@@ -31,10 +33,11 @@ class _FakeSource:
     name = "fakefeed"
     sport_ids = {"futbol": 1}
 
-    def __init__(self, fixtures_return=None, choices_status="ok"):
+    def __init__(self, fixtures_return=None, choices_status="ok", choices=None):
         self.days_requested = []
         self._fixtures_return = fixtures_return
         self._choices_status = choices_status
+        self._choices = choices or []
 
     async def fixtures(self, http, sport_id, day):
         self.days_requested.append(day)
@@ -52,7 +55,7 @@ class _FakeSource:
         return "fk1"
 
     async def choices(self, http, fixture, sport, picks):
-        return self._choices_status, []
+        return self._choices_status, list(self._choices)
 
 
 def _pick(pid: int, day: int) -> ParsedPick:
@@ -144,3 +147,66 @@ async def test_fixture_misma_fecha_no_corrige(session):
 
     assert report.fechas_corregidas == 0
     assert pick.fecha_evento == _Fixture.start
+
+
+def _choice() -> HistoricalChoice:
+    return HistoricalChoice(
+        market_name="Full time",
+        choice_name="1",
+        choice_group=None,
+        points=[PricePoint(captured_at=datetime(2026, 9, 20), cuota=2.0)],
+    )
+
+
+async def test_sin_opcion_marca_nomarket_en_apply(session):
+    """El fixture existe y sus mercados ya se vieron pero nada casa
+    con el pick (prop/línea que la fuente no publica): en apply se
+    marca `<src>|nomarket|<pick>` para no re-descargar el fixture en
+    cada pasada quemando cuota."""
+    src = _FakeSource(fixtures_return=[_Fixture()], choices=[_choice()])
+    pick = _pick(1, 20)
+    pick.mercado = "jugador"
+    pick.seleccion = "Isak marca gol en cualquier momento"
+
+    report = BackfillReport()
+    await _run_source(src, [pick], set(), set(), session, None, True, report)
+
+    assert report.sin_opcion == 1
+    assert is_missed(f"fakefeed|nomarket|{pick.id}")
+
+    # Segunda pasada: el pick se salta antes de pedir ni un día.
+    src.days_requested.clear()
+    report2 = BackfillReport()
+    await _run_source(src, [pick], set(), set(), session, None, True, report2)
+    assert src.days_requested == []
+    assert report2.sin_opcion == 0
+
+
+async def test_sin_opcion_sin_apply_no_marca(session):
+    """En dry-run el sin-opción solo informa — nada queda marcado y
+    la siguiente pasada reintenta como siempre."""
+    src = _FakeSource(fixtures_return=[_Fixture()], choices=[_choice()])
+    pick = _pick(1, 20)
+    pick.mercado = "jugador"
+    pick.seleccion = "Isak marca gol en cualquier momento"
+
+    report = BackfillReport()
+    await _run_source(src, [pick], set(), set(), session, None, False, report)
+
+    assert report.sin_opcion == 1
+    assert not is_missed(f"fakefeed|nomarket|{pick.id}")
+
+
+async def test_opcion_casada_no_marca_nomarket(session):
+    """Un pick que sí casa con una opción no lleva marca — solo los
+    `sin opción` se descartan definitivamente por fuente."""
+    src = _FakeSource(fixtures_return=[_Fixture()], choices=[_choice()])
+    pick = _pick(1, 20)
+    pick.mercado = "ganador"
+    pick.seleccion = "A"
+
+    report = BackfillReport()
+    await _run_source(src, [pick], set(), set(), session, None, True, report)
+
+    assert report.sin_opcion == 0
+    assert not is_missed(f"fakefeed|nomarket|{pick.id}")
