@@ -957,20 +957,21 @@ tarjetas por evento); oddspapi (bet365) es la única fuente real de histórico
 (provider `theoddsapi`, `ODDS_API_KEY` en el server) — solo eventos futuros,
 el histórico pide plan de pago.
 
-Spikes para investigar antes de dar el backlog por perdido:
+Spikes investigados (2026-10-14) — resultados:
 
-1. **Wayback Machine**: snapshots de páginas de casas/comparadores de
-   partidos grandes (EPL/UCL). Para "Isak marca" en Ipswich-Liverpool
-   (16-sep) buscar snapshots de oddschecker/bet365 de esos días.
-   Cobertura irregular pero gratis y con props reales donde exista.
-   Prueba: 5-10 picks-prop del backlog, comprobar si hay snapshot útil.
-2. **OddsPortal/Flashscore en partidos GRANDES**: la exploración inicial
-   vio ~10 mercados mainstream, pero en partidos menores. En EPL/UCL hay
-   pestañas extra (goalscorer, cards por jugador). Re-test con un
-   partidazo vía FlareSolverr.
-3. **Queries del LLM orientadas a props**: el pipeline busca "equipo vs
-   equipo odds" — para props las páginas útiles se titulan
-   "Isak anytime goalscorer odds". Mejorar templates de búsqueda puede
-   rescatar algún % extra (limitado: la web abierta casi no lo publica).
+1. ~~**Wayback Machine**~~ → **descartado**: archiva la carcasa HTML
+   de los comparadores pero las cuotas llegan por API tras el render —
+   el payload nunca se captura (verificado con página real de
+   oddspedia: sección "Player Props" presente, cero valores).
+   Oddschecker apenas se archiva (1 snapshot EPL en 2 meses, 403).
+2. ~~**OddsPortal big-match**~~ → **descartado**: no existe vertical
+   de props ni en EPL/UCL; los 'goalscorer' solo aparecen en
+   artículos editoriales /reviews/, no en tablas de comparación.
+3. ~~**Queries del LLM orientadas a props**~~ → **hecho**:
+   `_market_terms` en gemini_research.py detecta props de jugador,
+   extrae el nombre ("Isak: Marca gol" / "tarjeta - Ivan Romero" /
+   "Marca o asiste Gakpo") y busca "{jugador} anytime goalscorer
+   odds" / "{jugador} to be carded odds". Antes el patrón 'gol'
+   mandaba queries de totales — dirección equivocada.
 4. **Tarjetas de jugador**: ni The Odds API ni Sofascore las tienen —
    solo oddspapi/bet365 (o eventualmente mercado de intercambio).

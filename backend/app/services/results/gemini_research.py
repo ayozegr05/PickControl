@@ -448,11 +448,69 @@ _MARKET_SEARCH_TERMS: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
 # traería la línea equivocada (y validaría contra el pick mal).
 _FIRST_HALF = re.compile(r"1ª|1er|primera|descanso|half|\bht\b|\b1h\b", re.I)
 
+# Props de jugador: el desc llega como "jugador / Alexander Isak:
+# Marca gol" (mercado / selección). `\bmarca\b` (singular exacto)
+# evita falsos positivos con "ambos marcan" (btts).
+_PROP = re.compile(
+    r"\bjugador\b|\bmarca\b|asist\w*|amonestad\w*|recibe?\w*\s+una\s+tarjeta"
+    r"|goalscorer",
+    re.I,
+)
+_PROP_CARD = re.compile(r"tarjeta|card|amonestad\w*", re.I)
+
+# Nombre del jugador dentro de la selección — cubre los formatos que
+# usan los tipsters: "Isak: Marca gol", "Recibe una tarjeta - Ivan
+# Romero", "Marca o asiste Cody Gakpo".
+_PROP_NAME_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^\s*([A-ZÁÉÍÓÚÑ][^:|-]{2,40}?)\s*:"),
+    re.compile(
+        r"(?:tarjeta|card)\s*[-–]\s*([A-ZÁÉÍÓÚÑ][\w.'-]+(?:\s+[\wÁÉÍÓÚáéíóúñ.'-]+)*)"
+    ),
+    re.compile(
+        r"(?:marca\s+o\s+asiste|asiste|marca)\s+"
+        r"([A-ZÁÉÍÓÚÑ][\w.'-]+(?:\s+[A-ZÁÉÍÓÚÑ][\w.'-]+)*)"
+    ),
+)
+
+
+def _prop_player_name(desc: str) -> Optional[str]:
+    """Nombre del jugador de la parte de selección del desc."""
+    sel = desc.split(" / ")[-1]
+    for pattern in _PROP_NAME_PATTERNS:
+        m = pattern.search(sel)
+        if m:
+            return m.group(1).strip()
+    return None
+
 
 def _market_terms(descs: list[str]) -> list[str]:
     """Términos de búsqueda dirigidos por los mercados del grupo."""
     terms: list[str] = []
     for desc in descs:
+        if _PROP.search(desc):
+            # Prop de jugador: las queries genéricas de totales no
+            # sirven — el dato (si existe en abierto) está en páginas
+            # que titulan con el NOMBRE ("Isak anytime goalscorer
+            # odds"). Sin nombre extraíble, quedan términos genéricos
+            # de props; las fuentes deterministas ya sabemos que no
+            # los publican, aquí solo se gana algo por previas y
+            # comparadores con contenido editorial.
+            name = _prop_player_name(desc)
+            if name:
+                if _PROP_CARD.search(desc):
+                    directed = (
+                        f"{name} to be carded odds",
+                        f"{name} booking odds",
+                    )
+                else:
+                    directed = (
+                        f"{name} anytime goalscorer odds",
+                        f"{name} to score or assist odds",
+                    )
+                terms += [t for t in directed if t not in terms]
+            if "oddspedia player props" not in terms:
+                terms.append("oddspedia player props")
+            continue
         for pattern, extras in _MARKET_SEARCH_TERMS:
             if pattern.search(desc):
                 terms += [t for t in extras if t not in terms]

@@ -873,3 +873,45 @@ class TestMarketTargeting:
             "https://www.oddsportal.com/football/team/a/x/",
         ]
         assert _comparator_variants(urls, ["más de 2.5 goles"]) == []
+
+    def test_market_terms_prop_goleador_con_nombre(self):
+        """Prop de goleador: la query lleva el nombre del jugador,
+        no términos de totales de equipo."""
+        terms = _market_terms(["jugador / Alexander Isak: Marca gol"])
+        assert any("Isak anytime goalscorer" in t for t in terms)
+        assert not any("over under" in t for t in terms)
+
+    def test_market_terms_prop_marca_o_asiste(self):
+        terms = _market_terms(["jugador / Marca o asiste Cody Gakpo"])
+        assert any("Gakpo" in t and "score or assist" in t for t in terms)
+
+    def test_market_terms_prop_tarjeta_jugador(self):
+        """Prop de tarjeta: queries de 'to be carded', no de cards
+        de partido."""
+        terms = _market_terms(["jugador / Recibe una tarjeta - Ivan Romero"])
+        assert any("Ivan Romero to be carded" in t for t in terms)
+        assert not any("betexplorer cards" == t for t in terms)
+
+    def test_market_terms_prop_sin_nombre_generico(self):
+        """Sin nombre extraíble queda el término genérico de props."""
+        terms = _market_terms(["jugador / Marca o asiste"])
+        assert terms == ["oddspedia player props"]
+
+    def test_market_terms_prop_no_contamina_otros(self):
+        """Un pick de córners en el mismo grupo sigue recibiendo sus
+        términos de mercado normales."""
+        terms = _market_terms(
+            ["jugador / Alexander Isak: Marca gol", "córners / más de 9.5"]
+        )
+        assert any("corners" in t for t in terms)
+        assert any("Isak" in t for t in terms)
+
+    def test_prop_no_se_dispara_en_mercados_normales(self):
+        """'Ambos marcan' / 'primero en marcar' / 'equipo a marcar'
+        no son props."""
+        for desc in (
+            "ambos marcan / Sí",
+            "primer equipo en marcar / Real Madrid",
+            "equipo a marcar / Liverpool",
+        ):
+            assert "oddspedia player props" not in _market_terms([desc])
