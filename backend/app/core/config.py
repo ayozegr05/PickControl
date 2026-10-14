@@ -128,6 +128,21 @@ class Settings(BaseSettings):
     # poner false apaga esa vía por completo sin tocar código — útil
     # si algún día aparecen bloqueos 403 en los logs.
     sofascore_direct_enabled: bool = True
+    # The Odds API (the-odds-api.com): la ÚNICA fuente que publica
+    # props de jugador (goleador, asistencias, marca-o-asiste) y
+    # escaleras alternas de córners/tarjetas fuera de bet365. Solo
+    # cuotas en vivo/futuras — el histórico pide plan de pago.
+    # Free tier: 500 créditos/MES; cada mercado×región cuesta 1
+    # crédito (el listado de eventos es gratis). El provider solo
+    # se activa para picks de prop/línea alterna — un pick normal
+    # nunca quema créditos aquí.
+    odds_api_key: str | None = None
+    odds_api_regions: str = "uk,eu"
+    odds_api_markets: str = (
+        "player_goal_scorer_anytime,player_to_score_or_assist,"
+        "player_assists,player_first_goal_scorer,player_last_goal_scorer,"
+        "alternate_totals_corners,alternate_totals_cards,correct_score"
+    )
     # Gemini API (proyecto propio en GCP): investigador de último
     # recurso vía url_context (DDG -> webs de resultados). Detecta
     # fixtures cancelados/aplazados/walkover citando fuentes fiables

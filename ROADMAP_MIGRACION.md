@@ -946,3 +946,31 @@ El punto 1 de la lista anterior quedó implementado así:
    pareja de la API (con penalización simple↔dobles). Los dobles que
    quedan pendientes lo están por cobertura Challenger, no por matching.
 7. **Limpieza de usuarios** (test@a.com) — trivial, va con el deploy.
+
+## Investigación de fuentes para props/líneas alternas (spikes pendientes, 2026-10-14)
+
+Contexto: ~95-100 picks del backlog son props de jugador (marca/amonestado/asiste)
+y líneas alternas de córners/tarjetas que NINGUNA fuente gratuita cubre.
+Sofascore publica máx. ~18 mercados de partido (una sola línea de córners/
+tarjetas por evento); oddspapi (bet365) es la única fuente real de histórico
+(cuota reabre 20/10). The Odds API ya captura props+alternas EN VIVO
+(provider `theoddsapi`, `ODDS_API_KEY` en el server) — solo eventos futuros,
+el histórico pide plan de pago.
+
+Spikes para investigar antes de dar el backlog por perdido:
+
+1. **Wayback Machine**: snapshots de páginas de casas/comparadores de
+   partidos grandes (EPL/UCL). Para "Isak marca" en Ipswich-Liverpool
+   (16-sep) buscar snapshots de oddschecker/bet365 de esos días.
+   Cobertura irregular pero gratis y con props reales donde exista.
+   Prueba: 5-10 picks-prop del backlog, comprobar si hay snapshot útil.
+2. **OddsPortal/Flashscore en partidos GRANDES**: la exploración inicial
+   vio ~10 mercados mainstream, pero en partidos menores. En EPL/UCL hay
+   pestañas extra (goalscorer, cards por jugador). Re-test con un
+   partidazo vía FlareSolverr.
+3. **Queries del LLM orientadas a props**: el pipeline busca "equipo vs
+   equipo odds" — para props las páginas útiles se titulan
+   "Isak anytime goalscorer odds". Mejorar templates de búsqueda puede
+   rescatar algún % extra (limitado: la web abierta casi no lo publica).
+4. **Tarjetas de jugador**: ni The Odds API ni Sofascore las tienen —
+   solo oddspapi/bet365 (o eventualmente mercado de intercambio).

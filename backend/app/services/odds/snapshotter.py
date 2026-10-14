@@ -60,9 +60,19 @@ from app.models.parsed_pick import ParsedPick
 from app.services.odds.base import EventRef, OddsProvider
 from app.services.odds.espn_odds import EspnOddsProvider
 from app.services.odds.sofascore import SofaScoreOddsProvider
+from app.services.odds.theoddsapi import (
+    NAME as THEODDSAPI_NAME,
+)
+from app.services.odds.theoddsapi import (
+    build_provider as _build_theoddsapi,
+)
+from app.services.odds.theoddsapi import (
+    pick_needs_theoddsapi,
+)
 from app.services.results.base import (
     count_odds_rows_written,
     is_missed,
+    is_rate_limited,
     mark_missed,
     match_score,
     translate_team_aliases,
@@ -163,6 +173,11 @@ async def _get_odds_providers() -> list[OddsProvider]:
                 direct_transport(), sports=frozenset({"tenis", "futbol"})
             )
         )
+    # The Odds API: props de jugador y líneas alternas (500 créditos/
+    # MES — el snapshotter solo le ruta picks que los necesitan).
+    theoddsapi = _build_theoddsapi()
+    if theoddsapi is not None:
+        providers.append(theoddsapi)
     return providers
 
 
@@ -319,9 +334,14 @@ async def _resolve_missing_event_ids(
         hint = _lookup_hint(pick, sport)
         if not hint:
             continue
-        ref = await _find_event_across_providers(
-            sport, pick.fecha_evento, hint, providers
-        )
+        # The Odds API solo resuelve picks que necesitan sus mercados
+        # (props/líneas alternas): un pick estándar enlazado a un id
+        # `theoddsapi:` gastaría créditos de la captura en vano — su
+        # listado de eventos es gratis pero la descarga de odds no.
+        usable = providers
+        if not pick_needs_theoddsapi(pick):
+            usable = [p for p in providers if p.NAME != THEODDSAPI_NAME]
+        ref = await _find_event_across_providers(sport, pick.fecha_evento, hint, usable)
         if ref is None:
             continue
         pick.odds_event_id = ref.event_ext_id
@@ -348,6 +368,85 @@ async def _resolve_missing_event_ids(
             ref.away_team,
         )
     return resolved
+
+
+# Props en The Odds API: si el evento no está en su feed (liga menor)
+# se reintenta en ~12 h — los mercados prop se publican cerca del
+# partido y un miss permanente dejaría picks futuros sin auditar.
+_PROP_MISS_TTL = timedelta(hours=12)
+
+
+async def _capture_theoddsapi_props(
+    session: AsyncSession,
+    event_ext_id: str,
+    info: dict,
+    providers: list[OddsProvider],
+    stats: dict[str, int],
+) -> None:
+    """Captura props/líneas alternas de The Odds API para un evento
+    ya enlazado por la cadena gratuita (espn:/sofascore:).
+
+    El evento se re-localiza en su feed por nombre+fecha (listado
+    gratis) y las filas se escriben bajo el `event_ext_id` original
+    con provider "theoddsapi" — mismo convenio que el enriquecimiento
+    cruzado Sofascore: el id agrupa el partido real.
+    """
+    provider = next((p for p in providers if p.NAME == THEODDSAPI_NAME), None)
+    if provider is None or is_rate_limited(provider.NAME):
+        return
+    has_rows = (
+        await session.exec(
+            select(func.count(OddsSnapshot.id))
+            .where(OddsSnapshot.event_ext_id == event_ext_id)
+            .where(OddsSnapshot.provider == THEODDSAPI_NAME)
+        )
+    ).one()
+    if has_rows:
+        return
+    miss_key = f"{THEODDSAPI_NAME}|nomatch|{event_ext_id}"
+    if is_missed(miss_key, _PROP_MISS_TTL):
+        return
+    ev = (
+        await session.exec(
+            select(OddsEvent).where(OddsEvent.event_ext_id == event_ext_id)
+        )
+    ).first()
+    if ev is None or not ev.home_team or not ev.away_team:
+        return
+    ref = await provider.find_event(
+        info["sport"], info["start"], f"{ev.home_team} vs {ev.away_team}"
+    )
+    if ref is None:
+        mark_missed(miss_key)
+        return
+    choices = await provider.fetch_odds(ref.event_ext_id, info["sport"])
+    if choices is None:
+        return  # error/cuota: reintenta en el próximo ciclo
+    if not choices:
+        mark_missed(miss_key)
+        return
+    for choice in choices:
+        session.add(
+            OddsSnapshot(
+                provider=THEODDSAPI_NAME,
+                event_ext_id=event_ext_id,
+                market_name=choice.market_name,
+                choice_group=choice.choice_group,
+                choice_name=choice.choice_name,
+                cuota=choice.cuota,
+                cuota_apertura=choice.cuota_apertura,
+                is_live=choice.is_live,
+                suspended=choice.suspended,
+                parsed_pick_id=info["pick_id"],
+            )
+        )
+        stats["filas"] += 1
+    logger.info(
+        "[ODDS] %s: +%d props/alternas vía %s",
+        event_ext_id,
+        len(choices),
+        provider.NAME,
+    )
 
 
 async def run_odds_snapshot_cycle() -> dict[str, int]:
@@ -389,11 +488,20 @@ async def run_odds_snapshot_cycle() -> dict[str, int]:
                     "sport": _canonical_sport(pick.deporte),
                     "start": pick.fecha_evento,
                     "pick_id": pick.id,
+                    "needs_props": False,
                 },
             )
             slot["start"] = min(slot["start"], pick.fecha_evento)
+            slot["needs_props"] = slot["needs_props"] or pick_needs_theoddsapi(pick)
 
         for event_ext_id, info in events.items():
+            # Enriquecimiento de props: corre independiente del ritmo
+            # de captura principal — The Odds API publica mercados que
+            # nadie más tiene, y sus créditos son mensuales.
+            if info["needs_props"] and info["sport"] == "futbol":
+                await _capture_theoddsapi_props(
+                    session, event_ext_id, info, providers, stats
+                )
             last = await session.exec(
                 select(func.max(OddsSnapshot.captured_at)).where(
                     OddsSnapshot.event_ext_id == event_ext_id

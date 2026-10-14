@@ -214,6 +214,104 @@ def _map_over_under(
     return None
 
 
+# Vocabulario de props traducido en theoddsapi.py (feed The Odds API).
+_PROP_ANYTIME = ("Goalscorer anytime",)
+_PROP_SCORE_OR_ASSIST = ("Goalscorer or assist",)
+_PROP_FIRST = ("First goalscorer",)
+_PROP_LAST = ("Last goalscorer",)
+_PROP_ASSISTS = ("Player assists",)
+_PROP_SHOTS_OT = ("Player shots on target",)
+_PROP_SHOTS = ("Player shots", "Player shots on target")
+_PROP_FOULS = ("Player fouls",)
+
+_PROP_PICK = re.compile(
+    r"jugador|amonestad|ve\s+tarjeta|recibe\s+tarjeta|"
+    r"marca\s+o\s+asiste|asiste\b|asistencia|anota\b|"
+    r"marca\s+(gol|su\s+gol|en\s+cualquier)|disparo|remate|shot|scorer",
+    re.IGNORECASE,
+)
+# El nombre del jugador: "Isak: Marca gol" / "Isak marca gol" /
+# "Recibe amonestación Mac Allister" / "Amonestado Enciso".
+_PROP_PLAYER_PATTERNS = (
+    re.compile(r"(?:amonestaci[oó]n|tarjeta)\s+(?:a\s+|para\s+)?(.+)$", re.I),
+    re.compile(r"^(.+?)\s*[:\-–]\s*(?:marca|anota|jugador|recibe|ve\b|asist)", re.I),
+    re.compile(
+        r"^(.+?)\s+(?:marca|anota|mete|asist\w*|ve\s+tarjeta|recibe|"
+        r"ser[aá]\s+amonestad|dispara|remata)\b",
+        re.I,
+    ),
+)
+_PROP_MIN_SIM = 0.7
+
+
+def _prop_markets_for(text: str) -> Optional[tuple[str, ...]]:
+    """Mercados del proveedor que corresponden al prop pedido.
+
+    None = el pick no es de jugador (no entra en la rama de props).
+    Tupla vacía = es prop pero la fuente no lo publica (tarjetas de
+    jugador no existen en The Odds API) -> miss honesto.
+    """
+    if not _PROP_PICK.search(text):
+        return None
+    if re.search(r"marca\s+o\s+asiste|asiste\s+o\s+marca|score\s+or\s+assist", text):
+        return _PROP_SCORE_OR_ASSIST
+    if re.search(r"primer.{0,10}(gol|marcad|scor)|first.{0,8}scor", text):
+        return _PROP_FIRST
+    if re.search(r"[uú]ltim.{0,10}(gol|marcad|scor)|last.{0,8}scor", text):
+        return _PROP_LAST
+    if re.search(r"amonestad|ve\s+tarjeta|recibe\s+tarjeta|card", text):
+        return ()  # sin mercado en la fuente
+    if re.search(r"asist", text):
+        return _PROP_ASSISTS
+    if re.search(r"on\s*target|a\s+puerta|al\s+arco", text):
+        return _PROP_SHOTS_OT
+    if re.search(r"disparo|remate|shot|tiro", text):
+        return _PROP_SHOTS
+    if re.search(r"falta|foul", text):
+        return _PROP_FOULS
+    return _PROP_ANYTIME
+
+
+def _extract_prop_player(seleccion: str) -> Optional[str]:
+    """Nombre del jugador dentro de la selección del pick."""
+    s = seleccion.strip()
+    for pattern in _PROP_PLAYER_PATTERNS:
+        m = pattern.search(s)
+        if m:
+            name = m.group(1).strip(" .:;-–")
+            if len(name) >= 3:
+                return name
+    return None
+
+
+def _match_prop_player(
+    rows: list[OddsSnapshot], player: str, text: str
+) -> Optional[MatchedOdds]:
+    """La opción del jugador en el mercado prop (nombre fuzzy).
+
+    En props de línea (asistencias, disparos — `choice_group`
+    "Over 0.5") solo casa la dirección pedida: un "asiste" es Over,
+    nunca Under. Sin dirección explícita se toma "Over" (el prop es
+    afirmativo por naturaleza: "marca", "asiste", "dispara").
+    """
+    ou_rows = [r for r in rows if r.choice_group]
+    if ou_rows:
+        direction = "Under" if re.search(r"menos\s+de|under|no\s+", text) else "Over"
+        rows = [r for r in rows if (r.choice_group or "").startswith(direction)]
+    best: Optional[OddsSnapshot] = None
+    best_score = 0.0
+    for row in rows:
+        candidate = _team_in_choice(row)
+        if not candidate:
+            continue
+        score = _pair_similar(player, candidate)
+        if score > best_score:
+            best, best_score = row, score
+    if best is None or best_score < _PROP_MIN_SIM:
+        return None
+    return _group_rows(rows, best)
+
+
 def map_pick_choices(
     pick: ParsedPick, event: OddsEvent, snapshots: list[OddsSnapshot]
 ) -> Optional[MatchedOdds]:
@@ -374,6 +472,21 @@ def map_pick_choices(
         ):
             if target in (row.choice_name or "").replace(" ", ""):
                 return _group_rows(snapshots, row)
+        return None
+
+    # Props de jugador (The Odds API: "Goalscorer anytime" y
+    # familia): la selección trae el NOMBRE DEL JUGADOR, no un
+    # equipo. Si la fuente no publica el mercado del prop -> miss
+    # honesto, nunca se compara contra el 1X2.
+    prop_markets = _prop_markets_for(text)
+    if prop_markets is not None:
+        player = _extract_prop_player(pick.seleccion or "")
+        if player:
+            matched = _match_prop_player(
+                _rows_of_market(snapshots, prop_markets), player, text
+            )
+            if matched is not None:
+                return matched
         return None
 
     # Por defecto: mercado ganador ("Full time" en ambos deportes).
