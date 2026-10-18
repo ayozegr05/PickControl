@@ -1401,6 +1401,32 @@ def _is_settled_ticket(text: str) -> bool:
     )
 
 
+# Celebración en TEXTO (no OCR) de un pick ya acertado: el tipster marca
+# cada selección con ✅ y presume del resultado ("acertando otra vez",
+# "clavamos", "beneficio de +60.000€"). La marca ✅ sobre la línea de
+# mercado por sí sola no basta (decoración habitual), y la palabra de
+# celebración sola tampoco (un análisis puede decir "ganamos si..."):
+# solo juntas delatan un boleto ya jugado reposteado como prueba. Se
+# evalúa ANTES que _STRONG_PICK_PATTERNS porque estos mensajes suelen
+# citar la cuota del boleto ganado ("Combinada cuota 5").
+_WIN_CELEBRATION = re.compile(
+    r"acertando|acertamos|acertad|clavamos|clavada|ganamos\s+dinero|"
+    r"hemos\s+ganado|beneficio\s+de\s*\+|haceros\s+ganar|"
+    r"la\s+informaci[oó]n\s+es\s+poder",
+    re.IGNORECASE,
+)
+_CHECKMARKED_LINE = re.compile(
+    r"^[\s ]*[✅✔☑]+.{0,60}"
+    r"(?:gol|tarjeta|combinada|cuota|gana|juegos|c[oó]rner|set)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _is_win_celebration(text: str) -> bool:
+    """True si el texto celebra un pick ya acertado (✅ + celebración)."""
+    return bool(_WIN_CELEBRATION.search(text) and _CHECKMARKED_LINE.search(text))
+
+
 async def extract_pick(
     text: str,
     api_key: str,
@@ -1416,6 +1442,11 @@ async def extract_pick(
     if _is_settled_ticket(text):
         return ExtractedPick(
             es_apuesta=False, informante=informante, metodo="rejected", confianza=0.95
+        )
+
+    if _is_win_celebration(text):
+        return ExtractedPick(
+            es_apuesta=False, informante=informante, metodo="rejected", confianza=0.9
         )
 
     # El OCR puede estampar 'SELLO: GANADOR' en slips vivos; cuando el

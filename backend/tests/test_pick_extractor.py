@@ -15,6 +15,7 @@ from app.services.telegram.pick_extractor import (
     _extract_eventos,
     _extract_linea,
     _is_settled_ticket,
+    _is_win_celebration,
     _looks_like_bet,
     _normalize_pick,
     _rule_extract,
@@ -754,6 +755,46 @@ class TestCelebracionVerde:
         # stake propios sigue entrando: las señales fuertes ganan.
         text = "A por otro verde\nBergs gana\nCuota 1.50 Stake 4"
         assert _looks_like_bet(text) is True
+
+
+class TestWinCelebration:
+    """Celebración de boleto ya ganado: ✅ sobre las selecciones +
+    vocabulario de victoria. Caso real: pick 8153 (raw 22736) coló como
+    combinada porque 'Combinada cuota 5' dispara _STRONG_PICK_PATTERNS
+    antes que los negativos."""
+
+    _CELEBRACION = (
+        "✅ **LA INFORMACIÓN ES PODER ✅**\n\n"
+        "Sabíamos que esta **INFO** era **100% segura** y lo hemos "
+        "demostrado nuevamente acertando otra vez. **CLAVAMOS EL 100%**\n\n"
+        "      ✅ **Mas de 1 gol y 2 tarjetas\n"
+        "      ✅ Combinada cuota 5**\n\n"
+        "Tenemos info, entramos muy fuerte y ganamos dinero.\n\n"
+        "💰**Beneficio de + 60.000€** muy fácil\n\n"
+        "**Me encanta haceros ganar joder 😍**"
+    )
+
+    def test_celebracion_con_checkmarks_rechazada(self):
+        assert _is_win_celebration(self._CELEBRACION) is True
+
+    async def test_extract_pick_rechaza_celebracion(self):
+        # El veto actúa dentro de extract_pick, antes de reglas/LLM:
+        # aunque el texto cite una cuota, nunca llega a parser.
+        pick = await extract_pick(self._CELEBRACION, api_key="")
+        assert pick is not None
+        assert pick.es_apuesta is False
+        assert pick.metodo == "rejected"
+
+    def test_checkmark_decorativo_sin_celebracion_sobrevive(self):
+        # "✅" decorativo sin vocabulario de victoria no basta para veto.
+        text = "✅ Real Madrid gana\nCuota 1.80 Stake 2"
+        assert _is_win_celebration(text) is False
+
+    def test_celebracion_sin_checkmark_sobrevive(self):
+        # Palabra de celebración suelta ("ganamos si...") sin ✅ sobre
+        # la línea de mercado tampoco: el análisis puede presumir.
+        text = "Si seguimos así ganamos dinero\nBarcelona gana Cuota 1.5"
+        assert _is_win_celebration(text) is False
 
 
 class TestExtractLineaMarcador:
