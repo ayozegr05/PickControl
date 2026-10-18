@@ -286,7 +286,11 @@ def _classify_leg_market(leg: str) -> Optional[str]:
 _COMPETITION_WORD = re.compile(
     r"\b(?:copa|liga|league|divisi[oó]n|challenger|chall\.?|atp|wta|itf|"
     r"champions|euroleague|euroliga|nba|torneo|premier|bundesliga|"
-    r"eredivisie|serie\s+a|ligue|mls|europa\s+league|segunda|primera)\b",
+    r"eredivisie|serie\s+a|ligue|mls|europa\s+league|segunda|primera|"
+    # Ligas compuestas en una palabra: Landesliga, Superliga... el
+    # \b solo cortaba "liga" aislado y "Austria - Landesliga" pasaba
+    # como si fuera un cruce de equipos.
+    r"\w*liga)\b",
     re.IGNORECASE,
 )
 
@@ -909,6 +913,15 @@ def _normalize_pick(pick: ExtractedPick, text: str) -> ExtractedPick:
         pick.seleccion = _trim_prose_seleccion(pick.seleccion)
     pick.seleccion = _strip_trailing_competition(_clean_text_field(pick.seleccion))
     pick.evento = _clean_text_field(pick.evento)
+    if pick.evento and _is_junk_evento(pick.evento):
+        # Placeholder/fecha/cabecera de liga grabado como evento:
+        # NULL honesto antes que un cruce inventado que el
+        # verificador casaría contra el partido equivocado.
+        pick.evento = None
+    if not pick.evento:
+        # El cruce del boleto suele estar en el propio texto/OCR
+        # aunque ni reglas ni LLM lo extrajeran.
+        pick.evento = _fixture_from_slip_ocr(text)
     if pick.es_apuesta and not pick.deporte:
         pick.deporte = _detect_deporte(text)
     if pick.es_apuesta and (pick.deporte or "").strip().lower() in _UNSUPPORTED_SPORTS:
@@ -1063,27 +1076,130 @@ Reglas:
 
 
 _FIXTURE_V_LINE = re.compile(r"^(.{2,50}?)\s+v\s+(.{2,50}?)$", re.IGNORECASE)
-_FIXTURE_SCORE_LINE = re.compile(r"^(.{2,40}?)\s+\d+\s*[-–—]?\s*\d+\s+(.{2,40}?)$")
+# "A 0-0 B" o "A 0 0 B": sin guion los dos dígitos van separados por
+# espacio — si no, "Mar 13 oct" casaba como marcador "1-3" partido.
+_FIXTURE_SCORE_LINE = re.compile(
+    r"^(.{2,40}?)\s+\d+(?:\s*[-–—]\s*\d+|\s+\d+)\s+(.{2,40}?)$"
+)
+
+# Participante suelto del boleto: el slip lista los equipos en líneas
+# propias ("Galatasaray SK" y debajo "Barcelona"), no como "A v B".
+# Una línea bare-name = solo nombre propio(s), sin dígitos ni mercado.
+_SLIP_BARE_NAME = re.compile(rf"^{_TEAM_NAME}(?:\s+{_TEAM_NAME})*$")
+
+# Palabras de interfaz/UI del boleto que tienen forma de nombre propio
+# en una línea suelta ("Compartir", "Ganancias", "Pendientes").
+_SLIP_UI_WORD = re.compile(
+    r"^(?:compartir|ganancias?|imp(?:orte)?|pendientes?|cerrar|"
+    r"reutilizar|selecciones?|a[ñn]adir|sencillas?|combinadas?|"
+    r"apuestas?|cash|total|simples?|doble|triples?|crear?)\b",
+    re.IGNORECASE,
+)
 
 
-def _fixture_from_slip_ocr(ocr_text: str | None) -> str | None:
-    """El cruce "A v B" o "A 0-0 B" que el boleto en vivo imprime en su
-    propia línea ("Como v Parma", "Sporting d'Escaldes 0 - 2 Santa
-    Coloma"). Fallback determinista para cuando el LLM devuelve la
-    cabecera de liga ("Italia - Serie A") en vez del partido."""
+def _slip_participant_lines(ocr_text: str) -> list[str]:
+    """Líneas del slip que son SOLO un nombre de equipo/jugador.
+
+    Filtra mercado, competición, UI y líneas con dígitos/fechas —
+    en el OCR del boleto los participantes son el único texto que
+    queda así de limpio.
+    """
+    names: list[str] = []
+    for line in ocr_text.splitlines():
+        line = line.strip()
+        if not line or not _SLIP_BARE_NAME.match(line):
+            continue
+        if (
+            _COMPETITION_WORD.search(line)
+            or _MARKET_WORD.search(line)
+            or _SLIP_UI_WORD.search(line)
+        ):
+            continue
+        names.append(line)
+    return names
+
+
+def _fixtures_from_slip_ocr(ocr_text: str | None) -> list[str]:
+    """Cruces del boleto, en orden de aparición.
+
+    Dos formatos vistos en el OCR de slips:
+    1. Línea directa "A v B" o "A 0-0 B" (slip en vivo).
+    2. Participantes en líneas separadas ("Galatasaray SK" + debajo
+       "Barcelona") — se emparejan de dos en dos por orden.
+    """
     if not ocr_text:
-        return None
-    score_line = v_line = None
+        return []
+    fixtures: list[str] = []
     for line in ocr_text.splitlines():
         line = line.strip()
         m = _FIXTURE_SCORE_LINE.match(line)
-        if m and score_line is None:
-            score_line = f"{m.group(1)} - {m.group(2)}"
+        if m:
+            fixtures.append(f"{m.group(1)} - {m.group(2)}")
             continue
         m = _FIXTURE_V_LINE.match(line)
-        if m and v_line is None:
-            v_line = f"{m.group(1)} - {m.group(2)}"
-    return score_line or v_line
+        if m:
+            fixtures.append(f"{m.group(1)} - {m.group(2)}")
+    # El mismo cruce puede aparecer dos veces en el slip (línea de
+    # marcador en vivo "A 0-0 B" y línea "A v B"): dedup por orden.
+    fixtures = list(dict.fromkeys(fixtures))
+    if fixtures:
+        return fixtures
+    # El emparejado de nombres sueltos solo se permite en texto con
+    # pinta de boleto (horas/cuotas/UI del slip): en prosa normal dos
+    # nombres propios seguidos podrían fabricar un cruce falso.
+    if not _SLIP_LIKE_TEXT.search(ocr_text):
+        return []
+    names = _slip_participant_lines(ocr_text)
+    return [f"{names[i]} - {names[i + 1]}" for i in range(0, len(names) - 1, 2)]
+
+
+# Señal de que el texto es OCR de un boleto (no prosa del tipster):
+# horas "21:00", cuotas sueltas "1.61" o la UI del slip.
+_SLIP_LIKE_TEXT = re.compile(
+    r"\b\d{1,2}:\d{2}\b|\bimp(?:orte)?\b|ganancias|selecciones|"
+    r"cerrar\s+apuesta|cuota",
+    re.IGNORECASE,
+)
+
+
+def _fixture_from_slip_ocr(ocr_text: str | None) -> str | None:
+    """Compat: primer cruce del boleto."""
+    fixtures = _fixtures_from_slip_ocr(ocr_text)
+    return fixtures[0] if fixtures else None
+
+
+# "Evento" que no es un cruce real: placeholder del LLM ("[Rival no
+# especificado]"), fragmento de fecha del boleto ("Dom - sep",
+# "Mar 13 oct") o cabecera de competición con un lado que es liga
+# ("Austria - Landesliga"). NULL mejor que basura: un evento inventado
+# gasta llamadas del verificador y puede liquidar contra el fixture
+# equivocado.
+_EVENTO_PLACEHOLDER = re.compile(
+    r"[\[\]{}<>]|no\s+especificad|desconocid|sin\s+definir|por\s+definir",
+    re.IGNORECASE,
+)
+_EVENTO_DATE_FRAGMENT = re.compile(
+    r"^\s*"
+    r"(?:lun|mar|mi[eé]|jue|vie|s[aá]b|dom|"
+    r"ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)[a-z]*"
+    r"(?:\s+|\s*[-–]\s*)"
+    r"(?:\d{1,2}\s+)?"
+    r"(?:lun|mar|mi[eé]|jue|vie|s[aá]b|dom|"
+    r"ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)[a-z]*"
+    r"\s*\d{0,4}\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_junk_evento(value: Optional[str]) -> bool:
+    """True si `evento` no nombra un enfrentamiento real."""
+    text = (value or "").strip()
+    if not text:
+        return False
+    if _EVENTO_PLACEHOLDER.search(text) or _EVENTO_DATE_FRAGMENT.match(text):
+        return True
+    sides = [s.strip() for s in _EVENTO_SIDE_SPLIT.split(text) if s.strip()]
+    return len(sides) >= 2 and any(_COMPETITION_WORD.search(s) for s in sides)
 
 
 # Líneas de "chrome" del boleto (Imp:/Ganancias/Cerrar apuesta/Compartir,
@@ -1189,13 +1305,25 @@ async def _llm_extract(
         pick.fecha_evento = _extract_event_date(text, fecha_referencia)
     if pick.linea is None and pick.seleccion:
         pick.linea = _extract_linea(pick.seleccion)
+    if pick.evento and _is_junk_evento(pick.evento):
+        # El LLM devolvió un placeholder, un fragmento de fecha del
+        # boleto ("Dom - sep") o la cabecera de liga ("Austria -
+        # Landesliga"): se descarta y se intenta el fallback del
+        # slip — NULL honesto si tampoco hay cruce recuperable.
+        pick.evento = None
     if not _extract_eventos([pick.evento or ""]):
         # El LLM a veces devuelve la cabecera de liga ("Italia - Serie
         # A") o null aunque el OCR del boleto tenga el cruce ("Como v
-        # Parma") en una línea propia.
-        fixture = _fixture_from_slip_ocr(text)
-        if fixture:
-            pick.evento = fixture
+        # Parma" en línea propia, o los participantes separados como
+        # "Galatasaray SK" / "Barcelona").
+        fixtures = _fixtures_from_slip_ocr(text)
+        if fixtures:
+            pick.evento = fixtures[0]
+        if len(fixtures) > 1 and len(fixtures) == len(pick.patas):
+            # Acumulador con un cruce por pata, en el mismo orden.
+            for pata, fixture in zip(pick.patas, fixtures):
+                if not pata.evento or _is_junk_evento(pata.evento):
+                    pata.evento = fixture
     return pick
 
 

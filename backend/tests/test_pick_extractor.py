@@ -895,6 +895,103 @@ class TestFixtureFromSlipOcr:
 
         assert _fixture_from_slip_ocr("SERIE A\nMÁS DE 7.0 CÓRNERS") is None
 
+    def test_fecha_no_es_marcador(self):
+        """ "Mar 13 oct" del slip no es un marcador 1-3: sin guion los
+        dígitos van separados por espacio."""
+        from app.services.telegram.pick_extractor import _fixture_from_slip_ocr
+
+        assert _fixture_from_slip_ocr("Mar 13 oct\n21:00") is None
+
+    def test_mismo_cruce_dedup_score_y_v(self):
+        """El slip imprime el cruce dos veces ("A 0-0 B" y "A v B"):
+        una sola entrada."""
+        from app.services.telegram.pick_extractor import (
+            _fixtures_from_slip_ocr,
+        )
+
+        ocr = (
+            "Austria - Landesliga\nWAF Brigittenau 0-0 Helfort 15\n"
+            "Más de 7.0\nTotal - Córners\nWAF Brigittenau v Helfort 15\n1.61"
+        )
+        assert _fixtures_from_slip_ocr(ocr) == ["WAF Brigittenau - Helfort 15"]
+
+    def test_participantes_en_lineas_separadas(self):
+        """Slip sin "v": los participantes van en líneas propias y se
+        emparejan por orden (caso real Galatasaray-Barcelona)."""
+        from app.services.telegram.pick_extractor import (
+            _fixtures_from_slip_ocr,
+        )
+
+        ocr = (
+            "Reutilizar selecciones\nCompartir\nCREAR APUESTA 1.50\n"
+            "Resultado final: Barcelona\nResultado final\n"
+            "2 GOLES DE VENTAJA\nMenos de 7 goles\nTotal de goles\n"
+            "Galatasaray SK\nMar 13 oct\nBarcelona\n21:00\nImp:\n"
+            "2.000,00€\nGanancias\n3.000,00€\nCerrar apuesta 2.000,00€"
+        )
+        assert _fixtures_from_slip_ocr(ocr) == ["Galatasaray SK - Barcelona"]
+
+    def test_dos_cruces_de_acumulador(self):
+        """Slip multi-partido: dos pares de participantes = dos
+        cruces en orden (Tenerife-Zaragoza, Bonn-Syntainics)."""
+        from app.services.telegram.pick_extractor import (
+            _fixtures_from_slip_ocr,
+        )
+
+        ocr = (
+            "ESPAÑA: LIGA ENDESA\nLa Laguna Tenerife\nBasket Zaragoza\n"
+            "13:00\n1.26\n3.50\nALEMANIA: BBL\nBonn\nSyntainics MBC\n"
+            "15:00\n1.20\n4.00"
+        )
+        assert _fixtures_from_slip_ocr(ocr) == [
+            "La Laguna Tenerife - Basket Zaragoza",
+            "Bonn - Syntainics MBC",
+        ]
+
+    def test_prosa_sin_pinta_de_boleto_no_empareja(self):
+        """Dos nombres propios en líneas seguidas de un texto normal
+        no fabrican un cruce — solo en texto con pinta de slip."""
+        from app.services.telegram.pick_extractor import (
+            _fixtures_from_slip_ocr,
+        )
+
+        assert _fixtures_from_slip_ocr("Messi\nCristiano") == []
+
+
+class TestJunkEvento:
+    """`evento` que no es un cruce real queda a None — NULL honesto
+    antes que un fixture fantasma que el verificador casaría mal."""
+
+    def test_placeholder(self):
+        from app.services.telegram.pick_extractor import _is_junk_evento
+
+        assert _is_junk_evento("Barcelona - [Rival no especificado]")
+
+    def test_fragmento_fecha(self):
+        from app.services.telegram.pick_extractor import _is_junk_evento
+
+        for junk in ("Dom - sep", "Mar - oct", "Dom 27 sep", "Vie - sep"):
+            assert _is_junk_evento(junk), junk
+
+    def test_cabecera_liga_compuesta(self):
+        """'Austria - Landesliga': Landesliga es una palabra
+        compuesta que 'liga' aislada no pillaba — pasa por 'w*liga'."""
+        from app.services.telegram.pick_extractor import _is_junk_evento
+
+        assert _is_junk_evento("Austria - Landesliga")
+        assert _is_junk_evento("Italia - Serie A")
+
+    def test_cruces_reales_sobreviven(self):
+        from app.services.telegram.pick_extractor import _is_junk_evento
+
+        for ok in (
+            "Sevilla - Barcelona",
+            "Como v Parma",
+            "Zizou Bergs vs Jurij Rodionov",
+            "WAF Brigittenau - Helfort 15",
+        ):
+            assert not _is_junk_evento(ok), ok
+
 
 class TestPatasFromJoined:
     """Red de seguridad que parte el "A + B + C" de `seleccion` en patas
