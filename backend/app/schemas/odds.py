@@ -22,6 +22,9 @@ class PickOddsRead(SQLModel):
     capturas: int = 0
     cuota_disponible: bool | None = None
     clv_pct: float | None = None
+    # True = la cuota declarada es una supercuota/promo de afiliado:
+    # nunca existió en mercado, se excluye de inflada y CLV.
+    cuota_promo: bool = False
 
 
 class OddsStatsBloque(SQLModel):
@@ -43,6 +46,10 @@ class OddsStatsBloque(SQLModel):
     # Con cuota de tipster y cuota al publicar: se pudo auditar si la
     # cuota anunciada existía de verdad en el mercado.
     auditables: int = 0
+    # Cuotas promocionales de afiliado ("CUOTA 5.00 que debería ser
+    # 1.22"): excluidas de auditables/inflada/CLV — su precio no es
+    # de mercado.
+    cuotas_promo: int = 0
     # Cuota anunciada superior a la de mercado al publicar (inflada).
     cuotas_infladas: int = 0
     # cuotas_infladas / auditables.

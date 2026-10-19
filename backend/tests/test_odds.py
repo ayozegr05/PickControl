@@ -457,6 +457,61 @@ async def test_compare_pick_puntos_temporales(session):
     assert c.clv_pct == 35.71
 
 
+async def test_compare_pick_cuota_promo(session):
+    """Supercuota de afiliado ("CUOTA 5.00 que debería ser 1.22"): el
+    precio declarado nunca existió en mercado — se marca `cuota_promo`
+    y los agregados la excluyen de inflada y CLV."""
+    pick = await _seed_pick(session, cuota=5.0)
+    session.add(_event())
+    session.add(_snap("Full time", "1", 1.27))
+    await session.commit()
+    c = await compare_pick(session, pick)
+    assert c.mapeado is True
+    assert c.cuota_promo is True
+    # Los valores se conservan (auditoría) pero no cuentan en agregados.
+    assert c.cuota_publicacion == 1.27
+    assert c.cuota_disponible is False
+
+
+async def test_compare_pick_cuota_normal_no_promo(session):
+    """Una cuota algo mejor que mercado (1.9 vs 1.6) NO es promo: ratio
+    1.19 << 1.8. Solo dispara un precio desproporcionado."""
+    pick = await _seed_pick(session, cuota=1.9)
+    session.add(_event())
+    session.add(_snap("Full time", "1", 1.6))
+    await session.commit()
+    c = await compare_pick(session, pick)
+    assert c.cuota_promo is False
+
+
+def test_aggregate_odds_stats_excluye_promo():
+    """La supercuota no entra ni en auditables/inflada ni en el CLV:
+    contarla fingiría que el tipster bate al mercado sistemáticamente."""
+    p_normal = _pick("A", cuota=1.9)
+    p_normal.id = 1
+    p_promo = _pick("B", cuota=5.0)
+    p_promo.id = 2
+
+    comparisons = {
+        1: PickOddsComparison(mapeado=True, cuota_disponible=False, clv_pct=-8.0),
+        2: PickOddsComparison(
+            mapeado=True,
+            cuota_disponible=False,
+            clv_pct=280.0,
+            cuota_promo=True,
+        ),
+    }
+    stats = aggregate_odds_stats([p_normal, p_promo], comparisons)
+
+    assert stats.mapeados == 2
+    assert stats.cuotas_promo == 1
+    # Solo el pick normal alimenta las métricas.
+    assert stats.auditables == 1
+    assert stats.cuotas_infladas == 1
+    assert stats.con_clv == 1
+    assert stats.clv_medio == -8.0
+
+
 async def test_endpoint_odds_pick(client, session, auth_headers):
     pick = await _seed_pick(session)
     session.add(_event())

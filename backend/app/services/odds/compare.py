@@ -523,6 +523,17 @@ class PickOddsComparison:
     # CLV % = (cuota_tipster / cuota_cierre - 1) * 100.
     # Positivo = el tipster batió el cierre (valor real); negativo = peor.
     clv_pct: Optional[float] = None
+    # True si la cuota declarada es una supercuota/promo de afiliado
+    # ("CUOTA 5.00 que debería ser 1.22" — bdeal.io y similares): el
+    # precio anunciado nunca existió en mercado, compararlo distorsiona
+    # inflada/CLV. Los agregados la excluyen; los valores se conservan.
+    cuota_promo: bool = False
+
+
+# Ratio tipster/mercado a partir del cual la cuota declarada solo puede
+# ser promocional: una supercuota de casa suele doblar el precio, un
+# pick legítimo jamás mejora el mercado un 80%+.
+_PROMO_RATIO = 1.8
 
 
 def _comparison_from_match(
@@ -552,6 +563,7 @@ def _comparison_from_match(
         result.cuota_publicacion = nearest.cuota
     if pick.cuota is not None and result.cuota_publicacion is not None:
         result.cuota_disponible = pick.cuota <= result.cuota_publicacion
+        result.cuota_promo = pick.cuota > result.cuota_publicacion * _PROMO_RATIO
     if (
         pick.cuota is not None
         and result.cuota_cierre is not None
@@ -662,6 +674,9 @@ class ChannelOddsStats:
     auditables: int = 0
     cuotas_infladas: int = 0
     pct_cuota_inflada: float = 0.0
+    # Supercuotas de afiliado excluidas de inflada/CLV (el precio
+    # declarado es promocional, no de mercado).
+    cuotas_promo: int = 0
     con_clv: int = 0
     clv_medio: Optional[float] = None
     pct_bate_cierre: float = 0.0
@@ -682,6 +697,11 @@ def aggregate_odds_stats(
         if comparison is None or not comparison.mapeado:
             continue
         stats.mapeados += 1
+        # Supercuotas de afiliado: el precio declarado nunca existió en
+        # mercado — meterlo en "inflada" o en CLV distorsiona ambos.
+        if comparison.cuota_promo:
+            stats.cuotas_promo += 1
+            continue
         if comparison.cuota_disponible is not None:
             stats.auditables += 1
             if comparison.cuota_disponible is False:
