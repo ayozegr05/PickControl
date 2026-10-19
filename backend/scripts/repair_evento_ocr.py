@@ -28,6 +28,7 @@ from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.services.telegram.pick_extractor import (
     _fixtures_from_slip_ocr,
+    _is_junk_evento,
     extract_pick,
 )
 from app.services.telegram.processor import _looks_like_slip, _persist_patas
@@ -93,6 +94,36 @@ async def repair(session: AsyncSession, pick_id: int, apply: bool) -> bool:
         fecha_referencia=raw.received_at,
     )
     if new is None or not new.es_apuesta:
+        # El extractor mejorado puede declarar "no es apuesta"
+        # (metodo="rejected"): boleto liquidado reposteado o
+        # celebración de acierto. Entonces el pick NUNCA debió existir —
+        # es_apuesta=False para él y sus patas (la fila queda, sale de
+        # stats). No se toca la liquidación: la fila deja de ser pick.
+        if new is not None and new.metodo == "rejected":
+            print(
+                f"[{pick_id}] el extractor lo declara NO-apuesta "
+                f"(confianza={new.confianza})"
+            )
+            if not apply:
+                return True
+            ids = [
+                r[0]
+                for r in (
+                    await session.execute(
+                        select(ParsedPick.id).where(
+                            (ParsedPick.id == pick_id)
+                            | (ParsedPick.combinada_id == pick_id)
+                        )
+                    )
+                ).all()
+            ]
+            await session.execute(
+                ParsedPick.__table__.update()
+                .where(ParsedPick.id.in_(ids))
+                .values(es_apuesta=False)
+            )
+            print(f"    -> es_apuesta=False en {len(ids)} filas {ids}")
+            return True
         # Sin LLM (cuota suelta en OCR sin keyword) el extractor completo
         # puede devolver None aunque el fixture esté claro en el slip.
         # Fallback determinista: si el OCR del boleto tiene UN único
@@ -137,6 +168,12 @@ async def repair(session: AsyncSession, pick_id: int, apply: bool) -> bool:
         if val not in (None, "") and val != getattr(pick, field):
             setattr(pick, field, val)
             changed = True
+    # NULL honesto: si la nueva extracción no ve cruce y el evento viejo
+    # es basura según la regla del propio extractor, se limpia — antes
+    # era el verificador quien liquidaba contra el fixture fantasma.
+    if new.evento is None and _is_junk_evento(pick.evento):
+        pick.evento = None
+        changed = True
     # Reabre la liquidación: el verifier re-resuelve contra el fixture
     # corregido. Nada se liquida a mano.
     pick.acierto = None

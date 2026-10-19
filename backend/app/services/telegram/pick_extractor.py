@@ -1190,6 +1190,36 @@ _EVENTO_DATE_FRAGMENT = re.compile(
     re.IGNORECASE,
 )
 
+# Fecha larga del slip como "evento": "miércoles, 16 de septiembre de
+# 2026, 18:45" (el OCR del historial la pone bajo cada partido) o cualquier
+# string con "de <mes> de <año>".
+_EVENTO_DATE_LONG = re.compile(
+    r"^\s*(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"
+    r"|de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|"
+    r"septiembre|octubre|noviembre|diciembre)\s+de\s+\d{4}",
+    re.IGNORECASE,
+)
+
+# Palabras vacías que rodean a la competición en una cabecera ("España
+# Segunda División" -> "españa"). Si tras quitar competición + ruido no
+# queda nombre real, el evento era solo la cabecera de liga ("LA LIGA",
+# "Ligue 2", "Nations League"). La convención de tenis sobrevive: "ATP
+# PEKÍN" deja "pekín" como residuo, igual que "WTA ANKARA"->"ankara".
+_EVENTO_FILLER = re.compile(
+    r"(?i)\b(?:de|la|el|del|los|las|dobles?|singles?|femenino|masculino|"
+    r"nations|apertura|clausura|clasificaci[oó]n|f|m|u\d+)\b|[^a-záéíóúñü]+"
+)
+
+
+def _is_competition_only_evento(text: str) -> bool:
+    """True si el evento es solo el nombre de una competición."""
+    if not _COMPETITION_WORD.search(text):
+        return False
+    resto = _COMPETITION_WORD.sub("", text)
+    resto = _EVENTO_FILLER.sub("", resto)
+    return len(resto.strip()) < 3
+
 
 def _is_junk_evento(value: Optional[str]) -> bool:
     """True si `evento` no nombra un enfrentamiento real."""
@@ -1197,6 +1227,10 @@ def _is_junk_evento(value: Optional[str]) -> bool:
     if not text:
         return False
     if _EVENTO_PLACEHOLDER.search(text) or _EVENTO_DATE_FRAGMENT.match(text):
+        return True
+    if _EVENTO_DATE_LONG.search(text):
+        return True
+    if _is_competition_only_evento(text):
         return True
     sides = [s.strip() for s in _EVENTO_SIDE_SPLIT.split(text) if s.strip()]
     return len(sides) >= 2 and any(_COMPETITION_WORD.search(s) for s in sides)
@@ -1378,6 +1412,18 @@ def _is_settled_ticket(text: str) -> bool:
     if _SETTLED_SCORE_PATTERN.search(text):
         return True
     low = text.lower()
+    # Historial de apuestas resueltas (WH "Mis apuestas" y similares):
+    # cada selección lleva su veredicto pegado a la cuota ("Resultado
+    # del partido @ 5,50 Gana", "Más/Menos @ 1,80 Gana") o el estado
+    # "Resultado: Ganada". Un slip abierto nunca imprime el resultado
+    # por selección. \bgana\b no casa "ganador"/"ganará" (boleto vivo).
+    hist_wins = len(re.findall(r"@\s*[\d.,]+\s+gana\b", text, re.IGNORECASE))
+    if hist_wins >= 2:
+        return True
+    if re.search(r"resultado\s*:\s*ganada\b", low):
+        return True
+    if hist_wins >= 1 and re.search(r"ganancias\s*:", low):
+        return True
     # Premio pagado sin "potencial": en slips ABIERTOS de bet365 el premio
     # siempre es "Ganancias potenciales"; la pareja "Imp:/Importe: <x>€" +
     # "Ganancias <y>€" a secas es la vista de un boleto ya cobrado que el
@@ -1427,6 +1473,27 @@ def _is_win_celebration(text: str) -> bool:
     return bool(_WIN_CELEBRATION.search(text) and _CHECKMARKED_LINE.search(text))
 
 
+# Comentario EN VIVO sobre una apuesta ya publicada: el tipster narra
+# cómo va el partido ("la tenemos en el bolsillo", "vamos a por la 2ª
+# parte", "no llevamos nada mal"). Cita la cuota del pick original —
+# "a cuota @5" — y sin este veto _STRONG_PICK_PATTERNS la toma como
+# señal de apuesta nueva. Un anuncio de pick siempre mira hacia
+# adelante; estas frases solo describen el estado del partido en curso.
+# Se evalúa ANTES que _STRONG_PICK_PATTERNS, como los otros vetos.
+_LIVE_COMMENTARY = re.compile(
+    r"en\s+el\s+bolsillo|"
+    r"vamos\s+a\s+por\s+la\s+(?:segunda|2[ªº]?|siguiente)\s+parte|"
+    r"no\s+llevamos\s+nada\s+mal|"
+    r"de\s+momento\s+(?:va|van|ganamos)",
+    re.IGNORECASE,
+)
+
+
+def _is_live_commentary(text: str) -> bool:
+    """True si el texto narra en vivo una apuesta ya publicada."""
+    return bool(_LIVE_COMMENTARY.search(text))
+
+
 async def extract_pick(
     text: str,
     api_key: str,
@@ -1445,6 +1512,11 @@ async def extract_pick(
         )
 
     if _is_win_celebration(text):
+        return ExtractedPick(
+            es_apuesta=False, informante=informante, metodo="rejected", confianza=0.9
+        )
+
+    if _is_live_commentary(text):
         return ExtractedPick(
             es_apuesta=False, informante=informante, metodo="rejected", confianza=0.9
         )

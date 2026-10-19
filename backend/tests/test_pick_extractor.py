@@ -14,6 +14,7 @@ from app.services.telegram.pick_extractor import (
     _extract_event_date,
     _extract_eventos,
     _extract_linea,
+    _is_live_commentary,
     _is_settled_ticket,
     _is_win_celebration,
     _looks_like_bet,
@@ -797,6 +798,38 @@ class TestWinCelebration:
         assert _is_win_celebration(text) is False
 
 
+class TestLiveCommentary:
+    # Caso real (pick 8493): narración en vivo de la apuesta gratuita
+    # ya publicada — "cuota @5" disparaba _STRONG_PICK_PATTERNS y el
+    # comentario colaba como pick con la frase como selección.
+    _COMENTARIO = (
+        "**No llevamos nada mal la apuesta gratuita 😏**\n\n"
+        "__Olympiacos +10 al descanso y Barcelona a cuota @5 , "
+        "la tenemos en el bolsillo __\n\n"
+        "**Vamos a por la 2ª parte chavales ****🔜**"
+    )
+
+    def test_detecta_comentario_live(self):
+        assert _is_live_commentary(self._COMENTARIO) is True
+
+    async def test_extract_pick_rechaza_comentario_live(self):
+        pick = await extract_pick(self._COMENTARIO, api_key="")
+        assert pick is not None
+        assert pick.es_apuesta is False
+        assert pick.metodo == "rejected"
+
+    def test_pick_mercado_descanso_sobrevive(self):
+        # "al descanso" como MERCADO (over HT) no es comentario: el
+        # veto exige vocabulario de partido en curso, no la palabra.
+        text = "Más de 0.5 goles al descanso\nSevilla - Betis\nCuota 1.90 Stake 1"
+        assert _is_live_commentary(text) is False
+
+    def test_rally_generico_sobrevive(self):
+        # "vamos a por" + objetivo distinto de "la parte" no casa.
+        text = "Vamos a por la victoria\nMadrid gana\nCuota 1.50"
+        assert _is_live_commentary(text) is False
+
+
 class TestExtractLineaMarcador:
     def test_marcador_0_0_no_es_linea(self):
         # "0-0" es un marcador, no el hándicap "-0" (caso real: la
@@ -1032,6 +1065,67 @@ class TestJunkEvento:
             "WAF Brigittenau - Helfort 15",
         ):
             assert not _is_junk_evento(ok), ok
+
+    def test_fecha_larga_completa(self):
+        """La fecha del historial de apuestas ('miércoles, 16 de
+        septiembre de 2026, 18:45') no es un cruce — caso picks
+        6277/8045, que la tenían como evento."""
+        from app.services.telegram.pick_extractor import _is_junk_evento
+
+        for junk in (
+            "miércoles, 16 de septiembre de 2026, 18:45",
+            "miércoles, - de septiembre de 2026, 18:45",
+            "15 de octubre de 2026",
+        ):
+            assert _is_junk_evento(junk), junk
+
+    def test_rival_desconocido(self):
+        """'vs Desconocido' es el placeholder del tipster/LLM — mejor
+        NULL que un rival fantasma (picks 4418/4479/5226)."""
+        from app.services.telegram.pick_extractor import _is_junk_evento
+
+        assert _is_junk_evento("Darwin Blanch vs Desconocido")
+        assert _is_junk_evento("Alex De Minaur vs Desconocido")
+
+    def test_solo_nombre_de_competicion(self):
+        """El evento no puede ser solo la cabecera de la liga
+        ('Ligue 2', 'Nations League', 'LA LIGA'). La convención de
+        tenis sobrevive: 'ATP PEKÍN'/'WTA ANKARA' dejan la ciudad."""
+        from app.services.telegram.pick_extractor import _is_junk_evento
+
+        for junk in ("Ligue 2", "Nations League", "LA LIGA", "Bundesliga"):
+            assert _is_junk_evento(junk), junk
+        for ok in ("ATP PEKÍN", "WTA ANKARA", "CHALLENGER SZCZECIN DOBLES"):
+            assert not _is_junk_evento(ok), ok
+
+
+class TestSettledBetHistory:
+    """Historial de apuestas resueltas (WH y similares): el veredicto
+    va pegado a la cuota por selección. Caso real: raws 20010/22573
+    (picks 6277/8045) — combinada de 6 ya cobrada que coló como pick."""
+
+    _HISTORY = (
+        "Resultado del partido @ 5,50 Gana\nOmonia Nicosia\n"
+        "Omonia - Celta de Vigo\nmiércoles, 16 de septiembre de 2026\n\n"
+        "Resultado del partido @ 3,75 Gana\nBenfica\n"
+        "AC Milán - Benfica\nmiércoles, 16 de septiembre de 2026\n\n"
+        "Combinada de 6 selecciones @ 504,90\n"
+        "Cantidad de la apuesta: 7,00 €\nGanancias: 3534,30 €"
+    )
+
+    def test_historial_gana_tras_cuota(self):
+        assert _is_settled_ticket(self._HISTORY) is True
+
+    def test_resultado_ganada(self):
+        assert (
+            _is_settled_ticket("Resultado: Ganada\nMás de 2,5 goles\nBetis - Oporto")
+            is True
+        )
+
+    def test_slip_abierto_con_gana_no_caza(self):
+        """'Barcelona gana' tras la cuota NO es el marcador de historial:
+        el 'Gana' del historial va pegado al '@ cuota', no suelto."""
+        assert _is_settled_ticket("Barcelona gana\nCuota 1.80\nImp: 100,00€") is False
 
 
 class TestPatasFromJoined:
