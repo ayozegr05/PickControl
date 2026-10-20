@@ -17,8 +17,12 @@ from app.services.odds.oddspapi import (
     PricePoint,
     downsample,
     event_ext_id,
+    load_markets,
+    load_payload,
     match_fixture,
     parse_fixture,
+    save_markets,
+    save_payload,
     translate_history,
 )
 
@@ -80,11 +84,51 @@ _MARKETS = {
         handicap=0.0,
         outcomes={999: "A"},
     ),
+    3000: MarketDef(
+        market_name="Corners - Over Under Team 1",
+        market_type="teamtotals-corners-team1",
+        period="fulltime",
+        handicap=7.5,
+        outcomes={3000: "Over", 3001: "Under"},
+    ),
+    3100: MarketDef(
+        market_name="Corners - Over Under Full Time",
+        market_type="totals-corners",
+        period="fulltime",
+        handicap=7.5,
+        outcomes={3100: "Over", 3101: "Under"},
+    ),
 }
 
 
 def _point(ts: str, price: float, active: bool = True) -> dict:
     return {"createdAt": ts, "price": price, "limit": None, "active": active}
+
+
+# Partido con la MISMA línea (7.5) publicada como total de equipo y
+# total del partido: prueba que el comparador no los mezcla.
+_CORNER_HISTORY = {
+    "bookmakers": {
+        "bet365": {
+            "markets": {
+                "3000": {
+                    "outcomes": {
+                        "3000": {
+                            "players": {"0": [_point("2026-09-14T12:00:00.000Z", 1.85)]}
+                        }
+                    }
+                },
+                "3100": {
+                    "outcomes": {
+                        "3100": {
+                            "players": {"0": [_point("2026-09-14T12:00:00.000Z", 1.95)]}
+                        }
+                    }
+                },
+            }
+        }
+    }
+}
 
 
 _HISTORY = {
@@ -196,6 +240,79 @@ class TestMatchFixture:
         assert found is None
 
 
+class TestMatchFixtureVentanaAncha:
+    """Segunda pasada: `fecha_evento` de repost a ±4 días exige nombre
+    fuerte — el fixture equivocado envenena la auditoría."""
+
+    def test_repost_a_3_dias_casa_nombre_fuerte(self):
+        found = match_fixture(
+            [_FIXTURE], "Sevilla - Barcelona", datetime(2026, 9, 18, 12, 0)
+        )
+        assert found is _FIXTURE
+
+    def test_ventana_ancha_exige_mas_similitud(self):
+        # "Sevilla - Valencia": comparte medio nombre pero no llega a
+        # 0.75 — la ventana ancha no baja el listón de identidad.
+        found = match_fixture(
+            [_FIXTURE], "Sevilla - Valencia", datetime(2026, 9, 18, 12, 0)
+        )
+        assert found is None
+
+    def test_mas_de_4_dias_no_casa(self):
+        found = match_fixture(
+            [_FIXTURE], "Sevilla - Barcelona", datetime(2026, 9, 20, 12, 0)
+        )
+        assert found is None
+
+    def test_ventana_estricta_tiene_prioridad(self):
+        """Fixture a ±1 día con nombre decente gana a uno a ±3 con
+        nombre algo mejor: cerca de la fecha la pasada estricta manda."""
+        cerca = OddsPapiFixture(
+            "id-cerca",
+            None,
+            "Sevilla FC",
+            "Barcelona B",
+            datetime(2026, 9, 15, 20, 0),
+            10,
+        )
+        lejos = OddsPapiFixture(
+            "id-lejos",
+            None,
+            "Sevilla FC",
+            "FC Barcelona",
+            datetime(2026, 9, 12, 18, 0),
+            10,
+        )
+        found = match_fixture(
+            [lejos, cerca], "Sevilla - Barcelona", datetime(2026, 9, 15, 12, 0)
+        )
+        assert found is cerca
+
+    def test_desempate_ancha_por_cercania(self):
+        """Dos fixtures con igual nombre en la ventana ancha: gana el
+        de la fecha más cercana al repost."""
+        dia3 = OddsPapiFixture(
+            "id-3",
+            None,
+            "Sevilla FC",
+            "FC Barcelona",
+            datetime(2026, 9, 12, 18, 0),
+            10,
+        )
+        dia2 = OddsPapiFixture(
+            "id-2",
+            None,
+            "Sevilla FC",
+            "FC Barcelona",
+            datetime(2026, 9, 17, 18, 0),
+            10,
+        )
+        found = match_fixture(
+            [dia3, dia2], "Sevilla - Barcelona", datetime(2026, 9, 15, 12, 0)
+        )
+        assert found is dia2
+
+
 class TestTranslateHistory:
     def test_1x2_a_full_time(self):
         choices = translate_history(_HISTORY, _MARKETS, "Sevilla FC", "FC Barcelona")
@@ -229,8 +346,62 @@ class TestTranslateHistory:
         choices = translate_history(_HISTORY, _MARKETS, "Sevilla FC", "FC Barcelona")
         assert all(c.market_name != "Mercado Sin Traduccion" for c in choices)
 
+    def test_total_corners_equipo_se_traduce(self):
+        history = {
+            "bookmakers": {
+                "bet365": {
+                    "markets": {
+                        "3000": {
+                            "outcomes": {
+                                "3000": {
+                                    "players": {
+                                        "0": [_point("2026-09-14T12:00:00.000Z", 1.9)]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        choices = translate_history(history, _MARKETS, "Sevilla FC", "FC Barcelona")
+        team = [c for c in choices if c.market_name == "Team 1 corners"]
+        assert len(team) == 1
+        assert team[0].choice_name == "Over"
+        assert team[0].choice_group == "7.5"
+
     def test_payload_vacio(self):
         assert translate_history({}, _MARKETS, "A", "B") == []
+
+
+class TestPersistencia:
+    """Payloads y catálogo a disco: re-traducir no vuelve a pagar la
+    llamada de API."""
+
+    def test_payload_roundtrip(self, tmp_path):
+        save_payload(_FIXTURE, "sofascore:17085930", _HISTORY, base=tmp_path)
+        envelope = load_payload("sofascore:17085930", base=tmp_path)
+        assert envelope is not None
+        assert envelope["payload"] == _HISTORY
+        assert envelope["home_name"] == "Sevilla FC"
+        assert envelope["fixture_id"] == "id1200390574632744"
+
+    def test_payload_inexistente_devuelve_none(self, tmp_path):
+        assert load_payload("sofascore:1", base=tmp_path) is None
+
+    def test_markets_roundtrip(self, tmp_path):
+        save_markets(_MARKETS, base=tmp_path)
+        loaded = load_markets(base=tmp_path)
+        assert loaded is not None
+        assert loaded[101].market_name == "Full Time Result"
+        assert loaded[101].outcomes == {101: "1", 102: "X", 103: "2"}
+        assert loaded[3000].handicap == 7.5
+
+    def test_payload_corrupto_devuelve_none(self, tmp_path):
+        path = tmp_path / "payloads" / "sofascore_9.json"
+        path.parent.mkdir(parents=True)
+        path.write_text("{no json", encoding="utf-8")
+        assert load_payload("sofascore:9", base=tmp_path) is None
 
 
 class TestDownsample:
@@ -306,3 +477,70 @@ class TestIntegracionCompare:
         assert matched.market_name == "Match goals"
         assert matched.choice_name == "Over"
         assert matched.choice_group == "2.5"
+
+    def _corner_event(self):
+        return OddsEvent(
+            event_ext_id="sofascore:17085930",
+            sport="futbol",
+            home_team="Sevilla FC",
+            away_team="FC Barcelona",
+            start=datetime(2026, 9, 15, 18, 0),
+        )
+
+    def test_corners_de_equipo_casan_mercado_de_equipo(self):
+        """'Sevilla +7.5 córners' casa con Team 1 corners, NO con el
+        total del partido aunque exista la misma línea 7.5."""
+        choices = translate_history(
+            _CORNER_HISTORY, _MARKETS, "Sevilla FC", "FC Barcelona"
+        )
+        pick = ParsedPick(
+            mercado="córners",
+            seleccion="Sevilla FC más de 7.5 córners",
+            linea=7.5,
+            deporte="fútbol",
+            es_apuesta=True,
+        )
+        matched = map_pick_choices(
+            pick, self._corner_event(), self._virtual_rows(choices)
+        )
+        assert matched is not None
+        assert matched.market_name == "Team 1 corners"
+        assert matched.choice_name == "Over"
+        assert matched.rows[-1].cuota == 1.85
+
+    def test_corners_sin_equipo_casan_total_partido(self):
+        choices = translate_history(
+            _CORNER_HISTORY, _MARKETS, "Sevilla FC", "FC Barcelona"
+        )
+        pick = ParsedPick(
+            mercado="córners",
+            seleccion="Más de 7.5 córners",
+            linea=7.5,
+            deporte="fútbol",
+            es_apuesta=True,
+        )
+        matched = map_pick_choices(
+            pick, self._corner_event(), self._virtual_rows(choices)
+        )
+        assert matched is not None
+        assert matched.market_name == "Corners 2-Way"
+        assert matched.rows[-1].cuota == 1.95
+
+    def test_corners_equipo_sin_mercado_equipo_no_cae_al_total(self):
+        """Guard anti-falso-positivo: pick de equipo sin mercado de
+        equipo publicado devuelve None — nunca el total del partido."""
+        choices = translate_history(
+            _CORNER_HISTORY, _MARKETS, "Sevilla FC", "FC Barcelona"
+        )
+        choices = [c for c in choices if not c.market_name.startswith("Team")]
+        pick = ParsedPick(
+            mercado="córners",
+            seleccion="Sevilla FC más de 7.5 córners",
+            linea=7.5,
+            deporte="fútbol",
+            es_apuesta=True,
+        )
+        matched = map_pick_choices(
+            pick, self._corner_event(), self._virtual_rows(choices)
+        )
+        assert matched is None

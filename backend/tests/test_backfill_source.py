@@ -15,7 +15,7 @@ from app.services.odds.historical_backfill import (
     BackfillReport,
     _run_source,
 )
-from app.services.odds.oddspapi import HistoricalChoice, PricePoint
+from app.services.odds.oddspapi import HistoricalChoice, MarketDef, PricePoint
 from app.services.results.base import is_missed
 
 pytestmark = pytest.mark.asyncio
@@ -248,3 +248,191 @@ async def test_opcion_casada_no_marca_nomarket(session):
 
     assert report.sin_opcion == 0
     assert not is_missed(f"fakefeed|nomarket|{pick.id}")
+
+
+class _WideDeltaSource(_FakeSource):
+    """Fuente con ventana de búsqueda propia (caso oddspapi ±4)."""
+
+    search_deltas = (0, -1, 1, -2, 2)
+
+
+async def test_search_deltas_configurables(session):
+    """El loop pide los deltas que declara la fuente, no siempre ±1:
+    oddspapi cubre ±4 días porque su /fixtures es una llamada de rango
+    que cuesta lo mismo pida 3 o 9 días."""
+    src = _WideDeltaSource(fixtures_return=[])
+    report = BackfillReport()
+
+    await _run_source(src, [_pick(1, 20)], set(), set(), session, None, False, report)
+
+    assert [d.day for d in src.days_requested] == [20, 19, 21, 18, 22]
+
+
+async def test_pick_enlaza_evento_aunque_no_case_opcion(session):
+    """El fixture casado rellena `odds_event_id` aunque el pick no
+    encuentre mercado: el evento ES ese — el id permite reintentos
+    offline desde el payload guardado."""
+    src = _FakeSource(fixtures_return=[_Fixture()], choices=[])
+    pick = _pick(1, 20)
+    pick.mercado = "jugador"
+    pick.seleccion = "Isak marca gol"
+
+    report = BackfillReport()
+    await _run_source(src, [pick], set(), set(), session, None, False, report)
+
+    assert report.sin_opcion == 1
+    assert pick.odds_event_id == "fake:1"
+
+
+class _FakePapiClient:
+    """Cliente bet365 de mentira: cuenta llamadas y sirve fixtures."""
+
+    def __init__(self, fixtures=None, payload=None):
+        self.calls = 0
+        self._fixtures = fixtures or []
+        self._payload = payload
+        self.fixture_ranges = []
+
+    async def fixtures(self, http, sport_id, date_from, date_to):
+        self.calls += 1
+        self.fixture_ranges.append((date_from, date_to))
+        return list(self._fixtures)
+
+    async def markets(self, http):
+        self.calls += 1
+        return _PAPI_MARKETS
+
+    async def historical_odds(self, http, fixture_id):
+        self.calls += 1
+        return (200, self._payload) if self._payload else (404, None)
+
+
+_PAPI_MARKETS = {
+    101: MarketDef(
+        market_name="Full Time Result",
+        market_type="1x2",
+        period="fulltime",
+        handicap=0.0,
+        outcomes={101: "1", 102: "X", 103: "2"},
+    )
+}
+
+
+class TestOddsPapiSource:
+    """La fuente real de bet36528: ventana ancha + payload a disco."""
+
+    def _source(self, client, tmp_path):
+        from app.services.odds.historical_backfill import _OddsPapiSource
+
+        src = _OddsPapiSource(api_key="k", api_host="h", data_dir=tmp_path)
+        src._client = client
+        return src
+
+    async def test_una_llamada_cubre_nueve_dias(self, tmp_path):
+        """/fixtures es una llamada de RANGO: pedir ±4 cuesta lo mismo
+        que ±1 — los cubos vecinos salen de caché, no de cuota."""
+        from datetime import date
+
+        from app.services.odds.oddspapi import OddsPapiFixture
+
+        fixture = OddsPapiFixture(
+            "f1", None, "A", "B", datetime(2026, 9, 16, 18, 0), 10
+        )
+        client = _FakePapiClient(fixtures=[fixture])
+        src = self._source(client, tmp_path)
+
+        day = date(2026, 9, 20)
+        assert await src.fixtures(None, 10, day) == []
+        # El rango pedido es ±4 y los 9 días quedan cubiertos.
+        assert client.fixture_ranges == [(date(2026, 9, 16), date(2026, 9, 24))]
+        assert await src.fixtures(None, 10, date(2026, 9, 16)) == [fixture]
+        assert await src.fixtures(None, 10, date(2026, 9, 24)) == []
+        assert client.calls == 1
+
+    async def test_choices_desde_disco_sin_llamada(self, tmp_path):
+        """Payload guardado → la curva se re-traduce sin pagar otra
+        llamada de /historical-odds."""
+        from app.services.odds.oddspapi import (
+            OddsPapiFixture,
+            save_markets,
+            save_payload,
+        )
+
+        fixture = OddsPapiFixture(
+            "f1", None, "A", "B", datetime(2026, 9, 16, 18, 0), 10
+        )
+        save_markets(_PAPI_MARKETS, base=tmp_path)
+        payload = {
+            "bookmakers": {
+                "bet365": {
+                    "markets": {
+                        "101": {
+                            "outcomes": {
+                                "101": {
+                                    "players": {
+                                        "0": [
+                                            {
+                                                "createdAt": "2026-09-15T10:00:00.000Z",
+                                                "price": 2.1,
+                                                "active": True,
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        save_payload(fixture, "oddspapi:f1", payload, base=tmp_path)
+        client = _FakePapiClient()
+        src = self._source(client, tmp_path)
+
+        status, choices = await src.choices(None, fixture, "futbol", [])
+        assert status == "ok"
+        assert [c.choice_name for c in choices] == ["1"]
+        assert client.calls == 0
+
+    async def test_choices_descarga_y_guarda_payload(self, tmp_path):
+        """Sin payload en disco: baja de la API y lo persiste."""
+        from app.services.odds.oddspapi import (
+            OddsPapiFixture,
+            load_payload,
+        )
+
+        payload = {
+            "bookmakers": {
+                "bet365": {
+                    "markets": {
+                        "101": {
+                            "outcomes": {
+                                "101": {
+                                    "players": {
+                                        "0": [
+                                            {
+                                                "createdAt": "2026-09-15T10:00:00.000Z",
+                                                "price": 2.1,
+                                                "active": True,
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        fixture = OddsPapiFixture(
+            "f1", None, "A", "B", datetime(2026, 9, 16, 18, 0), 10
+        )
+        client = _FakePapiClient(payload=payload)
+        src = self._source(client, tmp_path)
+
+        status, choices = await src.choices(None, fixture, "futbol", [])
+        assert status == "ok"
+        assert [c.choice_name for c in choices] == ["1"]
+        # markets + historical-odds = 2 llamadas; el payload quedó.
+        assert client.calls == 2
+        assert load_payload("oddspapi:f1", base=tmp_path) is not None

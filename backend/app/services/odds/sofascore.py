@@ -112,7 +112,14 @@ class SofaScoreOddsProvider:
             # llamadas del lado de resultados, no las del snapshotter).
             log_remaining_quota(self.NAME, response)
             response.raise_for_status()
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError:
+                # RapidAPI a veces sirve 200 con HTML/empty body
+                # (página de error del proxy): sin el catch el
+                # JSONDecodeError tumbaba la pasada entera de backfill.
+                logger.warning("[ODDS:%s] Respuesta no-JSON en %s", self.NAME, path)
+                return None
             return data if isinstance(data, dict) else None
         except httpx.HTTPError as exc:
             if rate_limit_from(exc):

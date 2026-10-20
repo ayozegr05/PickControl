@@ -59,6 +59,7 @@ import inspect
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Optional, Protocol, Union
 
 import httpx
@@ -142,6 +143,11 @@ _FEED_MAX_CALLS_PER_RUN = 40
 # backlog inicial + lo que crezca); con techo, el drenaje se reparte
 # y queda margen para los picks nuevos del mes.
 _PAPI_MAX_CALLS_PER_RUN = 150
+# Días a cada lado que cubre UNA llamada /fixtures de oddspapi: el
+# rango es gratis por ancho (una petición sirve 9 días) y rescata los
+# picks cuya `fecha_evento` era la del repost — el grueso del bucket
+# "sin fixture" del primer drenaje.
+_PAPI_FIXTURE_DAYS = 4
 # Gemini-odds: provider/fuente de las filas que aporta el investigador
 # y prefijo de su marca de procesado en el miss-store. Cada pick
 # intentado cuesta 2-4 llamadas al modelo; el presupuesto por pasada
@@ -269,17 +275,32 @@ class _HistorySource(Protocol):
 
 
 class _OddsPapiSource:
-    """bet36528: catálogo /markets + /historical-odds por fixture."""
+    """bet36528: catálogo /markets + /historical-odds por fixture.
+
+    Dos ventajas propias frente a las demás fuentes:
+    - `revisit_done=True`: el payload de cada fixture se guarda en
+      disco, así que un evento ya auditado puede aportar filas NUEVAS
+      cuando el mapa de traducción mejora — sin repetir la llamada.
+    - `search_deltas` ±4: la llamada /fixtures pide un RANGO de fechas
+      al mismo precio; pidiendo el rango ancho de una vez cada cubo
+      cuesta una llamada y cubre 9 días (los picks con fecha de repost
+      dejan de caer en `sin fixture`).
+    """
 
     name = oddspapi.NAME
+    revisit_done = True
+    # El primer delta (0) ancla la descarga del rango completo; los
+    # demás salen de `_covered_days` sin llamada extra.
+    search_deltas = (0, -1, 1, -2, 2, -3, 3, -4, 4)
 
-    def __init__(self, api_key: str, api_host: str) -> None:
+    def __init__(
+        self, api_key: str, api_host: str, data_dir: Optional[Path] = None
+    ) -> None:
         self._client = OddsPapiClient(api_key=api_key, api_host=api_host)
-        # Días cubiertos por llamada: el loop pide ±1 día por cubo y
-        # cada /fixtures cuesta cuota mensual — una llamada de rango
-        # de 3 días deja servidos los tres deltas (y los cubos vecinos
-        # de días consecutivos) por el precio de una.
+        # Días ya servidos por alguna llamada de rango: pedir el día D
+        # tras descargar D±4 no vuelve a pagar cuota.
         self._covered_days: dict[int, dict[date, list[OddsPapiFixture]]] = {}
+        self._data_dir = data_dir
 
     def _over_budget(self) -> bool:
         return self._client.calls >= _PAPI_MAX_CALLS_PER_RUN
@@ -301,16 +322,17 @@ class _OddsPapiSource:
         days = self._covered_days.setdefault(sport_id, {})
         if day in days:
             return days[day]
-        events = await self._client.fixtures(
-            http, sport_id, day - timedelta(days=1), day + timedelta(days=1)
-        )
+        first = day - timedelta(days=_PAPI_FIXTURE_DAYS)
+        last = day + timedelta(days=_PAPI_FIXTURE_DAYS)
+        events = await self._client.fixtures(http, sport_id, first, last)
         if events is None:
             return None
         by_day: dict[date, list[OddsPapiFixture]] = {}
         for fixture in events:
             d = fixture.start.date() if fixture.start else day
             by_day.setdefault(d, []).append(fixture)
-        for d in (day - timedelta(days=1), day, day + timedelta(days=1)):
+        for offset in range(-_PAPI_FIXTURE_DAYS, _PAPI_FIXTURE_DAYS + 1):
+            d = day + timedelta(days=offset)
             days[d] = by_day.get(d, [])
         return days[day]
 
@@ -324,17 +346,36 @@ class _OddsPapiSource:
         return fixture.fixture_id
 
     async def choices(self, http, fixture: OddsPapiFixture, sport, picks):
-        if self._over_budget():
-            return "budget", []
-        markets = await self._client.markets(http)
+        ext_id = self.ext_id(fixture)
+        cached = oddspapi.load_payload(ext_id, self._data_dir)
+        markets = None
+        if cached is not None:
+            # Re-traducción 100% offline cuando el catálogo también está
+            # guardado: ni siquiera se paga la llamada de /markets.
+            markets = oddspapi.load_markets(self._data_dir)
+        if markets is None:
+            markets = await self._client.markets(http)
+            if markets is not None:
+                oddspapi.save_markets(markets, self._data_dir)
+            else:
+                # API caída/sin cuota: el catálogo en disco basta para
+                # traducir (los marketId no mueren).
+                markets = oddspapi.load_markets(self._data_dir)
         if markets is None:
             return "error", []
+        if cached is not None:
+            return "ok", oddspapi.translate_history(
+                cached["payload"], markets, fixture.home_name, fixture.away_name
+            )
+        if self._over_budget():
+            return "budget", []
         await asyncio.sleep(_FETCH_DELAY)
         status, payload = await self._client.historical_odds(http, fixture.fixture_id)
         if status == 404:
             return "miss", []
         if payload is None:
             return "error", []
+        oddspapi.save_payload(fixture, ext_id, payload, self._data_dir)
         return "ok", oddspapi.translate_history(
             payload, markets, fixture.home_name, fixture.away_name
         )
@@ -1498,7 +1539,7 @@ async def _run_source(
         fixtures: list = []
         search_space: Optional[_SofaSearchSpace] = None
         api_error = False
-        for delta in (-1, 0, 1):
+        for delta in getattr(source, "search_deltas", (-1, 0, 1)):
             day_fixtures = await source.fixtures(
                 http, sport_id, day + timedelta(days=delta)
             )
@@ -1567,6 +1608,14 @@ async def _run_source(
                             clear_missed(f"{other.name}|nofixture|{pick.id}")
                             clear_missed(f"{other.name}|nomarket|{pick.id}")
             ext_id = source.ext_id(fixture)
+            if not pick.odds_event_id:
+                # Enlaza aunque luego no case ninguna opción: el evento
+                # ES este — la falta es de mercado, no de fixture, y el
+                # id permite reintentos desde el payload guardado sin
+                # otra búsqueda de fixtures.
+                pick.odds_event_id = ext_id
+                if apply:
+                    session.add(pick)
             if ext_id in done and not getattr(source, "revisit_done", False):
                 continue
             slot = fixtures_picks.setdefault(

@@ -52,6 +52,14 @@ _OU_MARKETS_TENIS = (
 # Sin sujeto: se intenta el mercado principal y, si ninguna línea casa,
 # el resto de mercados O/U del evento desambigua por `choice_group`.
 _OU_DEFAULT_FUTBOL = ("Match goals", "Corners 2-Way", "Cards in match")
+# Totales por equipo (los publica el feed bet365 como "Team N ..."):
+# "Madrid +7 córners" NO es el total del partido — caer en "Corners
+# 2-Way" aunque la línea coincida compararía contra otro mercado.
+_OU_TEAM_MARKET = {
+    "Corners 2-Way": "Team {} corners",
+    "Cards in match": "Team {} cards",
+    "Match goals": "Team {} goals",
+}
 
 _WIN_MARKETS = ("Full time",)
 _FIRST_SET_MARKETS = ("First set winner",)
@@ -71,6 +79,25 @@ def _side_index(team: str, event: OddsEvent) -> Optional[int]:
     if max(home, away) < _MIN_TEAM_SIMILARITY:
         return None
     return 0 if home >= away else 1
+
+
+def _event_team_in_text(text: str, event: OddsEvent) -> Optional[int]:
+    """0/1 si el texto nombra a home/away, None si ninguno o AMBOS.
+
+    "Ambos" también devuelve None: "Madrid-Barça +9 córners" suele ser
+    total del partido, no de equipo — el desempate por ambigüedad va
+    al mercado general.
+    """
+    folded = fold_name(text)
+
+    def _mentions(team: str) -> bool:
+        ft = fold_name(team or "")
+        return bool(ft) and bool(re.search(rf"\b{re.escape(ft)}\b", folded))
+
+    home, away = _mentions(event.home_team), _mentions(event.away_team)
+    if home != away:
+        return 0 if home else 1
+    return None
 
 
 def _line_of(row: OddsSnapshot) -> Optional[float]:
@@ -186,7 +213,11 @@ def _match_handicap(
 
 
 def _map_over_under(
-    sport: str, text: str, snapshots: list[OddsSnapshot], pick: ParsedPick
+    sport: str,
+    text: str,
+    snapshots: list[OddsSnapshot],
+    pick: ParsedPick,
+    event: OddsEvent,
 ) -> Optional[MatchedOdds]:
     """Over/under: el sujeto elige mercado; sin sujeto, la línea
     disponible en el evento desambigua."""
@@ -201,6 +232,19 @@ def _map_over_under(
     candidates: list[tuple[str, ...]] = [
         names for pattern, names in subjects if pattern.search(text)
     ]
+    # "Sevilla +7 córners" es un total del EQUIPO: con un solo equipo
+    # del evento nombrado en el texto solo casa el mercado de equipo —
+    # el total del partido es otro mercado aunque la línea coincida.
+    side = _event_team_in_text(text, event) if sport == "futbol" else None
+    if side is not None and candidates:
+        team_market = _OU_TEAM_MARKET.get(candidates[0][0])
+        if team_market:
+            return _match_over_under(
+                snapshots,
+                (team_market.format(side + 1),),
+                pick.linea,
+                direction,
+            )
     if not candidates:
         candidates = [
             (name,) for name in (_OU_DEFAULT_FUTBOL if sport == "futbol" else ())
@@ -333,7 +377,7 @@ def map_pick_choices(
     )
 
     if "over" in text or "under" in text or "más de" in text or "menos" in text:
-        matched = _map_over_under(event.sport, text, snapshots, pick)
+        matched = _map_over_under(event.sport, text, snapshots, pick, event)
         if matched is not None and (not ht_pick or matched.market_name == "1st half"):
             return matched
 

@@ -33,12 +33,15 @@ exactos) no se traducen — mismo criterio que `map_pick_choices`.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Optional
 
 import httpx
 
+from app.core.dates import utc_now
 from app.core.logging import get_logger
 from app.services.results.base import (
     is_rate_limited,
@@ -55,6 +58,14 @@ _MIN_MATCH_SCORE = 0.6
 # Tolerancia al casar el pick con el fixture (misma que el resto de
 # proveedores: la fecha del tipster puede diferir ~1 día del inicio).
 _DATE_TOLERANCE = timedelta(days=1)
+# Segunda pasada de matching: la `fecha_evento` de muchos picks es la
+# del repost en Telegram, no la del partido (Champions a mitad de
+# semana publicada el finde, etc.). Con el pool de fixtures servido a
+# ±4 días la ventana ancha rescata esos cruces, pero exige más
+# similitud de nombre: un fixture equivocado envenena la auditoría,
+# peor que un miss honesto.
+_WIDE_DATE_TOLERANCE = timedelta(days=4)
+_WIDE_MIN_SCORE = 0.75
 # Tope de puntos guardados por opción: una opción muy movida (live
 # incluido) puede traer miles de cambios; con muestreo uniforme +
 # extremos se conserva la forma de la curva sin inflar la tabla.
@@ -81,6 +92,14 @@ _MARKET_TRANSLATION = {
     ("Draw No Bet", "fulltime"): "Draw no bet",
     ("Corners - Over Under Full Time", "fulltime"): "Corners 2-Way",
     ("Bookings - Over Under Full Time", "fulltime"): "Cards in match",
+    # Totales por equipo: el comparador los pide cuando el pick nombra
+    # un equipo del evento ("Madrid +7 córners" ≠ total del partido).
+    ("Corners - Over Under Team 1", "fulltime"): "Team 1 corners",
+    ("Corners - Over Under Team 2", "fulltime"): "Team 2 corners",
+    ("Bookings - Over Under Team 1", "fulltime"): "Team 1 cards",
+    ("Bookings - Over Under Team 2", "fulltime"): "Team 2 cards",
+    ("Over Under Team 1", "fulltime"): "Team 1 goals",
+    ("Over Under Team 2", "fulltime"): "Team 2 goals",
 }
 _SPREAD_MARKETS = {"Asian handicap", "Game handicap", "Set handicap"}
 _TOTAL_MARKETS = {
@@ -89,6 +108,12 @@ _TOTAL_MARKETS = {
     "Total sets",
     "Corners 2-Way",
     "Cards in match",
+    "Team 1 corners",
+    "Team 2 corners",
+    "Team 1 cards",
+    "Team 2 cards",
+    "Team 1 goals",
+    "Team 2 goals",
 }
 # La doble oportunidad de OddsPapi usa "2X"; el comparador espera "X2".
 _OUTCOME_ALIASES = {"2X": "X2"}
@@ -181,8 +206,14 @@ def match_fixture(
     date: datetime,
     sofascore_id: Optional[int] = None,
 ) -> Optional[OddsPapiFixture]:
-    """El fixture del pick: por `sofascoreId` exacto si lo tenemos, si
-    no por similitud de nombres contra participant1/2 (±1 día)."""
+    """El fixture del pick en dos pasadas:
+
+    1. `sofascoreId` exacto si lo tenemos.
+    2. Similitud de nombres dentro de `_DATE_TOLERANCE` (±1 día).
+    3. Ventana ancha (`_WIDE_DATE_TOLERANCE`, ±4 días) para picks cuya
+       `fecha_evento` era la del repost: exige `_WIDE_MIN_SCORE` y
+       desempata por cercanía de fecha.
+    """
     if sofascore_id is not None:
         for fixture in fixtures:
             if fixture.sofascore_id == sofascore_id:
@@ -192,13 +223,28 @@ def match_fixture(
         return None
     best: Optional[OddsPapiFixture] = None
     best_score = 0.0
+    wide: list[tuple[OddsPapiFixture, float, float]] = []
     for fixture in fixtures:
-        if fixture.start and abs(fixture.start - date) > _DATE_TOLERANCE:
+        if not fixture.start:
             continue
+        distance = abs((fixture.start - date).total_seconds())
         score = match_score(hint, fixture.home_name, fixture.away_name)
-        if score > best_score:
-            best, best_score = fixture, score
-    return best if best_score >= _MIN_MATCH_SCORE else None
+        if fixture.start and abs(fixture.start - date) <= _DATE_TOLERANCE:
+            if score > best_score:
+                best, best_score = fixture, score
+        elif (
+            distance <= _WIDE_DATE_TOLERANCE.total_seconds()
+            and score >= _WIDE_MIN_SCORE
+        ):
+            wide.append((fixture, score, distance))
+    if best is not None and best_score >= _MIN_MATCH_SCORE:
+        return best
+    if not wide:
+        return None
+    # Identidad primero; a igualdad de nombre gana la fecha más cercana
+    # al repost.
+    wide.sort(key=lambda t: (-t[1], t[2]))
+    return wide[0][0]
 
 
 def _fmt_line(value: float) -> str:
@@ -294,6 +340,93 @@ def downsample(points: list[PricePoint]) -> list[PricePoint]:
         return points
     step = (len(points) - 1) / (_MAX_POINTS_PER_CHOICE - 1)
     return [points[round(i * step)] for i in range(_MAX_POINTS_PER_CHOICE)]
+
+
+# Carpeta de auditoría junto a provider_state.json: cada respuesta de
+# /historical-odds y del catálogo /markets queda guardada. Re-traducir
+# tras mejorar el mapa de mercados no vuelve a pagar la llamada — los
+# picks marcados `nomarket` se reintentan contra disco gratis.
+_DATA_DIR = Path(__file__).resolve().parents[3] / "oddspapi_data"
+
+
+def _safe_name(ext_id: str) -> str:
+    return ext_id.replace(":", "_").replace("/", "_")
+
+
+def payload_path(ext_id: str, base: Optional[Path] = None) -> Path:
+    return (base or _DATA_DIR) / "payloads" / f"{_safe_name(ext_id)}.json"
+
+
+def save_payload(
+    fixture: OddsPapiFixture,
+    ext_id: str,
+    payload: dict,
+    base: Optional[Path] = None,
+) -> None:
+    """Guarda la respuesta cruda de /historical-odds con el contexto
+    mínimo para reconstruir el evento y re-traducirla offline."""
+    path = payload_path(ext_id, base)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    envelope = {
+        "ext_id": ext_id,
+        "fixture_id": fixture.fixture_id,
+        "home_name": fixture.home_name,
+        "away_name": fixture.away_name,
+        "start": fixture.start.isoformat() if fixture.start else None,
+        "sport_id": fixture.sport_id,
+        "fetched_at": utc_now().isoformat(),
+        "payload": payload,
+    }
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+
+
+def load_payload(ext_id: str, base: Optional[Path] = None) -> Optional[dict]:
+    """El sobre guardado por `save_payload`, o None si no existe."""
+    path = payload_path(ext_id, base)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) and "payload" in data else None
+
+
+def save_markets(markets: dict[int, MarketDef], base: Optional[Path] = None) -> None:
+    """Catálogo /markets a disco: la re-traducción offline lo necesita."""
+    directory = base or _DATA_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    serial = {
+        str(market_id): {
+            "market_name": d.market_name,
+            "market_type": d.market_type,
+            "period": d.period,
+            "handicap": d.handicap,
+            "outcomes": d.outcomes,
+        }
+        for market_id, d in markets.items()
+    }
+    (directory / "markets.json").write_text(json.dumps(serial), encoding="utf-8")
+
+
+def load_markets(base: Optional[Path] = None) -> Optional[dict[int, MarketDef]]:
+    path = (base or _DATA_DIR) / "markets.json"
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return {
+            int(market_id): MarketDef(
+                market_name=str(v["market_name"]),
+                market_type=str(v["market_type"]),
+                period=str(v["period"]),
+                handicap=float(v["handicap"]),
+                outcomes={int(oi): str(on) for oi, on in v["outcomes"].items()},
+            )
+            for market_id, v in raw.items()
+        }
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 class OddsPapiClient:
