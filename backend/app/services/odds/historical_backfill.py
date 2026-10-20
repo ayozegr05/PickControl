@@ -64,6 +64,7 @@ from typing import Any, Optional, Protocol, Union
 
 import httpx
 from sqlalchemy import distinct, func
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from app.core.config import get_settings
@@ -1470,6 +1471,29 @@ async def backfill_breakdown(session) -> dict:
     }
 
 
+async def _register_event(session, event: OddsEvent, registered: set[str]) -> None:
+    """Inserta el OddsEvent si no existe — seguro ante escritores
+    concurrentes.
+
+    `registered` se carga al inicio de la pasada; el snapshotter o el
+    goteo llm-odds (procesos aparte) pueden crear la misma clave entre
+    esa carga y el commit final. El savepoint + flush inmediato hace
+    que el choque de clave aborte SOLO esta inserción en vez de tumbar
+    el commit de toda la pasada.
+    """
+    ext_id = event.event_ext_id
+    if ext_id in registered:
+        return
+    try:
+        async with session.begin_nested():
+            session.add(event)
+            await session.flush()
+    except IntegrityError:
+        # La fila la creó otro proceso durante la pasada — ya existe.
+        pass
+    registered.add(ext_id)
+
+
 async def _run_source(
     source: _HistorySource,
     picks: list[ParsedPick],
@@ -1724,9 +1748,7 @@ async def _run_source(
                     session.add(pick)
 
         if apply and matched_keys:
-            if ext_id not in registered:
-                session.add(event)
-                registered.add(ext_id)
+            await _register_event(session, event, registered)
             # Eventos revisitados (fuentes lazy): las opciones ya
             # escritas no se duplican — una fila libre del mismo key
             # se re-sella al pick que casó (cubre el caso del pick
@@ -1996,7 +2018,7 @@ async def _run_gemini_pass(
                     f"[{_LLM_ODDS_MARK}]"
                 )
                 continue
-            _record_gemini_closing(
+            await _record_gemini_closing(
                 session, events, registered, done, pick, found, apply, report
             )
         if cooled:
@@ -2007,7 +2029,7 @@ async def _run_gemini_pass(
             break
 
 
-def _record_gemini_closing(
+async def _record_gemini_closing(
     session,
     events: dict[str, OddsEvent],
     registered: set[str],
@@ -2079,9 +2101,15 @@ def _record_gemini_closing(
         f"[{row_provider} via {found.source_url}]"
     )
     if apply:
-        if ext_id not in registered:
-            session.add(event)
-            registered.add(ext_id)
+        # La fila OddsEvent solo se crea para ids propios
+        # ({provider}:{pick_id}). Cuando el pick ya enlaza a un evento
+        # de provider real (sofascore:...), las filas se cuelgan de ese
+        # ext_id pero la fila de evento la crea quien tenga los
+        # metadatos buenos (backfill/snapshotter) — un evento sintético
+        # bajo id ajeno colisiona con el creador real y le ensucia
+        # home/away.
+        if pick.odds_event_id is None:
+            await _register_event(session, event, registered)
         session.add(
             OddsSnapshot(
                 provider=row_provider,
