@@ -114,6 +114,44 @@ async def test_presupuesto_en_curvas_cuenta_sin_revisar(session):
     assert report.filas == 0
 
 
+class _NoPropSource(_FakeSource):
+    """Fuente que no soporta props de jugador (caso oddspapi: su
+    traducción solo lee líneas de equipo, players["0"])."""
+
+    def pick_supported(self, pick):
+        return "marca gol" not in (pick.seleccion or "").lower()
+
+
+async def test_pick_no_soportado_marca_nomarket_sin_llamar(session):
+    """Un pick que la fuente declara no-traducible se marca
+    `nomarket` SIN gastar ni la llamada del fixture ni la de la
+    curva — la cuota mensual no se quema en buscar lo imposible."""
+    src = _NoPropSource(
+        fixtures_return=[_Fixture()],
+        choices=[
+            HistoricalChoice(
+                market_name="Full time",
+                choice_name="1",
+                choice_group=None,
+                points=[PricePoint(captured_at=datetime(2026, 9, 19), cuota=1.5)],
+            )
+        ],
+    )
+    prop = _pick(1, 20)
+    prop.seleccion = "Aubameyang marca gol"
+    prop.mercado = "jugador"
+    normal = _pick(2, 20)
+    report = BackfillReport()
+
+    await _run_source(src, [prop, normal], set(), set(), session, None, True, report)
+
+    assert is_missed("fakefeed|nomarket|1") is True
+    assert is_missed("fakefeed|nomarket|2") is False
+    assert report.sin_opcion == 1
+    # Solo el pick normal llegó a la fase de fixture/curva.
+    assert report.con_fixture == 1
+
+
 class _EarlyFixture(_Fixture):
     """El partido real se jugó el 4/sep, no el 20 que guarda el pick
     (la fecha guardada era la del repost del boleto)."""

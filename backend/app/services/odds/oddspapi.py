@@ -305,6 +305,9 @@ class OddsPapiClient:
         self._api_host = api_host
         self._markets: Optional[dict[int, MarketDef]] = None
         self._fixture_cache: dict[tuple, Optional[list[OddsPapiFixture]]] = {}
+        # Peticiones HTTP emitidas por esta instancia: el plan son
+        # 200 req/MES — el backfill la dosifica por pasada.
+        self.calls = 0
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -320,6 +323,7 @@ class OddsPapiClient:
         historical-odds significa "fixture sin mercados", no un fallo."""
         if is_rate_limited(self.NAME):
             return 0, None
+        self.calls += 1
         try:
             response = await client.get(
                 f"https://{self._api_host}{path}",

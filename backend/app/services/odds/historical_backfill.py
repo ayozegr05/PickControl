@@ -81,7 +81,7 @@ from app.services.odds import (
     tennisdata,
 )
 from app.services.odds.base import MarketChoice
-from app.services.odds.compare import map_pick_choices
+from app.services.odds.compare import _PROP_PICK, map_pick_choices
 from app.services.odds.event_rescue import looks_like_match_hint, rescue_evento
 from app.services.odds.oddsfeed import (
     FeedFixture,
@@ -137,6 +137,11 @@ _FETCH_DELAY = 0.2
 # Tope de llamadas de odds-feed por ejecución: 500 req/mes exigen
 # dosificar el backlog — ~15 eventos con 2-3 llamadas cada uno.
 _FEED_MAX_CALLS_PER_RUN = 40
+# Tope de llamadas de oddspapi por ejecución: 200 req/MES. Una pasada
+# sin tope se bebe la cuota del mes de una sentada (~140 llamadas de
+# backlog inicial + lo que crezca); con techo, el drenaje se reparte
+# y queda margen para los picks nuevos del mes.
+_PAPI_MAX_CALLS_PER_RUN = 150
 # Gemini-odds: provider/fuente de las filas que aporta el investigador
 # y prefijo de su marca de procesado en el miss-store. Cada pick
 # intentado cuesta 2-4 llamadas al modelo; el presupuesto por pasada
@@ -276,11 +281,23 @@ class _OddsPapiSource:
         # de días consecutivos) por el precio de una.
         self._covered_days: dict[int, dict[date, list[OddsPapiFixture]]] = {}
 
+    def _over_budget(self) -> bool:
+        return self._client.calls >= _PAPI_MAX_CALLS_PER_RUN
+
     @property
     def sport_ids(self) -> dict[str, int]:
         return oddspapi.SPORT_IDS
 
+    def pick_supported(self, pick: ParsedPick) -> bool:
+        """False si el pick es prop de jugador: la traducción solo lee
+        `players["0"]` (líneas de equipo) — gastar la llamada del
+        fixture para cero opciones posibles es cuota quemada."""
+        text = f"{pick.mercado or ''} {pick.seleccion or ''}"
+        return not _PROP_PICK.search(text)
+
     async def fixtures(self, http, sport_id: int, day: date):
+        if self._over_budget():
+            return None
         days = self._covered_days.setdefault(sport_id, {})
         if day in days:
             return days[day]
@@ -307,6 +324,8 @@ class _OddsPapiSource:
         return fixture.fixture_id
 
     async def choices(self, http, fixture: OddsPapiFixture, sport, picks):
+        if self._over_budget():
+            return "budget", []
         markets = await self._client.markets(http)
         if markets is None:
             return "error", []
@@ -1448,6 +1467,19 @@ async def _run_source(
         if is_missed(nofixture_key.format(pick.id)) or is_missed(
             nomarket_key.format(pick.id)
         ):
+            continue
+        # Fuentes que declaran `pick_supported` pueden descartar el
+        # pick sin llamada: p. ej. oddspapi no traduce props de
+        # jugador — buscarle fixture y curva sería cuota en vano.
+        supports = getattr(source, "pick_supported", None)
+        if supports is not None and not supports(pick):
+            report.sin_opcion += 1
+            report.detalles.append(
+                f"  - pick {pick.id}: mercado no traducible "
+                f"({pick.mercado} / {pick.seleccion}) [{source.name}]"
+            )
+            if apply:
+                mark_missed(nomarket_key.format(pick.id))
             continue
         buckets.setdefault(
             (source.sport_ids[sport], pick.fecha_evento.date()), []
