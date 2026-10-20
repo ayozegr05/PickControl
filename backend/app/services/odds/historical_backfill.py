@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -76,6 +77,7 @@ from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage  # noqa: F401
 from app.models.user import User  # noqa: F401  (FKs de TelegramRawMessage)
 from app.services.odds import (
+    betsapi,
     football_csv,
     oddsfeed,
     oddspapi,
@@ -144,6 +146,11 @@ _FEED_MAX_CALLS_PER_RUN = 40
 # backlog inicial + lo que crezca); con techo, el drenaje se reparte
 # y queda margen para los picks nuevos del mes.
 _PAPI_MAX_CALLS_PER_RUN = 150
+# Tope de llamadas de BetsAPI por ejecución: el trial permite
+# 1.800/hora — techo prudente que deja margen y hace que las pasadas
+# horarias reanuden donde se quedó la anterior (los listados de día
+# quedan cacheados a disco).
+_BETS_MAX_CALLS_PER_RUN = 1400
 # Días a cada lado que cubre UNA llamada /fixtures de oddspapi: el
 # rango es gratis por ancho (una petición sirve 9 días) y rescata los
 # picks cuya `fecha_evento` era la del repost — el grueso del bucket
@@ -509,6 +516,138 @@ class _OddsFeedSource:
                     )
                 )
         return "ok", choices
+
+
+class _BetsApiSource:
+    """BetsAPI (api.b365api.com): el feed bet365 real — listado por
+    día + prematch completo congelado al entrar en vivo.
+
+    Cubre lo que oddspapi nunca tuvo (Champions, ligas grandes,
+    Challenger/ITF de tenis, basket global) y mercados que ninguna
+    otra fuente ofrece: juegos del 1er set, totales por equipo,
+    goleadores, tarjetas. Listados de días pasados se cachean a
+    disco (`betsapi_data/days/`): un día histórico no cambia y las
+    pasadas horarias del trial no repagan sus ~30 páginas.
+    """
+
+    name = betsapi.NAME
+    revisit_done = True
+    # ±4 como oddspapi: los picks con fecha de repost siguen existiendo.
+    # El coste por delta es un listado de día (~10-30 páginas), que la
+    # caché de disco amortiza entre pasadas.
+    search_deltas = (0, -1, 1, -2, 2, -3, 3, -4, 4)
+
+    def __init__(self, token: str, data_dir: Optional[Path] = None) -> None:
+        self._client = betsapi.BetsApiClient(token)
+        self._data_dir = data_dir
+
+    def _over_budget(self) -> bool:
+        return self._client.calls >= _BETS_MAX_CALLS_PER_RUN
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return betsapi.SPORT_IDS
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        if self._over_budget():
+            return None
+        # Caché de disco solo para días ya cerrados: el listado de
+        # hoy/mañana sigue cambiando, el de anteayer no.
+        if day < utc_now().date():
+            cached = self._load_day(sport_id, day)
+            if cached is not None:
+                return cached
+        fixtures = await self._client.upcoming(http, sport_id, day)
+        if fixtures is None:
+            return None
+        if day < utc_now().date():
+            self._save_day(sport_id, day, fixtures)
+        return fixtures
+
+    def _day_path(self, sport_id: int, day: date) -> Path:
+        base = self._data_dir or betsapi._DATA_DIR
+        return base / "days" / f"{sport_id}_{day.isoformat()}.json"
+
+    def _load_day(
+        self, sport_id: int, day: date
+    ) -> Optional[list[betsapi.BetsFixture]]:
+        path = self._day_path(sport_id, day)
+        if not path.exists():
+            return None
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            return [
+                betsapi.BetsFixture(
+                    fixture_id=f["fixture_id"],
+                    home_name=f["home_name"],
+                    away_name=f["away_name"],
+                    start=(
+                        datetime.fromisoformat(f["start"]) if f.get("start") else None
+                    ),
+                    sport_id=sport_id,
+                    league_name=f.get("league_name") or "",
+                )
+                for f in raw
+            ]
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def _save_day(
+        self, sport_id: int, day: date, fixtures: list[betsapi.BetsFixture]
+    ) -> None:
+        path = self._day_path(sport_id, day)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "fixture_id": f.fixture_id,
+                            "home_name": f.home_name,
+                            "away_name": f.away_name,
+                            "start": f.start.isoformat() if f.start else None,
+                            "league_name": f.league_name,
+                        }
+                        for f in fixtures
+                    ]
+                ),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass  # la caché es cortesía — un fallo de disco no frena la pasada
+
+    def match(self, fixtures, hint, dt, sofascore_id):
+        return betsapi.match_fixture(fixtures, hint, dt)
+
+    def ext_id(self, fixture: betsapi.BetsFixture) -> str:
+        return betsapi.event_ext_id(fixture)
+
+    def fixture_key(self, fixture: betsapi.BetsFixture) -> str:
+        return betsapi.fixture_key(fixture)
+
+    async def choices(self, http, fixture: betsapi.BetsFixture, sport, picks):
+        ext_id = self.ext_id(fixture)
+        cached = betsapi.load_payload(ext_id, self._data_dir)
+        if cached is not None:
+            return "ok", betsapi.translate_prematch(
+                cached["payload"],
+                sport,
+                fixture.home_name,
+                fixture.away_name,
+                when=fixture.start,
+            )
+        if self._over_budget():
+            return "budget", []
+        await asyncio.sleep(_FETCH_DELAY)
+        status, payload = await self._client.prematch(http, fixture.fixture_id)
+        if status == 404:
+            return "miss", []
+        if payload is None:
+            return "error", []
+        betsapi.save_payload(fixture, ext_id, payload, self._data_dir)
+        return "ok", betsapi.translate_prematch(
+            payload, sport, fixture.home_name, fixture.away_name, when=fixture.start
+        )
 
 
 class _TennisDataSource:
@@ -1244,6 +1383,7 @@ _BACKFILL_PROVIDERS = (
     _SofaScoreHistSource.name,
     oddspapi.NAME,
     oddsfeed.NAME,
+    betsapi.NAME,
     *_LLM_EXTRACTOR_PROVIDERS,
 )
 
@@ -1300,6 +1440,9 @@ def _sources(settings) -> list[_HistorySource]:
         _BetExplorerSource(),
         _SofaScoreHistSource(settings),
     ]
+    betsapi_token = getattr(settings, "betsapi_token", None)
+    if betsapi_token:
+        sources.append(_BetsApiSource(token=betsapi_token))
     if settings.rapidapi_tennis_key:
         sources.append(
             _OddsPapiSource(

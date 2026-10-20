@@ -164,6 +164,65 @@ def test_map_under_corners():
     assert (m.market_name, m.choice_name) == ("Corners 2-Way", "Under")
 
 
+def _tenis_snaps() -> list[OddsSnapshot]:
+    return [
+        _snap("Full time", "1", 1.57),
+        _snap("Full time", "2", 2.37),
+        _snap("Total games won", "Over", 1.83, group="22.5"),
+        _snap("Total games won", "Under", 1.83, group="22.5"),
+        _snap("1st set games", "Over", 1.07, group="7.5"),
+        _snap("1st set games", "Under", 9.0, group="7.5"),
+        _snap("1st set games", "Over", 1.25, group="8.5"),
+    ]
+
+
+def test_map_tenis_primer_set_juegos():
+    """'Más de 7.5 juegos en el 1º set' -> 1st set games, no el total."""
+    event = _event(sport="tenis", home="Luca Van Assche", away="Clement Tabur")
+    pick = _pick(
+        "Más de 7.5 juegos en el 1º set",
+        mercado="over/under juegos",
+        deporte="tenis",
+        linea=7.5,
+    )
+    m = map_pick_choices(pick, event, _tenis_snaps())
+    assert m is not None
+    assert (m.market_name, m.choice_name, m.choice_group) == (
+        "1st set games",
+        "Over",
+        "7.5",
+    )
+
+
+def test_map_tenis_linea_baja_sin_mencionar_set():
+    """Una línea <=13 en tenis solo puede ser de set: 'Más de 7.5
+    juegos' sin decir 'set' también va al mercado de 1er set."""
+    event = _event(sport="tenis", home="Luca Van Assche", away="Clement Tabur")
+    pick = _pick(
+        "Más de 7.5 juegos",
+        mercado="over/under juegos",
+        deporte="tenis",
+        linea=7.5,
+    )
+    m = map_pick_choices(pick, event, _tenis_snaps())
+    assert m is not None
+    assert m.market_name == "1st set games"
+
+
+def test_map_tenis_total_partido_sigue_al_total():
+    """Una línea alta sigue yendo al total del partido."""
+    event = _event(sport="tenis", home="Luca Van Assche", away="Clement Tabur")
+    pick = _pick(
+        "Más de 22.5 juegos",
+        mercado="over/under juegos",
+        deporte="tenis",
+        linea=22.5,
+    )
+    m = map_pick_choices(pick, event, _tenis_snaps())
+    assert m is not None
+    assert (m.market_name, m.choice_group) == ("Total games won", "22.5")
+
+
 def test_map_over_under_linea_no_ofrecida():
     """La línea del pick no existe en el mercado -> NULL, no se inventa."""
     pick = _pick("Más de 11.5 corners", mercado="over/under corners", linea=11.5)

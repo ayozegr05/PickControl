@@ -137,6 +137,12 @@ class Settings(BaseSettings):
     # se activa para picks de prop/línea alterna — un pick normal
     # nunca quema créditos aquí.
     odds_api_key: str | None = None
+    # BetsAPI (api.b365api.com): el feed bet365 real — listado por
+    # día + prematch completo (todos los mercados que bet365 ofreció,
+    # congelados al entrar en vivo). Reemplazo directo de OddsPapi:
+    # cubre Champions, ligas grandes, Challenger/ITF y basket global.
+    # Trial "Bet365 API": 1.800 req/hora. Sin token no se registra.
+    betsapi_token: str | None = None
     odds_api_regions: str = "uk,eu"
     odds_api_markets: str = (
         "player_goal_scorer_anytime,player_to_score_or_assist,"

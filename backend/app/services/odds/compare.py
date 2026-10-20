@@ -245,6 +245,16 @@ def _map_over_under(
                 pick.linea,
                 direction,
             )
+    if sport == "tenis":
+        # Juegos del primer set: "Más de 7.5 juegos en el 1º set" —
+        # y cualquier línea <=13 en tenis solo puede ser de set (un
+        # total de partido arranca en ~19). Desambigua antes que el
+        # sujeto "juego" meta el pick en el total del encuentro.
+        first_set = re.search(
+            r"1[ºaer]{0,3}\s*set|primer\s+set|set\s*1\b|first\s+set", text
+        )
+        if first_set or (pick.linea is not None and pick.linea <= 13):
+            candidates = [("1st set games",), *candidates]
     if not candidates:
         candidates = [
             (name,) for name in (_OU_DEFAULT_FUTBOL if sport == "futbol" else ())
