@@ -55,7 +55,9 @@ from app.services.results.base import (
     log_remaining_quota,
     mark_rate_limited,
     match_score,
+    translate_team_aliases,
 )
+from app.services.results.espn import _translate_countries
 
 logger = get_logger("app.odds.betsapi")
 
@@ -137,11 +139,29 @@ def match_fixture(
     best: Optional[BetsFixture] = None
     best_score = 0.0
     wide: list[tuple[BetsFixture, float, float]] = []
+    hints = [hint]
+    translated_hint = _translate_countries(hint)
+    if translated_hint != hint:
+        hints.append(translated_hint)
     for fixture in fixtures:
         if not fixture.start:
             continue
         distance = abs((fixture.start - when).total_seconds())
-        score = match_score(hint, fixture.home_name, fixture.away_name)
+        # Se puntúa contra el nombre crudo Y contra el expandido por
+        # aliases: el hint del pick puede venir en cualquiera de las
+        # dos formas ("psg" ó "paris saint germain") e igualmente el
+        # feed — con el máximo de ambas variantes casan los dos
+        # sentidos. Además el hint viaja en español ("Países Bajos")
+        # y el feed en inglés, así que se prueba también la
+        # traducción de países.
+        teams = [
+            (fixture.home_name, fixture.away_name),
+            (
+                translate_team_aliases(fixture.home_name),
+                translate_team_aliases(fixture.away_name),
+            ),
+        ]
+        score = max(match_score(h, home, away) for h in hints for home, away in teams)
         if abs(fixture.start - when) <= _DATE_TOLERANCE:
             if score > best_score:
                 best, best_score = fixture, score

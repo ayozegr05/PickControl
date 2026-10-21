@@ -314,6 +314,21 @@ _COUNTRY_ALIASES = {
     "albania": "albania",
 }
 
+# Duplicados sin tilde: los hints llegan ya plegados (fold_name quita
+# acentos) y las claves acentuadas nunca casarían — bug que impedía
+# traducir "Paises Bajos" -> "Netherlands" en todos los sources.
+for _acc, _eng in list(_COUNTRY_ALIASES.items()):
+    _plain = (
+        _acc.replace("á", "a")
+        .replace("é", "e")
+        .replace("í", "i")
+        .replace("ó", "o")
+        .replace("ú", "u")
+    )
+    if _plain != _acc:
+        _COUNTRY_ALIASES.setdefault(_plain, _eng)
+del _acc, _eng, _plain
+
 # `name` de la estadística ESPN -> clave canónica que ya consume el
 # verificador (mismas que devuelve API-Football `/fixtures/statistics`).
 _STAT_NAME_MAP = {

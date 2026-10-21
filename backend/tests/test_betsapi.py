@@ -86,6 +86,24 @@ class TestMatchFixture:
             is None
         )
 
+    def test_alias_expanded_both_sides(self):
+        """Caso real: el hint del pick ya viene expandido
+        ('paris saint germain') y bet365 nombra la sigla ('PSG') — sin
+        expandir también el fixture el score queda bajo umbral."""
+        f = _fixture()
+        found = betsapi.match_fixture(
+            [f], "paris saint germain vs barcelona", datetime(2026, 10, 20, 20, 0)
+        )
+        assert found is f
+
+    def test_country_names_translated(self):
+        """El hint viaja en español y el feed en inglés."""
+        f = _fixture(home_name="Netherlands", away_name="Poland")
+        found = betsapi.match_fixture(
+            [f], "paises bajos vs polonia", datetime(2026, 10, 20, 20, 0)
+        )
+        assert found is f
+
 
 def _football_payload():
     """Estructura real de /v4/bet365/prematch (PSG-Barça, reducida)."""
