@@ -26,6 +26,7 @@ SELECT p.id, p.evento, p.mercado, p.seleccion, p.linea, p.cuota,
 FROM parsed_picks p
 WHERE p.es_apuesta = true
   AND p.es_combinada = false
+  AND p.anulada = false
   AND p.deporte IS NOT NULL
   AND p.fecha_evento IS NOT NULL
   AND p.fecha_evento < now() - interval '6 hours'
@@ -48,6 +49,8 @@ SPORTS = {
 def categoria(row, marks):
     pid = row.id
     m = [k for k in marks if k.endswith(f"|{pid}")]
+    if not row.evento and row.odds_event_id:
+        return "sin_evento_resuelto", m
     if any(k == "betsapi|nomarket" or k.startswith("betsapi|nomarket") for k in m):
         return "nomarket_bet365", m
     if any(k.startswith("betsapi|nofixture") for k in m):
@@ -84,6 +87,7 @@ async def main() -> None:
         "nomarket_bet365",
         "no_listado_bet365",
         "extraccion_corrupta",
+        "sin_evento_resuelto",
         "nomarket_otros",
         "nofixture_otros",
         "sin_revisar",
