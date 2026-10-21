@@ -73,6 +73,10 @@ services:
       - ./backend/provider_state.json:/app/provider_state.json
       - ./backend/provider_cache.json:/app/provider_cache.json
       - ./backend/backups:/app/backups
+      # Payloads/listados crudos de providers de cuotas (retraducción
+      # offline, auditoría). Sin mount mueren en cada recreate.
+      - ./backend/oddspapi_data:/app/oddspapi_data
+      - ./backend/betsapi_data:/app/betsapi_data
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
