@@ -1800,7 +1800,18 @@ async def _run_source(
             procesados_curva += len(event_picks)
             report.sin_historial += len(event_picks)
             continue
-        status, choices = await source.choices(http, fixture, sport, event_picks)
+        try:
+            status, choices = await source.choices(http, fixture, sport, event_picks)
+        except Exception:
+            # Un payload con forma inesperada en UNA fuente no puede
+            # tumbar la pasada entera (perdimos un drenaje asi): se
+            # trata como error de API - sin marca, reintenta luego.
+            report.sin_revisar += pendientes_curva - procesados_curva
+            report.detalles.append(
+                f"  ! {fixture.home_name} vs {fixture.away_name}: "
+                f"excepcion en choices() [{source.name}], se reintenta luego"
+            )
+            break
         if status == "miss":
             # El fixture nunca tuvo mercados en esta fuente.
             mark_missed(hist_key.format(source.fixture_key(fixture)))
