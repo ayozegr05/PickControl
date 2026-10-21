@@ -454,7 +454,16 @@ def translate_prematch(
         if section_key in ("FI", "event_id", "sport_id"):
             continue
         for market_key, market in markets_of(section).items():
-            odds = market.get("odds") or []
+            # El feed no es uniforme: casi todo llega {name, odds}
+            # pero hay secciones cuyo valor es la lista de odds
+            # directamente (p.ej. "others") — sin el isinstance la
+            # pasada moría con AttributeError en ese evento.
+            if isinstance(market, dict):
+                odds = market.get("odds") or []
+            elif isinstance(market, list):
+                odds = [o for o in market if isinstance(o, dict)]
+            else:
+                continue
             if odds:
                 emit(market_key, odds)
     return emitter.choices
