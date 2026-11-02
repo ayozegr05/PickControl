@@ -6,13 +6,12 @@
 import React from "react";
 import {
   ActivityIndicator,
-  Modal,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
-import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
+import ModalFrame from "@/src/components/modal-frame";
 import { PickOdds } from "@/src/api/parsed-picks.api";
 import { PickItem } from "@/src/types/pick.types";
 import { formatDateShort } from "@/src/utils/format";
@@ -43,21 +42,8 @@ export default function PickDetailModal({
   onCorregir,
 }: PickDetailModalProps) {
   return (
-    <Modal
-      animationType="slide"
-      transparent={true}
-      visible={pick !== null}
-      onRequestClose={onClose}
-    >
-      <View style={styles.modalContainer}>
-        <View style={styles.modalContent}>
-          <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-            <Text style={styles.closeButtonText}>
-              <MaterialCommunityIcons name="close" size={26} color="white" />
-            </Text>
-          </TouchableOpacity>
-
-          {pick && (
+    <ModalFrame visible={pick !== null} onClose={onClose}>
+      {pick && (
             <>
               <Text style={styles.modalTitle}>
                 {pick.apuesta || "(sin nombre)"}
@@ -187,45 +173,11 @@ export default function PickDetailModal({
               </View>
             </>
           )}
-        </View>
-      </View>
-    </Modal>
+    </ModalFrame>
   );
 }
 
 const styles = StyleSheet.create({
-  modalContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.7)",
-  },
-  modalContent: {
-    backgroundColor: "#303030",
-    borderRadius: 15,
-    padding: 20,
-    width: "80%",
-    alignItems: "center",
-    elevation: 5,
-    position: "relative",
-  },
-  closeButton: {
-    position: "absolute",
-    top: 10,
-    right: 10,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: "#F44336",
-    justifyContent: "center",
-    alignItems: "center",
-    zIndex: 1,
-  },
-  closeButtonText: {
-    color: "white",
-    fontSize: 16,
-    fontWeight: "bold",
-  },
   modalTitle: {
     fontSize: 24,
     fontWeight: "bold",

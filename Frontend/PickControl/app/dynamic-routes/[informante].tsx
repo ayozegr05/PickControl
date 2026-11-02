@@ -7,7 +7,6 @@ import {
   ScrollView,
   FlatList,
   ActivityIndicator,
-  Modal,
   TouchableOpacity,
   Alert,
   Platform,
@@ -37,6 +36,9 @@ import {
 import { formatDateShort } from "@/src/utils/format";
 import PickDetailModal from "@/src/components/pick-detail-modal";
 import JugarModal, { JugarFormValues } from "@/src/components/jugar-modal";
+import UpdatePickModal from "@/src/components/update-pick-modal";
+import DeletePickModal from "@/src/components/delete-pick-modal";
+import ApuestasTable from "@/src/components/apuestas-table";
 
 export default function InformantDetail() {
   const { informante } = useLocalSearchParams(); // Obtener el parámetro dinámico
@@ -212,29 +214,6 @@ export default function InformantDetail() {
       acumulado += ganancia;
       return Number(acumulado.toFixed(2)); // Aseguramos que devolvemos un número con 2 decimales
     });
-  };
-
-  // Función para renderizar los pronósticos con símbolos
-  const renderPronostico = (acierto: Acierto, apuesta: PickItem) => {
-    if (acierto === "True") {
-      return (
-        <Text style={[styles.icon, { color: colors.success, fontSize: 18 }]}>
-          ✅
-        </Text>
-      );
-    } else if (acierto === "False") {
-      return <Text style={[styles.icon, { color: "red" }]}>❌</Text>;
-    }
-    return (
-      <TouchableOpacity
-        onPress={() => {
-          setSelectedApuesta(apuesta);
-          setModalUpdateVisible(true);
-        }}
-      >
-        <Text style={[styles.icon, { color: "gray" }]}>❓</Text>
-      </TouchableOpacity>
-    );
   };
 
   // Picks de Telegram: solo lectura, sin tocar el modal de edición.
@@ -618,61 +597,13 @@ export default function InformantDetail() {
               apostado
             </Text>
           </View>
-          <Modal
-            animationType="slide"
-            transparent={true}
+          <UpdatePickModal
             visible={modalUpdateVisible}
-            onRequestClose={() => setModalUpdateVisible(false)}
-          >
-            <View style={styles.modalContainer}>
-              <View style={styles.modalContent}>
-                <TouchableOpacity
-                  style={styles.closeButton}
-                  onPress={() => setModalUpdateVisible(false)}
-                >
-                  <Text style={styles.closeButtonText}>
-                    <MaterialCommunityIcons
-                      name="close"
-                      size={26}
-                      color="white"
-                    />
-                  </Text>
-                </TouchableOpacity>
-                <Text style={styles.modalTitle}>Actualizar Apuesta</Text>
-                <Text style={styles.modalText}>¿La apuesta fue correcta?</Text>
-                <View style={styles.modalButtons}>
-                  <TouchableOpacity
-                    style={[styles.modalButton, { backgroundColor: "#4CAF50" }]}
-                    onPress={() =>
-                      actualizarApuesta(selectedApuesta!.id, "True")
-                    }
-                  >
-                    <Text style={styles.modalButtonText}>
-                      <MaterialCommunityIcons
-                        name="check"
-                        size={26}
-                        color="white"
-                      />
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.modalButton, { backgroundColor: "#F44336" }]}
-                    onPress={() =>
-                      actualizarApuesta(selectedApuesta!.id, "False")
-                    }
-                  >
-                    <Text style={styles.modalButtonText}>
-                      <MaterialCommunityIcons
-                        name="close"
-                        size={32}
-                        color="white"
-                      />
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-          </Modal>
+            onClose={() => setModalUpdateVisible(false)}
+            onResult={(acierto) => {
+              if (selectedApuesta) actualizarApuesta(selectedApuesta.id, acierto);
+            }}
+          />
 
           {/* Picks publicados por el tipster (extraídos de Telegram) */}
           <View style={styles.card}>
@@ -1066,167 +997,27 @@ export default function InformantDetail() {
                 Sin apuestas en el período seleccionado.
               </Text>
             ) : (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                <View style={styles.table}>
-                  <View style={styles.tableRow}>
-                    <View style={[styles.tableHeaderCell, styles.border]}>
-                      <Text style={styles.tableHeaderText}>Apuesta</Text>
-                    </View>
-                    <View style={[styles.tableHeaderCell, styles.border]}>
-                      <Text style={styles.tableHeaderText}>Acierto</Text>
-                    </View>
-                    <View style={[styles.tableHeaderCell, styles.border]}>
-                      <Text style={styles.tableHeaderText}>Fecha</Text>
-                    </View>
-                    <View style={[styles.tableHeaderCell, styles.border]}>
-                      <Text style={styles.tableHeaderText}>
-                        Tipo de Apuesta
-                      </Text>
-                    </View>
-                    <View style={[styles.tableHeaderCell, styles.border]}>
-                      <Text style={styles.tableHeaderText}>Cuota</Text>
-                    </View>
-                    <View style={[styles.tableHeaderCell, styles.border]}>
-                      <Text style={styles.tableHeaderText}>Cant. Apostada</Text>
-                    </View>
-                    <View style={[styles.tableHeaderCell, styles.border]}>
-                      <Text style={styles.tableHeaderText}>Ganancia</Text>
-                    </View>
-                    <View style={[styles.tableHeaderCell, styles.border]}>
-                      <Text style={styles.tableHeaderText}>Acciones</Text>
-                    </View>
-                  </View>
-
-                  {apuestasFiltradas().map((apuesta, index) => (
-                    <View
-                      key={apuesta.id}
-                      style={[
-                        styles.tableRow,
-                        index % 2 === 0 ? styles.evenRow : styles.oddRow,
-                      ]}
-                    >
-                      <View style={[styles.tableCell, styles.border]}>
-                        <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                          {apuesta.apuesta || "(sin nombre)"}
-                        </Text>
-                      </View>
-                      <View style={[styles.tableCell, styles.border]}>
-                        <Text>
-                          {renderPronostico(apuesta.acierto, apuesta)}
-                        </Text>
-                      </View>
-                      <View style={[styles.tableCell, styles.border]}>
-                        <TouchableOpacity
-                          onPress={() => handleFechaPress(apuesta)}
-                          style={styles.fechaContainer}
-                        >
-                          <Text
-                            style={[styles.cellText, { fontWeight: "bold" }]}
-                          >
-                            {formatDateShort(apuesta.fecha)}
-                          </Text>
-                          <MaterialCommunityIcons
-                            name="calendar-edit"
-                            size={16}
-                            color="#ff9f1c"
-                            style={styles.calendarIcon}
-                          />
-                        </TouchableOpacity>
-                      </View>
-                      <View style={[styles.tableCell, styles.border]}>
-                        <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                          {apuesta.tipoDeApuesta}
-                        </Text>
-                      </View>
-                      <View style={[styles.tableCell, styles.border]}>
-                        <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                          {apuesta.cuota != null
-                            ? Number(apuesta.cuota).toFixed(2)
-                            : "—"}
-                        </Text>
-                      </View>
-                      <View style={[styles.tableCell, styles.border]}>
-                        <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                          {apuesta.cantidadApostada != null
-                            ? Number(apuesta.cantidadApostada).toFixed(2)
-                            : "—"}
-                          <Text>€</Text>
-                        </Text>
-                      </View>
-                      <View style={[styles.tableCell, styles.border]}>
-                        <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                          {Number(
-                            gananciaApuesta(
-                              apuesta.cantidadApostada,
-                              apuesta.cuota,
-                              apuesta.acierto
-                            )
-                          ).toFixed(2)}
-                          <Text>€</Text>
-                        </Text>
-                      </View>
-                      <View style={[styles.tableCell, styles.border]}>
-                        <TouchableOpacity
-                          onPress={() => handleEliminarPress(apuesta)}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        >
-                          <MaterialCommunityIcons
-                            name="trash-can"
-                            size={22}
-                            color={colors.danger}
-                          />
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  ))}
-                </View>
-              </ScrollView>
+              <ApuestasTable
+                rows={apuestasFiltradas()}
+                onPronostico={(apuesta) => {
+                  setSelectedApuesta(apuesta);
+                  setModalUpdateVisible(true);
+                }}
+                onFecha={handleFechaPress}
+                onEliminar={handleEliminarPress}
+              />
             )}
           </View>
         </ScrollView>
 
-        <Modal
-          animationType="slide"
-          transparent={true}
+        <DeletePickModal
           visible={modalDeleteVisible}
-          onRequestClose={() => setModalDeleteVisible(false)}
-        >
-          <View style={styles.modalContainer}>
-            <View style={styles.modalContent}>
-              <TouchableOpacity
-                style={styles.closeButton}
-                onPress={() => setModalDeleteVisible(false)}
-              >
-                <Text style={styles.closeButtonText}>
-                  <MaterialCommunityIcons
-                    name="close"
-                    size={26}
-                    color="white"
-                  />
-                </Text>
-              </TouchableOpacity>
-
-              <Text style={styles.modalTitle}>Eliminar Apuesta</Text>
-              <Text style={styles.modalText}>
-                ¿Estás seguro de que deseas eliminar esta apuesta?
-              </Text>
-              <View style={styles.modalButtons}>
-                <TouchableOpacity
-                  style={[styles.modalButton, { backgroundColor: "#F44336" }]}
-                  onPress={() => eliminarApuesta(selectedApuesta!.id)} // Eliminamos la apuesta al hacer clic en "Sí"
-                >
-                  <Text style={styles.modalButtonText}>
-                    <MaterialCommunityIcons
-                      name="trash-can-outline"
-                      size={26}
-                      color="white"
-                    />
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
+          onClose={() => setModalDeleteVisible(false)}
+          onConfirm={() => {
+            // Eliminamos la apuesta al hacer clic en "Sí"
+            if (selectedApuesta) eliminarApuesta(selectedApuesta.id);
+          }}
+        />
         {/* Detalle de un pick de Telegram + corrección manual del resultado */}
         <PickDetailModal
           pick={selectedTelegramPick}
@@ -1295,74 +1086,10 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginVertical: 20,
   },
-  modalContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.7)",
-  },
-  modalContent: {
-    backgroundColor: "#303030",
-    borderRadius: 15,
-    padding: 20,
-    width: "80%",
-    alignItems: "center",
-    elevation: 5,
-    position: "relative",
-  },
-  closeButton: {
-    position: "absolute",
-    top: 10,
-    right: 10,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: "#F44336",
-    justifyContent: "center",
-    alignItems: "center",
-    zIndex: 1,
-  },
-  closeButtonText: {
-    color: "white",
-    fontSize: 16,
-    fontWeight: "bold",
-  },
-  modalTitle: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: "white",
-    marginTop: 20,
-    marginBottom: 15,
-  },
-  modalText: {
-    fontSize: 18,
-    color: "white",
-    marginBottom: 20,
-    textAlign: "center",
-  },
   eventoText: {
     fontSize: 11,
     color: "#999",
     marginTop: 2,
-  },
-  modalButtons: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    width: "100%",
-    marginTop: 10,
-  },
-  modalButton: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-    minWidth: 100,
-    alignItems: "center",
-    marginHorizontal: 10,
-  },
-  modalButtonText: {
-    color: "white",
-    fontSize: 16,
-    fontWeight: "bold",
   },
   botbarcontainer: {
     height: "100%",
@@ -1533,14 +1260,6 @@ const styles = StyleSheet.create({
   filterButtonTextActive: {
     color: "white",
     fontWeight: "bold",
-  },
-  fechaContainer: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  calendarIcon: {
-    marginLeft: 5,
   },
   telegramButton: {
     backgroundColor: "#ff9f1c",

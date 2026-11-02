@@ -6,14 +6,12 @@
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Modal,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  View,
 } from "react-native";
-import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
+import ModalFrame from "@/src/components/modal-frame";
 
 export interface JugarFormValues {
   cantidad: string;
@@ -54,100 +52,53 @@ export default function JugarModal({
   }, [visible]);
 
   return (
-    <Modal
-      animationType="slide"
-      transparent={true}
-      visible={visible}
-      onRequestClose={onClose}
-    >
-      <View style={styles.modalContainer}>
-        <View style={styles.modalContent}>
-          <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-            <Text style={styles.closeButtonText}>
-              <MaterialCommunityIcons name="close" size={26} color="white" />
-            </Text>
-          </TouchableOpacity>
+    <ModalFrame visible={visible} onClose={onClose}>
+      <Text style={styles.modalTitle}>Yo también la jugué</Text>
+      <Text style={styles.jugarHint}>
+        Cantidad, cuota y casa reales — pueden diferir de las del tipster y así
+        se compara el yield publicado con el tuyo.
+      </Text>
 
-          <Text style={styles.modalTitle}>Yo también la jugué</Text>
-          <Text style={styles.jugarHint}>
-            Cantidad, cuota y casa reales — pueden diferir de las del tipster y
-            así se compara el yield publicado con el tuyo.
-          </Text>
+      <TextInput
+        style={styles.jugarInput}
+        placeholder="Cantidad apostada (obligatorio)"
+        placeholderTextColor="#888"
+        keyboardType="numeric"
+        value={cantidad}
+        onChangeText={setCantidad}
+      />
+      <TextInput
+        style={styles.jugarInput}
+        placeholder="Cuota conseguida (opcional)"
+        placeholderTextColor="#888"
+        keyboardType="numeric"
+        value={cuota}
+        onChangeText={setCuota}
+      />
+      <TextInput
+        style={styles.jugarInput}
+        placeholder="Casa (opcional)"
+        placeholderTextColor="#888"
+        value={casa}
+        onChangeText={setCasa}
+      />
 
-          <TextInput
-            style={styles.jugarInput}
-            placeholder="Cantidad apostada (obligatorio)"
-            placeholderTextColor="#888"
-            keyboardType="numeric"
-            value={cantidad}
-            onChangeText={setCantidad}
-          />
-          <TextInput
-            style={styles.jugarInput}
-            placeholder="Cuota conseguida (opcional)"
-            placeholderTextColor="#888"
-            keyboardType="numeric"
-            value={cuota}
-            onChangeText={setCuota}
-          />
-          <TextInput
-            style={styles.jugarInput}
-            placeholder="Casa (opcional)"
-            placeholderTextColor="#888"
-            value={casa}
-            onChangeText={setCasa}
-          />
-
-          <TouchableOpacity
-            style={[styles.jugarButton, loading && { opacity: 0.6 }]}
-            onPress={() => onSubmit({ cantidad, cuota, casa })}
-            disabled={loading}
-          >
-            {loading ? (
-              <ActivityIndicator size="small" color="white" />
-            ) : (
-              <Text style={styles.jugarButtonText}>Registrar apuesta</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
+      <TouchableOpacity
+        style={[styles.jugarButton, loading && { opacity: 0.6 }]}
+        onPress={() => onSubmit({ cantidad, cuota, casa })}
+        disabled={loading}
+      >
+        {loading ? (
+          <ActivityIndicator size="small" color="white" />
+        ) : (
+          <Text style={styles.jugarButtonText}>Registrar apuesta</Text>
+        )}
+      </TouchableOpacity>
+    </ModalFrame>
   );
 }
 
 const styles = StyleSheet.create({
-  modalContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.7)",
-  },
-  modalContent: {
-    backgroundColor: "#303030",
-    borderRadius: 15,
-    padding: 20,
-    width: "80%",
-    alignItems: "center",
-    elevation: 5,
-    position: "relative",
-  },
-  closeButton: {
-    position: "absolute",
-    top: 10,
-    right: 10,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: "#F44336",
-    justifyContent: "center",
-    alignItems: "center",
-    zIndex: 1,
-  },
-  closeButtonText: {
-    color: "white",
-    fontSize: 16,
-    fontWeight: "bold",
-  },
   modalTitle: {
     fontSize: 24,
     fontWeight: "bold",
