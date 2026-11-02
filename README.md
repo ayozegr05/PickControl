@@ -1,5 +1,8 @@
 # ControlPick
 
+[![Backend CI](https://github.com/ayozegr05/PickControl/actions/workflows/backend.yml/badge.svg)](https://github.com/ayozegr05/PickControl/actions/workflows/backend.yml)
+[![Frontend CI](https://github.com/ayozegr05/PickControl/actions/workflows/frontend.yml/badge.svg)](https://github.com/ayozegr05/PickControl/actions/workflows/frontend.yml)
+
 ![Backend](https://img.shields.io/badge/backend-FastAPI-009688?logo=fastapi&logoColor=white)
 ![Database](https://img.shields.io/badge/database-PostgreSQL%2016-4169E1?logo=postgresql&logoColor=white)
 ![Frontend](https://img.shields.io/badge/frontend-Expo%20%2F%20React%20Native-000020?logo=expo&logoColor=white)
