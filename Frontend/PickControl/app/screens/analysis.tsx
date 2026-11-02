@@ -74,9 +74,7 @@ export default function Analysis() {
 
       const informantesList = Object.keys(apuestasPorInformante);
       setInformantes(informantesList);
-      setPendientes(
-        picks.filter((pick) => pick.acierto === "Pending").length
-      );
+      setPendientes(picks.filter((pick) => pick.acierto === "Pending").length);
 
       // Convertir a array plano para los cálculos, excluyendo apuestas pendientes
       const allApuestas = Object.values(apuestasPorInformante).flat();
@@ -284,8 +282,8 @@ export default function Analysis() {
                   Aún no has registrado apuestas
                 </Text>
                 <Text style={styles.emptyHint}>
-                  Usa "Yo también la jugué" en un pick de Telegram para
-                  comparar tu rentabilidad real con la del tipster.
+                  Usa «Yo también la jugué» en un pick de Telegram para comparar
+                  tu rentabilidad real con la del tipster.
                 </Text>
               </>
             )}

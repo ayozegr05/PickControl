@@ -8,11 +8,7 @@ export type PickSource = "manual" | "telegram";
  * anuladas históricas): empate técnico en línea entera / DNB,
  * partido no disputado, jugador del prop sin minutos, o cierre del
  * barrido de residuos. */
-export type MotivoAnulada =
-  | "push"
-  | "aplazado"
-  | "jugador_fuera"
-  | "expired";
+export type MotivoAnulada = "push" | "aplazado" | "jugador_fuera" | "expired";
 
 /** Una pata de una combinada (cada una se verifica por separado). */
 export interface CombinadaPata {

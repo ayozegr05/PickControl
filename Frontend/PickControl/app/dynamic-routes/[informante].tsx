@@ -947,9 +947,9 @@ export default function InformantDetail() {
                             </Text>
                             <Text style={styles.retoMeta}>
                               {formatearFecha(comb.fecha)} · cuota{" "}
-                              {Number(
-                                comb.cuotaEfectiva ?? comb.cuota
-                              ).toFixed(2)}
+                              {Number(comb.cuotaEfectiva ?? comb.cuota).toFixed(
+                                2
+                              )}
                               {comb.cuotaEfectiva != null &&
                               comb.cuotaEfectiva !== comb.cuota
                                 ? ` (declarada ${Number(comb.cuota).toFixed(2)})`
@@ -1352,9 +1352,8 @@ export default function InformantDetail() {
                               : ""}
                           </Text>
                           <Text style={styles.oddsRow}>
-                            Tipster{" "}
-                            {pickOdds.cuota_tipster?.toFixed(2) ?? "-"} ·
-                            Apertura{" "}
+                            Tipster {pickOdds.cuota_tipster?.toFixed(2) ?? "-"}{" "}
+                            · Apertura{" "}
                             {pickOdds.cuota_apertura?.toFixed(2) ?? "-"} · Al
                             publicar{" "}
                             {pickOdds.cuota_publicacion?.toFixed(2) ?? "-"} ·
@@ -1520,9 +1519,7 @@ export default function InformantDetail() {
                 {jugando ? (
                   <ActivityIndicator size="small" color="white" />
                 ) : (
-                  <Text style={styles.jugarButtonText}>
-                    Registrar apuesta
-                  </Text>
+                  <Text style={styles.jugarButtonText}>Registrar apuesta</Text>
                 )}
               </TouchableOpacity>
             </View>

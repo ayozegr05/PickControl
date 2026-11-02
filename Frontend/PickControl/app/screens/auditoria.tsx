@@ -48,7 +48,9 @@ function StatsLine({ label, stats }: { label: string; stats: StatsBloque }) {
       <Text style={styles.statsLineValue}>
         {stats.aciertos}/{stats.total - stats.pendientes} aciertos ·{" "}
         {stats.ganancias.toFixed(2)}u ·{" "}
-        <Text style={{ color: yieldColor(stats.yield_pct), fontWeight: "bold" }}>
+        <Text
+          style={{ color: yieldColor(stats.yield_pct), fontWeight: "bold" }}
+        >
           yield {stats.yield_pct.toFixed(1)}%
         </Text>
       </Text>
@@ -66,13 +68,17 @@ function OddsLine({ odds }: { odds: OddsBloque }) {
       {odds.clv_medio !== null && (
         <>
           {" · "}
-          <Text style={{ color: yieldColor(odds.clv_medio), fontWeight: "bold" }}>
+          <Text
+            style={{ color: yieldColor(odds.clv_medio), fontWeight: "bold" }}
+          >
             CLV {odds.clv_medio > 0 ? "+" : ""}
             {odds.clv_medio.toFixed(1)}%
           </Text>
         </>
       )}
-      {odds.con_clv > 0 && <> · bate cierre {odds.pct_bate_cierre.toFixed(0)}%</>}
+      {odds.con_clv > 0 && (
+        <> · bate cierre {odds.pct_bate_cierre.toFixed(0)}%</>
+      )}
       {odds.cuotas_infladas > 0 && (
         <>
           {" · "}

@@ -38,14 +38,14 @@ function loadNotifications(): Promise<NotificationsModule | null> {
           return null;
         }
       },
-      () => null,
+      () => null
     );
   }
   return notificationsPromise;
 }
 
 async function configureAndroidChannel(
-  Notifications: NotificationsModule,
+  Notifications: NotificationsModule
 ): Promise<void> {
   // Android 8+ exige un canal para mostrar notificaciones.
   if (Platform.OS === "android") {
@@ -71,8 +71,7 @@ export async function registerForPushNotifications(): Promise<void> {
     if (status !== "granted") return; // permiso denegado: no insistimos
 
     const projectId = Constants.expoConfig?.extra?.eas?.projectId as
-      | string
-      | undefined;
+      string | undefined;
     const { data: token } = await Notifications.getExpoPushTokenAsync({
       projectId,
     });

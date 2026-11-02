@@ -29,7 +29,7 @@ function loadSecureStore(): Promise<SecureStoreModule | null> {
   if (!secureStorePromise) {
     secureStorePromise = import("expo-secure-store").then(
       (m) => m,
-      () => null,
+      () => null
     );
   }
   return secureStorePromise;

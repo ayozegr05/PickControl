@@ -66,9 +66,7 @@ const Canales = () => {
   const handleToggle = async (canal: Canal, activo: boolean) => {
     try {
       const updated = await setCanalActivo(canal.id, activo);
-      setCanales((prev) =>
-        prev.map((c) => (c.id === canal.id ? updated : c))
-      );
+      setCanales((prev) => prev.map((c) => (c.id === canal.id ? updated : c)));
     } catch (err: any) {
       Alert.alert("Error", err.message || "No se pudo actualizar el canal");
     }
@@ -95,10 +93,7 @@ const Canales = () => {
                 // Si el listener no responde, se refresca al re-entrar.
               }
             } catch (err: any) {
-              Alert.alert(
-                "Error",
-                err.message || "No se pudo quitar el canal"
-              );
+              Alert.alert("Error", err.message || "No se pudo quitar el canal");
             }
           },
         },
@@ -154,7 +149,7 @@ const Canales = () => {
                 <Text style={styles.cardMeta}>
                   {canal.username
                     ? `@${canal.username}`
-                    : canal.channelId ?? canal.target}
+                    : (canal.channelId ?? canal.target)}
                 </Text>
               </View>
               <Switch
@@ -215,9 +210,7 @@ const Canales = () => {
               </View>
               <TouchableOpacity
                 style={styles.monitorButton}
-                onPress={() =>
-                  handleAdd(d.username ?? String(d.channelId))
-                }
+                onPress={() => handleAdd(d.username ?? String(d.channelId))}
                 disabled={adding}
               >
                 <Text style={styles.monitorButtonText}>Monitorizar</Text>

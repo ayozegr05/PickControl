@@ -38,9 +38,12 @@ export async function listCanales(): Promise<Canal[]> {
 }
 
 export async function listCanalesDisponibles(): Promise<CanalDisponible[]> {
-  const raws = await apiRequest<RawAvailableChannel[]>("/channels/disponibles", {
-    auth: true,
-  });
+  const raws = await apiRequest<RawAvailableChannel[]>(
+    "/channels/disponibles",
+    {
+      auth: true,
+    }
+  );
   return raws.map((raw) => ({
     channelId: raw.channel_id,
     name: raw.name,

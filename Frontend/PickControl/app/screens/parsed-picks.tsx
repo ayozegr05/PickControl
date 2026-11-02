@@ -331,7 +331,9 @@ export default function ParsedPicksScreen() {
             n in providersStatus.rate_limited ||
             (providersStatus.calls_today?.[n] ?? 0) > 0
         ),
-      ].filter((n) => !/^[a-z0-9]+-odds$/.test(n) && !n.startsWith("llm-compat"))
+      ].filter(
+        (n) => !/^[a-z0-9]+-odds$/.test(n) && !n.startsWith("llm-compat")
+      )
     );
     const generic = [...names].map((name) => {
       const limitedSince = providersStatus.rate_limited[name] ?? null;
@@ -378,7 +380,8 @@ export default function ParsedPicksScreen() {
       engines.add("gemini");
     }
     const engineRows = [...engines].map((engine) => {
-      const callMark = engine === "gemini" ? "gemini-odds" : `llm-compat-${engine}`;
+      const callMark =
+        engine === "gemini" ? "gemini-odds" : `llm-compat-${engine}`;
       const rowProvider = `${engine}-odds`;
       const limitedSince =
         providersStatus.rate_limited[callMark] ??
@@ -391,7 +394,8 @@ export default function ParsedPicksScreen() {
         ...clasificarBloqueo(limitedSince),
         callsToday: providersStatus.calls_today?.[callMark] ?? 0,
         dailyLimit: providersStatus.daily_limits?.[callMark] ?? null,
-        snapshots: providersStatus.odds_snapshots_by_provider?.[rowProvider] ?? 0,
+        snapshots:
+          providersStatus.odds_snapshots_by_provider?.[rowProvider] ?? 0,
         purposeCalls: providersStatus.calls_by_purpose?.[callMark] ?? {},
         extractOk: stats?.ok ?? null,
         extractFail: stats?.fail ?? null,
@@ -487,7 +491,9 @@ export default function ParsedPicksScreen() {
         </Text>
       </View>
       <View style={styles.pataButtons}>
-        <TouchableOpacity onPress={() => handleCorregirPata(pata, { acierto: true })}>
+        <TouchableOpacity
+          onPress={() => handleCorregirPata(pata, { acierto: true })}
+        >
           <Text style={styles.pataButton}>✅</Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -651,8 +657,7 @@ export default function ParsedPicksScreen() {
         <View style={styles.acertoSection}>
           <Text style={styles.cardMeta}>
             Patas ({pick.patas!.length})
-            {pick.cuota_efectiva != null &&
-            pick.cuota_efectiva !== pick.cuota
+            {pick.cuota_efectiva != null && pick.cuota_efectiva !== pick.cuota
               ? ` · cuota efectiva ${pick.cuota_efectiva}`
               : ""}
           </Text>
@@ -697,9 +702,7 @@ export default function ParsedPicksScreen() {
           <View
             style={[styles.checkbox, soloPendientes && styles.checkboxChecked]}
           />
-          <Text style={styles.toggleLabel}>
-            Solo pendientes de liquidar
-          </Text>
+          <Text style={styles.toggleLabel}>Solo pendientes de liquidar</Text>
         </TouchableOpacity>
 
         {isAdmin && providersStatus !== null && (
@@ -768,7 +771,9 @@ export default function ParsedPicksScreen() {
                             row.misses !== 1 ? "s" : ""
                           } (en caché)`
                         : ""}
-                      {(row.callsToday > 0 || row.misses > 0 || row.cooldownHasta) &&
+                      {(row.callsToday > 0 ||
+                        row.misses > 0 ||
+                        row.cooldownHasta) &&
                       row.resolved > 0
                         ? " · "
                         : ""}
@@ -821,8 +826,10 @@ export default function ParsedPicksScreen() {
                             ? `quota → ${row.quotaHasta.slice(8, 10)}/${row.quotaHasta.slice(5, 7)}`
                             : "quota hoy"
                           : row.cooldownHasta
-                            ? `cooldown · ${row.cooldownHasta
-                                .slice(11, 16)} UTC`
+                            ? `cooldown · ${row.cooldownHasta.slice(
+                                11,
+                                16
+                              )} UTC`
                             : "OK"}
                       </Text>
                     </View>
@@ -864,26 +871,24 @@ export default function ParsedPicksScreen() {
               {providersStatus.odds_events_count ?? 0} eventos con cuota
               registrada
             </Text>
-            {Object.entries(
-              providersStatus.odds_snapshots_por_dia ?? {}
-            ).map(([dia, n]) => (
-              <Text key={dia} style={styles.statSub}>
-                {dia.slice(8, 10)}/{dia.slice(5, 7)} → {n} cuota
-                {n !== 1 ? "s" : ""} guardada{n !== 1 ? "s" : ""}
-              </Text>
-            ))}
+            {Object.entries(providersStatus.odds_snapshots_por_dia ?? {}).map(
+              ([dia, n]) => (
+                <Text key={dia} style={styles.statSub}>
+                  {dia.slice(8, 10)}/{dia.slice(5, 7)} → {n} cuota
+                  {n !== 1 ? "s" : ""} guardada{n !== 1 ? "s" : ""}
+                </Text>
+              )
+            )}
             {providersStatus.odds_backfill && (
               <View style={styles.funnel}>
                 <Text style={styles.funnelHint}>
-                  Un pick sale de la cola cuando todos los providers
-                  vivos lo han intentado (o su cuota ya está
-                  registrada).
+                  Un pick sale de la cola cuando todos los providers vivos lo
+                  han intentado (o su cuota ya está registrada).
                 </Text>
                 <Text style={styles.funnelHint}>
-                  Fase A: listar partidos del día (~3 llamadas por día,
-                  más si hay muchas páginas) · Fase B: bajar la curva
-                  de cuotas (1 llamada por partido) · tope 40
-                  llamadas/pasada.
+                  Fase A: listar partidos del día (~3 llamadas por día, más si
+                  hay muchas páginas) · Fase B: bajar la curva de cuotas (1
+                  llamada por partido) · tope 40 llamadas/pasada.
                 </Text>
                 <View style={styles.providerRow}>
                   <Text style={styles.statLabel}>Por auditar</Text>
@@ -945,14 +950,11 @@ export default function ParsedPicksScreen() {
                     ...Object.entries(
                       providersStatus.odds_backfill?.por_fuente ?? {}
                     ).filter(([, n]) => n > 0),
-                    ...((
-                      providersStatus.odds_backfill?.llm_pendientes ?? 0
-                    ) > 0
+                    ...((providersStatus.odds_backfill?.llm_pendientes ?? 0) > 0
                       ? ([
                           [
                             "llm-odds",
-                            providersStatus.odds_backfill
-                              ?.llm_pendientes ?? 0,
+                            providersStatus.odds_backfill?.llm_pendientes ?? 0,
                           ],
                         ] as [string, number][])
                       : []),
@@ -967,8 +969,8 @@ export default function ParsedPicksScreen() {
                 {(providersStatus.odds_backfill.llm_procesados ?? 0) > 0 && (
                   <Text style={styles.statSub}>
                     Pipeline web+LLM:{" "}
-                    {providersStatus.odds_backfill.llm_procesados} ya
-                    procesados (con cuota o sin encontrarla)
+                    {providersStatus.odds_backfill.llm_procesados} ya procesados
+                    (con cuota o sin encontrarla)
                   </Text>
                 )}
                 {(() => {
@@ -986,9 +988,8 @@ export default function ParsedPicksScreen() {
                     <Text key={p.at ?? i} style={styles.statSub}>
                       {i === 0 ? "Última pasada" : "Pasada anterior"}{" "}
                       {(p.at ?? "").slice(5, 16).replace("T", " ")} UTC ·{" "}
-                      {p.revisados ?? 0} revisados ·{" "}
-                      {p.con_fixture ?? 0} con partido · {p.filas ?? 0}{" "}
-                      cuotas registradas
+                      {p.revisados ?? 0} revisados · {p.con_fixture ?? 0} con
+                      partido · {p.filas ?? 0} cuotas registradas
                       {Object.keys(p.filas_por_fuente ?? {}).length > 0
                         ? ` (${Object.entries(p.filas_por_fuente ?? {})
                             .filter(([, n]) => n > 0)
@@ -1011,9 +1012,7 @@ export default function ParsedPicksScreen() {
             <Text style={styles.systemTitle}>Sistema · verificación</Text>
             <View style={styles.providerRow}>
               <Text style={styles.statLabel}>Resueltas hoy</Text>
-              <Text style={styles.providerOk}>
-                {picksStatus.resueltas_hoy}
-              </Text>
+              <Text style={styles.providerOk}>{picksStatus.resueltas_hoy}</Text>
             </View>
             <Text style={styles.statSub}>
               {picksStatus.resueltas_hoy_evento_hoy} de eventos de hoy ·{" "}
@@ -1058,8 +1057,7 @@ export default function ParsedPicksScreen() {
                 onPress={handleAnularResiduo}
               >
                 <Text style={styles.residuoButtonText}>
-                  Anular residuo &gt;14d (
-                  {picksStatus.pendientes_backlog})
+                  Anular residuo &gt;14d ({picksStatus.pendientes_backlog})
                 </Text>
               </TouchableOpacity>
             )}
@@ -1078,26 +1076,19 @@ export default function ParsedPicksScreen() {
               </Text>
             </View>
             <Text style={styles.systemSubtitle}>Por día</Text>
-            {Object.entries(picksStatus.resueltas_por_dia).map(
-              ([dia, n]) => (
-                <View key={dia} style={styles.providerRow}>
-                  <Text style={styles.statSubFlex}>{dia}</Text>
-                  <Text style={styles.statValue}>{n}</Text>
-                </View>
-              )
-            )}
-            {Object.keys(picksStatus.resueltas_por_pasada ?? {}).length >
-              0 && (
+            {Object.entries(picksStatus.resueltas_por_dia).map(([dia, n]) => (
+              <View key={dia} style={styles.providerRow}>
+                <Text style={styles.statSubFlex}>{dia}</Text>
+                <Text style={styles.statValue}>{n}</Text>
+              </View>
+            ))}
+            {Object.keys(picksStatus.resueltas_por_pasada ?? {}).length > 0 && (
               <>
-                <Text style={styles.systemSubtitle}>
-                  Por pasada (hoy, UTC)
-                </Text>
+                <Text style={styles.systemSubtitle}>Por pasada (hoy, UTC)</Text>
                 {Object.entries(picksStatus.resueltas_por_pasada ?? {}).map(
                   ([pasada, n]) => (
                     <View key={pasada} style={styles.providerRow}>
-                      <Text style={styles.statSubFlex}>
-                        {pasada.slice(5)}
-                      </Text>
+                      <Text style={styles.statSubFlex}>{pasada.slice(5)}</Text>
                       <Text style={styles.statValue}>{n}</Text>
                     </View>
                   )
@@ -1157,8 +1148,8 @@ export default function ParsedPicksScreen() {
               ))
             ) : (
               <Text style={styles.statSub}>
-                Reposteos del mismo pick/boleto anulados por dedup: fuera
-                de stats y del listado. Pulsa para verlas.
+                Reposteos del mismo pick/boleto anulados por dedup: fuera de
+                stats y del listado. Pulsa para verlas.
               </Text>
             )}
           </View>
