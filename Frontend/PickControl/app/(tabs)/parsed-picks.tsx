@@ -3,6 +3,7 @@ import {
   View,
   Text,
   ScrollView,
+  FlatList,
   StyleSheet,
   ActivityIndicator,
   TouchableOpacity,
@@ -380,6 +381,31 @@ export default function ParsedPicksScreen() {
     );
   }, [overviewPicks, channelNames]);
 
+  // Filas aplanadas de la vista de canal para la FlatList: simples
+  // primero, luego las secciones "Combinadas" y "Retos" (mismo orden
+  // que el map anterior, ahora virtualizado).
+  type ChannelRow =
+    | { kind: "pick"; pick: ParsedPick }
+    | { kind: "sectionTitle"; label: string };
+
+  const channelRows = useMemo<ChannelRow[]>(() => {
+    if (!selectedChannel) return [];
+    const rows: ChannelRow[] = channelPicks
+      .filter((p) => !p.es_reto && !p.es_combinada)
+      .map((pick) => ({ kind: "pick", pick }));
+    const combinadas = channelPicks.filter((p) => p.es_combinada);
+    const retos = channelPicks.filter((p) => p.es_reto);
+    if (combinadas.length > 0) {
+      rows.push({ kind: "sectionTitle", label: "Combinadas" });
+      rows.push(...combinadas.map((pick) => ({ kind: "pick" as const, pick })));
+    }
+    if (retos.length > 0) {
+      rows.push({ kind: "sectionTitle", label: "Retos" });
+      rows.push(...retos.map((pick) => ({ kind: "pick" as const, pick })));
+    }
+    return rows;
+  }, [channelPicks, selectedChannel]);
+
   const renderPickCard = (pick: ParsedPick) => (
     <View key={pick.id} style={styles.card}>
       <Text style={styles.cardTitle}>{pick.apuesta || "Sin apuesta"}</Text>
@@ -505,7 +531,18 @@ export default function ParsedPicksScreen() {
   return (
     <View style={styles.container}>
       <TopBar />
-      <ScrollView
+      <FlatList
+        data={channelRows}
+        keyExtractor={(row) =>
+          row.kind === "pick" ? `pick-${row.pick.id}` : `title-${row.label}`
+        }
+        renderItem={({ item }) =>
+          item.kind === "sectionTitle" ? (
+            <Text style={styles.retosTitle}>{item.label}</Text>
+          ) : (
+            renderPickCard(item.pick)
+          )
+        }
         contentContainerStyle={[
           styles.scroll,
           { paddingTop: 80 + insets.top, paddingBottom: 24 },
@@ -517,7 +554,12 @@ export default function ParsedPicksScreen() {
             tintColor="#ff9f1c"
           />
         }
-      >
+        onEndReached={() => {
+          if (selectedChannel && hasMore && !loadingMore) loadMore();
+        }}
+        onEndReachedThreshold={0.4}
+        ListHeaderComponent={
+          <>
         <Text style={styles.title}>Picks extraídos de Telegram</Text>
 
         <TouchableOpacity
@@ -1101,42 +1143,29 @@ export default function ParsedPicksScreen() {
             ))}
           </>
         ) : (
-          <>
-            <Text style={styles.count}>
-              {channelPicks.length} pick{channelPicks.length !== 1 ? "s" : ""}{" "}
-              de {selectedChannel.name}
-            </Text>
-            {channelPicks
-              .filter((p) => !p.es_reto && !p.es_combinada)
-              .map(renderPickCard)}
-            {channelPicks.some((p) => p.es_combinada) && (
-              <>
-                <Text style={styles.retosTitle}>Combinadas</Text>
-                {channelPicks.filter((p) => p.es_combinada).map(renderPickCard)}
-              </>
-            )}
-            {channelPicks.some((p) => p.es_reto) && (
-              <>
-                <Text style={styles.retosTitle}>Retos</Text>
-                {channelPicks.filter((p) => p.es_reto).map(renderPickCard)}
-              </>
-            )}
-            {hasMore && (
-              <TouchableOpacity
-                style={styles.loadMore}
-                onPress={loadMore}
-                disabled={loadingMore}
-              >
-                {loadingMore ? (
-                  <ActivityIndicator size="small" color="#ff9f1c" />
-                ) : (
-                  <Text style={styles.loadMoreText}>Cargar más</Text>
-                )}
-              </TouchableOpacity>
-            )}
-          </>
+          <Text style={styles.count}>
+            {channelPicks.length} pick{channelPicks.length !== 1 ? "s" : ""}{" "}
+            de {selectedChannel.name}
+          </Text>
         )}
-      </ScrollView>
+          </>
+        }
+        ListFooterComponent={
+          selectedChannel !== null && hasMore ? (
+            <TouchableOpacity
+              style={styles.loadMore}
+              onPress={loadMore}
+              disabled={loadingMore}
+            >
+              {loadingMore ? (
+                <ActivityIndicator size="small" color="#ff9f1c" />
+              ) : (
+                <Text style={styles.loadMoreText}>Cargar más</Text>
+              )}
+            </TouchableOpacity>
+          ) : null
+        }
+      />
     </View>
   );
 }

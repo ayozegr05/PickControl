@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { colors, metricColor } from "@/src/theme";
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
+  FlatList,
   ActivityIndicator,
   Modal,
   TouchableOpacity,
@@ -72,6 +73,18 @@ export default function InformantDetail() {
   const screenWidth = Dimensions.get("window").width; // Usado para hacer el gráfico responsivo
 
   // El hook fetcha al montar y refetchea si cambia `informante`.
+
+  // Filas de la tabla de picks extraídos (simples, por fecha) para la
+  // FlatList — referencia estable mientras no cambien los datos.
+  const parsedTableRows = useMemo(
+    () =>
+      [...(data?.parsedPicks ?? [])]
+        .filter((p) => !p.esReto && !p.esCombinada)
+        .sort(
+          (a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime()
+        ),
+    [data?.parsedPicks]
+  );
 
   // Al abrir el detalle de un pick de Telegram, pide su comparación de
   // cuotas (tipster vs mercado) para la sección "Cuota de mercado".
@@ -730,16 +743,13 @@ export default function InformantDetail() {
                     </View>
                   </View>
 
-                  {[...data.parsedPicks]
-                    .filter((p) => !p.esReto && !p.esCombinada)
-                    .sort(
-                      (a, b) =>
-                        new Date(a.fecha).getTime() -
-                        new Date(b.fecha).getTime()
-                    )
-                    .map((apuesta, index) => (
+                  <FlatList
+                    style={styles.tableRows}
+                    nestedScrollEnabled={true}
+                    data={parsedTableRows}
+                    keyExtractor={(apuesta) => String(apuesta.id)}
+                    renderItem={({ item: apuesta, index }) => (
                       <TouchableOpacity
-                        key={apuesta.id}
                         onPress={() => setSelectedTelegramPick(apuesta)}
                         style={[
                           styles.tableRow,
@@ -815,7 +825,8 @@ export default function InformantDetail() {
                           </Text>
                         </View>
                       </TouchableOpacity>
-                    ))}
+                    )}
+                  />
                 </View>
               </ScrollView>
             )}
@@ -1746,6 +1757,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 3,
+  },
+  // Altura acotada para que la FlatList virtualice (mismo patrón que
+  // rowsContainer de my-picks): la tabla scrollea dentro de la página.
+  tableRows: {
+    maxHeight: 500,
   },
   tableRow: {
     flexDirection: "row",

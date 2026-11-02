@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { colors } from "@/src/theme";
 import {
   Text,
   View,
   StyleSheet,
   ScrollView,
+  FlatList,
   TouchableOpacity,
   Modal,
   Alert,
@@ -191,7 +192,11 @@ const MyPicksScreen = () => {
   };
 
   const maxApuestas = getMaxApuestas();
-  console.log("maxApuestas:", maxApuestas);
+  // Índices de fila para la FlatList de la tabla (referencia estable).
+  const rowIndices = useMemo(
+    () => Array.from({ length: maxApuestas }, (_, i) => i),
+    [maxApuestas]
+  );
 
   if (!isAuthenticated) {
     return <Redirect href="/" />;
@@ -251,13 +256,14 @@ const MyPicksScreen = () => {
                   </View>
                 ))}
               </View>
-              <ScrollView
+              <FlatList
                 style={styles.rowsContainer}
                 showsVerticalScrollIndicator={true}
                 nestedScrollEnabled={true}
-              >
-                {[...Array(maxApuestas)].map((_, index) => (
-                  <View key={index} style={styles.row}>
+                data={rowIndices}
+                keyExtractor={(index) => String(index)}
+                renderItem={({ item: index }) => (
+                  <View style={styles.row}>
                     <Text
                       style={[
                         styles.cell,
@@ -315,8 +321,8 @@ const MyPicksScreen = () => {
                       );
                     })}
                   </View>
-                ))}
-              </ScrollView>
+                )}
+              />
             </View>
           </ScrollView>
           <View style={styles.filterButtonsContainer}>
