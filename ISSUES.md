@@ -11,7 +11,7 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
 
 ## 1. Críticos (seguridad / datos)
 
-- [ ] 🔴 **Fuga de datos multiusuario en lecturas de apuestas.** Visto en
+- [x] ✅ **Fuga de datos multiusuario en lecturas de apuestas.** Visto en
   vivo: una cuenta nueva sin apuestas ve las apuestas reales de otros
   usuarios (importes, casas, resultados). Endpoints afectados:
   - `GET /apuestas` — `backend/app/api/v1/picks.py:63` hace
@@ -27,25 +27,26 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
     ranking ("Manual: N", yield combinado).
   Fix: `get_current_user` + filtrar `Pick.usuario_id == current_user.id`
   en los cuatro; el lado tipster (parsed_picks) queda igual.
+  **Resuelto en `c0d088c`** — verificado en vivo: la cuenta de auditoría
+  pasó de ver "Tú: 2 picks · 5.00€" ajenas a "0 / 0.00€" propias.
 - [ ] 🔴 **Navegación por `router.push` en la BottomBar** —
   `src/components/bottom-bar.tsx:25-58`. Cada tap apila una pantalla
   nueva: el botón atrás se convierte en una trampa y el stack crece
   indefinidamente. Migrar a `Tabs` de expo-router (o al menos
   `router.navigate`/`replace`).
-- [ ] 🔴 **Post-registro roto** (confirmado en vivo): tras "Registro
+- [x] ✅ **Post-registro roto** (confirmado en vivo): tras "Registro
   Exitoso" el usuario queda autenticado pero la app navega a
   `/screens/login` → ve el formulario de login estando ya logueado.
-  `app/screens/register.tsx:55` → debe ser `router.replace("/")`.
-- [ ] 🔴 **Ruta dinámica sin codificar** —
+  `app/screens/register.tsx:55` → `router.replace("/")`. `c0d088c`
+- [x] ✅ **Ruta dinámica sin codificar** —
   `router.push(\`/dynamic-routes/${nombre}\`)` con nombres de canal como
   `"Dm7 || GRATUITO || ⚡🔞"` (espacios, pipes, emojis): rompe el
   deep-link con `%`, `#`, `?`. En `index.tsx:66`, `auditoria.tsx:133`,
   `analysis.tsx:305`, `my-picks.tsx:127`, `parsed-picks.tsx:563`.
-  Fix: `router.push({ pathname: "/dynamic-routes/[informante]",
-  params: { informante: nombre } })`.
-- [ ] 🔴 **`pick.informante` puede ser `null`** → genera la ruta literal
-  `/dynamic-routes/null` (`parsed-picks.tsx:563`; el tipo lo admite:
-  `parsed-picks.api.ts`). Guard antes del push.
+  **Resuelto con `params` en `c0d088c`** — la navegación a
+  "Dm7 || GRATUITO || ⚡🔞" verificada en vivo.
+- [x] ✅ **`pick.informante` puede ser `null`** → genera la ruta literal
+  `/dynamic-routes/null` (`parsed-picks.tsx:563`). Guard añadido. `c0d088c`
 - [ ] 🔴 **`earns` nunca refresca**: `dataLoaded` bloquea el refetch de
   por vida del componente (`earns.tsx:30,45,93`) — datos obsoletos tras
   añadir/liquidar apuestas. Usar `useFocusEffect` como el resto.
@@ -53,11 +54,12 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   el login biométrico (`login.tsx:127-133`). SecureStore cifra, pero
   persistir la password es anti-patrón; si el usuario la cambia, el
   biométrico falla sin feedback. Guardar token de larga duración.
-- [ ] 🔴 **Sin manejo global de 401 ni timeout** (`client.ts:66-87`):
+- [x] ✅ **Sin manejo global de 401 ni timeout** (`client.ts`):
   fetch sin `AbortSignal` → petición colgada cuelga la pantalla; JWT
-  caducado = sesión "zombie" (autenticado pero todo falla). Solo
-  `add-pick` redirige manualmente. Fix: `AbortSignal.timeout(15000)` +
-  interceptor 401 → logout + redirect a login.
+  caducado = sesión "zombie" (autenticado pero todo falla).
+  **Resuelto en `c0d088c`**: `AbortSignal.timeout(15s)` +
+  `setUnauthorizedHandler` → AuthContext cierra sesión y
+  `router.replace("/screens/login")`.
 - [ ] 🔴 **Datos mal etiquetados en `analysis`**: `slice(-30)` etiquetado
   "Último mes" son las últimas 30 apuestas, no un mes
   (`analysis.tsx:106`); "2 semanas"/"anteriores" son 14 picks
@@ -202,11 +204,12 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
 
 ## Plan de ataque (prioridad × esfuerzo)
 
-1. ✅→ 🔒 **Aislamiento de datos** (`/apuestas`, `/analisis`,
+1. ✅ **Aislamiento de datos** (`/apuestas`, `/analisis`,
    `/informante`, `/informantes`): `get_current_user` + filtro por
-   `usuario_id`. Backend ~20 líneas.
-2. ✅→ **Auth/navegación**: post-registro `replace("/")`, interceptor
+   `usuario_id`. Hecho en `c0d088c` + desplegado en el VM.
+2. ✅ **Auth/navegación**: post-registro `replace("/")`, interceptor
    401→logout+login, timeout 15s, params en ruta dinámica + guard null.
+   Hecho en `c0d088c`.
 3. `theme.ts` + componentes `Screen/Card/Input/PrimaryButton` +
    retirar paleta verde/beige + StatusBar.
 4. `Tabs` de expo-router + quitar BottomBar de auth + estados activos.
