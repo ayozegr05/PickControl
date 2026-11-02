@@ -280,6 +280,23 @@ class _DirectTransport:
                 "Cloudflare); descanso escalonado"
             )
             return None
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, dict) and int(err.get("code") or 0) in (
+                401,
+                403,
+                429,
+            ):
+                # 200 con `{"error":{code:403}}`: la API rechaza a
+                # nivel aplicación aunque el edge dejó pasar — mismo
+                # baneo de IP que un 403 HTTP, se aparca igual.
+                mark_rate_limited_escalating(self.name)
+                logger.warning(
+                    "[SOFASCORE-DIRECT] API responde %s en JSON con "
+                    "HTTP 200: baneo de IP, descanso escalonado",
+                    err.get("code"),
+                )
+                return None
         # Respuesta buena: la IP vuelve a pasar — se resetea la racha
         # de backoff para que el próximo baneo vuelva a 24h.
         clear_rate_limit_streak(self.name)
@@ -309,6 +326,20 @@ class _DirectTransport:
             logger.info("[SOFASCORE-DIRECT] FlareSolverr %s sin JSON usable", path)
             return None
         if not isinstance(data, dict):
+            return None
+        err = data.get("error")
+        if isinstance(err, dict) and int(err.get("code") or 0) in (401, 403, 429):
+            # El Chromium PASA el challenge de Cloudflare pero la API
+            # responde 403 en JSON: baneo a nivel aplicación (IP del
+            # ASN de datacenter en lista negra), no un desafío. Antes
+            # este payload contaba como éxito y el provider llamaba
+            # a diario sin aparcarse jamás (~26 llamadas Chromium
+            # desperdiciadas al día, caso observado 2026-11-02).
+            logger.warning(
+                "[SOFASCORE-DIRECT] API responde %s en JSON vía "
+                "FlareSolverr: baneo de IP, no challenge",
+                err.get("code"),
+            )
             return None
         clear_rate_limit_streak(self.name)
         return data
