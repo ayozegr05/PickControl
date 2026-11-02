@@ -11,10 +11,12 @@ from fastapi import APIRouter, Depends
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.api.deps import get_current_user
 from app.db.postgres import get_session
 from app.models.informante import Informante
 from app.models.parsed_pick import ParsedPick
 from app.models.pick import Pick
+from app.models.user import User
 from app.schemas.analisis import (
     AnalisisCanal,
     AnalisisDeporte,
@@ -61,14 +63,22 @@ def _odds_bloque(stats: ChannelOddsStats) -> OddsStatsBloque:
 @router.get("/analisis", response_model=AnalisisGlobal)
 async def analisis_global(
     session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> AnalisisGlobal:
-    """Comparativa global tipster vs usuario, por canal y por deporte."""
+    """Comparativa global tipster vs usuario, por canal y por deporte.
+
+    El lado "yo" se limita a las apuestas del usuario autenticado: las
+    apuestas de otros usuarios no son datos públicos (antes de este
+    hardening el endpoint las agregaba todas). El lado tipster
+    (parsed_picks) es dato de producto compartido."""
     informantes = (
         await session.exec(
             select(Informante).where(Informante.es_canal_telegram.is_(True))
         )
     ).all()
-    picks = (await session.exec(select(Pick))).all()
+    picks = (
+        await session.exec(select(Pick).where(Pick.usuario_id == current_user.id))
+    ).all()
     parsed_picks = (await session.exec(select(ParsedPick))).all()
 
     parsed_by_id = {p.id: p for p in parsed_picks}

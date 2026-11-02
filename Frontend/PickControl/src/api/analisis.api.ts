@@ -62,5 +62,5 @@ export type AnalisisGlobal = {
 };
 
 export async function getAnalisisGlobal(): Promise<AnalisisGlobal> {
-  return apiRequest<AnalisisGlobal>("/analisis");
+  return apiRequest<AnalisisGlobal>("/analisis", { auth: true });
 }

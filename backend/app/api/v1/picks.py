@@ -63,9 +63,18 @@ async def _to_pick_read(session: AsyncSession, pick: Pick) -> PickRead:
 @router.get("/apuestas", response_model=list[PickRead])
 async def listar_apuestas(
     session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> list[PickRead]:
-    """Equivalente a `router.get("/apuestas", ...)`: devuelve todas las apuestas."""
-    picks = (await session.exec(select(Pick))).all()
+    """Equivalente a `router.get("/apuestas", ...)`: devuelve las apuestas
+    del usuario autenticado.
+
+    Hardening respecto al Node original (y a la primera versión de este
+    endpoint, que devolvía TODAS las apuestas de TODOS los usuarios):
+    cada usuario solo ve las suyas; los importes, casas y resultados de
+    otros usuarios no son datos públicos."""
+    picks = (
+        await session.exec(select(Pick).where(Pick.usuario_id == current_user.id))
+    ).all()
     return [await _to_pick_read(session, pick) for pick in picks]
 
 

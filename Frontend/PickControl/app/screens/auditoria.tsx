@@ -130,7 +130,10 @@ export default function AuditoriaScreen() {
       <View key={canal.informante_id} style={styles.card}>
         <TouchableOpacity
           onPress={() =>
-            router.push(`/dynamic-routes/${canal.informante}` as any)
+            router.push({
+              pathname: "/dynamic-routes/[informante]",
+              params: { informante: canal.informante },
+            })
           }
         >
           <Text style={styles.cardTitle}>{cleanChannel(canal.informante)}</Text>

@@ -52,7 +52,7 @@ const RegisterScreen = () => {
         [
           {
             text: "OK",
-            onPress: () => router.push("/screens/login"),
+            onPress: () => router.replace("/"),
           },
         ]
       );

@@ -56,8 +56,12 @@ async def _seed(
 
 
 class TestAnalisisGlobal:
-    async def test_estructura_basica_vacia(self, client: AsyncClient):
+    async def test_sin_autenticacion_rechaza(self, client: AsyncClient):
         response = await client.get("/api/v1/analisis")
+        assert response.status_code == 401
+
+    async def test_estructura_basica_vacia(self, client: AsyncClient, auth_headers):
+        response = await client.get("/api/v1/analisis", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert data["canales"] == []
@@ -69,7 +73,7 @@ class TestAnalisisGlobal:
     ):
         canal = await crear_canal("ElTipster")
         # usuario de test (registrado por la API para tener id real)
-        await client.post(
+        registro = await client.post(
             "/api/v1/auth/register",
             json={
                 "name": "T",
@@ -77,12 +81,13 @@ class TestAnalisisGlobal:
                 "password": "password123",
             },
         )
+        headers = {"Authorization": f"Bearer {registro.json()['token']}"}
         usuario = (
             await session.exec(select(User).where(User.email == "a@b.com"))
         ).first()
         await _seed(session, canal.id, usuario.id)
 
-        data = (await client.get("/api/v1/analisis")).json()
+        data = (await client.get("/api/v1/analisis", headers=headers)).json()
 
         assert len(data["canales"]) == 1
         c = data["canales"][0]
@@ -106,3 +111,34 @@ class TestAnalisisGlobal:
 
         assert data["totales_tipster"]["total"] == 1
         assert data["totales_yo"]["total"] == 1
+
+    async def test_yo_solo_cuenta_apuestas_propias(
+        self, client: AsyncClient, session: AsyncSession, crear_canal
+    ):
+        """El bloque "yo" excluye apuestas de otros usuarios.
+
+        Regresión del leak: antes el endpoint agregaba los Pick de TODOS
+        los usuarios en las métricas personales."""
+        canal = await crear_canal("ElTipster")
+        await client.post(
+            "/api/v1/auth/register",
+            json={"name": "T", "email": "a@b.com", "password": "password123"},
+        )
+        usuario = (
+            await session.exec(select(User).where(User.email == "a@b.com"))
+        ).first()
+        await _seed(session, canal.id, usuario.id)
+
+        # Otro usuario autenticado: el pick existe en BD pero no es suyo.
+        otro = await client.post(
+            "/api/v1/auth/register",
+            json={"name": "O", "email": "o@b.com", "password": "password123"},
+        )
+        headers_o = {"Authorization": f"Bearer {otro.json()['token']}"}
+
+        data = (await client.get("/api/v1/analisis", headers=headers_o)).json()
+        assert data["totales_tipster"]["total"] == 1
+        assert data["totales_yo"]["total"] == 0
+        canal_o = next(c for c in data["canales"] if c["informante"] == "ElTipster")
+        assert canal_o["yo"]["total"] == 0
+        assert canal_o["jugadas"] == 0

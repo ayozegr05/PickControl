@@ -19,6 +19,18 @@ export class ApiError extends Error {
   }
 }
 
+/** Handler registrado por AuthContext para reaccionar a un 401
+ * (token caducado/inválido): cierra la sesión y redirige al login.
+ * Se registra una vez en el provider; sin handler el 401 solo se
+ * propaga como ApiError como siempre. */
+let onUnauthorized: (() => void) | null = null;
+
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  onUnauthorized = handler;
+}
+
+const REQUEST_TIMEOUT_MS = 15_000;
+
 type RequestOptions = {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
@@ -67,6 +79,7 @@ export async function apiRequest<T>(
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
   // 204 No Content (p. ej. DELETE /apuestas/{id}) no tiene body que parsear.
@@ -77,6 +90,12 @@ export async function apiRequest<T>(
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
+    // Sesión caducada: avisamos al handler global (logout + redirect).
+    // El 401 local de "No has iniciado sesión" (línea 61) no pasa por
+    // aquí porque se lanza antes del fetch.
+    if (response.status === 401) {
+      onUnauthorized?.();
+    }
     throw new ApiError(
       extractErrorMessage(data, "Error en la solicitud"),
       response.status

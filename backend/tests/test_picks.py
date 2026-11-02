@@ -15,8 +15,7 @@ PICK_CREATE = {
 class TestListarPicks:
     async def test_listar_sin_autenticacion(self, client: AsyncClient):
         response = await client.get("/api/v1/apuestas")
-        assert response.status_code == 200
-        assert response.json() == []
+        assert response.status_code == 401
 
     async def test_listar_despues_de_crear(
         self, client: AsyncClient, auth_headers, crear_canal
@@ -27,12 +26,38 @@ class TestListarPicks:
         )
         assert create.status_code == 201
 
-        response = await client.get("/api/v1/apuestas")
+        response = await client.get("/api/v1/apuestas", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 1
         assert data[0]["apuesta"] == PICK_CREATE["apuesta"]
         assert data[0]["ganancia"] == 0.0  # pending
+
+    async def test_listar_no_muestra_apuestas_de_otros(
+        self, client: AsyncClient, auth_headers, crear_canal
+    ):
+        """Aislamiento multiusuario: un usuario solo ve sus apuestas.
+
+        Regresión del leak donde GET /apuestas devolvía las apuestas de
+        TODOS los usuarios sin autenticación."""
+        await crear_canal(PICK_CREATE["informante"])
+        await client.post("/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers)
+
+        # Usuario B se registra y autentica.
+        payload_b = {"name": "Otro", "email": "otro@example.com", "password": "otra123"}
+        await client.post("/api/v1/auth/register", json=payload_b)
+        login_b = await client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": payload_b["email"],
+                "password": payload_b["password"],
+            },
+        )
+        headers_b = {"Authorization": f"Bearer {login_b.json()['token']}"}
+
+        response = await client.get("/api/v1/apuestas", headers=headers_b)
+        assert response.status_code == 200
+        assert response.json() == []
 
 
 class TestCrearPick:
@@ -155,7 +180,7 @@ class TestEliminarPick:
         )
         assert delete.status_code == 204
 
-        listar = await client.get("/api/v1/apuestas")
+        listar = await client.get("/api/v1/apuestas", headers=auth_headers)
         assert listar.json() == []
 
     async def test_eliminar_pick_inexistente(self, client: AsyncClient, auth_headers):

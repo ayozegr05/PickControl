@@ -13,8 +13,8 @@ PICK_CREATE = {
 
 
 class TestInformantes:
-    async def test_informante_inexistente(self, client: AsyncClient):
-        response = await client.get("/api/v1/informante/NoExiste")
+    async def test_informante_inexistente(self, client: AsyncClient, auth_headers):
+        response = await client.get("/api/v1/informante/NoExiste", headers=auth_headers)
         assert response.status_code == 404
 
     async def test_informante_existe_pero_sin_picks(
@@ -29,7 +29,9 @@ class TestInformantes:
         await client.delete(f"/api/v1/apuestas/{pick_id}", headers=auth_headers)
 
         # El informante sigue en la BD, pero sin picks -> 404 según la lógica actual.
-        response = await client.get("/api/v1/informante/TipsterPro")
+        response = await client.get(
+            "/api/v1/informante/TipsterPro", headers=auth_headers
+        )
         assert response.status_code == 404
 
     async def test_stats_informante_con_mixta(
@@ -61,7 +63,9 @@ class TestInformantes:
             headers=auth_headers,
         )
 
-        response = await client.get("/api/v1/informante/TipsterPro")
+        response = await client.get(
+            "/api/v1/informante/TipsterPro", headers=auth_headers
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["informante"] == "TipsterPro"
@@ -73,7 +77,7 @@ class TestInformantes:
         assert len(data["apuestas"]) == 2
 
     async def test_listar_informantes_solo_canales_telegram(
-        self, client: AsyncClient, session, crear_canal
+        self, client: AsyncClient, session, auth_headers, crear_canal
     ):
         """GET /informantes solo lista canales de Telegram reales; los
         informantes sin canal (es_canal_telegram=False) quedan fuera."""
@@ -83,7 +87,7 @@ class TestInformantes:
         session.add(Informante(nombre="ManualInventado", es_canal_telegram=False))
         await session.commit()
 
-        response = await client.get("/api/v1/informantes")
+        response = await client.get("/api/v1/informantes", headers=auth_headers)
         assert response.status_code == 200
         nombres = [i["informante"] for i in response.json()]
         assert "CanalReal" in nombres

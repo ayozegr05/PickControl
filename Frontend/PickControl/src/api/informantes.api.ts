@@ -36,7 +36,8 @@ export async function getInformanteStats(
   nombre: string
 ): Promise<InformanteStats> {
   const raw = await apiRequest<RawInformanteStats>(
-    `/informante/${encodeURIComponent(nombre)}`
+    `/informante/${encodeURIComponent(nombre)}`,
+    { auth: true }
   );
   return {
     informante: raw.informante,
@@ -84,7 +85,9 @@ type RawInformanteSummary = {
 };
 
 export async function listInformantes(): Promise<InformanteSummary[]> {
-  const raws = await apiRequest<RawInformanteSummary[]>("/informantes");
+  const raws = await apiRequest<RawInformanteSummary[]>("/informantes", {
+    auth: true,
+  });
   return raws.map((raw) => ({
     informante: raw.informante,
     manualTotal: raw.manual_total,

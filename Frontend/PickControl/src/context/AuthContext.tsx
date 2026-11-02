@@ -3,7 +3,9 @@
 // la ubicacion del archivo.
 import React, { createContext, useContext, useState, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { router } from "expo-router";
 
+import { setUnauthorizedHandler } from "@/src/api/client";
 import { registerForPushNotifications } from "@/src/notifications/push";
 import {
   getSecureItem,
@@ -29,6 +31,18 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   useEffect(() => {
     // Verificar si hay un token guardado al iniciar la app
     checkAuth();
+  }, []);
+
+  useEffect(() => {
+    // 401 del backend (token caducado/inválido): cerrar sesión y llevar
+    // al login. Sin esto el usuario quedaba "autenticado" pero con todas
+    // las llamadas fallando (sesión zombie).
+    setUnauthorizedHandler(() => {
+      void logout();
+      router.replace("/screens/login");
+    });
+    return () => setUnauthorizedHandler(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const checkAuth = async () => {

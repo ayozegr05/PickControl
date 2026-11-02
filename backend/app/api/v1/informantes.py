@@ -10,10 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.api.deps import get_current_user
 from app.db.postgres import get_session
 from app.models.informante import Informante
 from app.models.parsed_pick import ParsedPick
 from app.models.pick import Acierto, Pick, PickSource
+from app.models.user import User
 from app.schemas.informante import (
     InformanteOddsStats,
     InformanteStats,
@@ -111,14 +113,20 @@ def _parsed_to_read(
 
 @router.get("/informante/{nombre}", response_model=InformanteStats)
 async def obtener_stats_informante(
-    nombre: str, session: AsyncSession = Depends(get_session)
+    nombre: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> InformanteStats:
     """Equivalente a `router.get("/informante/:informante", ...)`: devuelve
     las apuestas de un informante junto con sus estadísticas agregadas
     (total de apuestas, aciertos, ganancias, % de aciertos y Yield).
 
     Ahora también incluye los picks extraídos automáticamente de Telegram
-    bajo el mismo nombre de informante/canal."""
+    bajo el mismo nombre de informante/canal.
+
+    Hardening: las apuestas manuales (`apuestas`, stats `manual_*`) son
+    solo las del usuario autenticado — la columna "Tú" de la app es la
+    del usuario logueado, no la suma de todos los usuarios."""
     informante = (
         await session.exec(select(Informante).where(Informante.nombre == nombre))
     ).first()
@@ -130,7 +138,12 @@ async def obtener_stats_informante(
         )
 
     picks = (
-        await session.exec(select(Pick).where(Pick.informante_id == informante.id))
+        await session.exec(
+            select(Pick).where(
+                Pick.informante_id == informante.id,
+                Pick.usuario_id == current_user.id,
+            )
+        )
     ).all()
     parsed_picks = (
         await session.exec(
@@ -240,13 +253,17 @@ async def odds_stats_informante(
 @router.get("/informantes", response_model=list[InformanteSummary])
 async def listar_informantes(
     session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> list[InformanteSummary]:
     """Devuelve un resumen de los informantes con sus métricas
     de apuestas manuales, picks de Telegram y el total combinado.
 
     Solo se listan canales de Telegram reales (`es_canal_telegram`):
     el ranking y el formulario de alta manual trabajan siempre sobre
-    canales monitorizados, no sobre nombres libres."""
+    canales monitorizados, no sobre nombres libres.
+
+    Hardening: las métricas `manual_*` y el total combinado cuentan solo
+    las apuestas del usuario autenticado."""
     informantes = (
         await session.exec(
             select(Informante).where(Informante.es_canal_telegram.is_(True))
@@ -256,7 +273,14 @@ async def listar_informantes(
         return []
 
     ids = [i.id for i in informantes]
-    picks = (await session.exec(select(Pick).where(Pick.informante_id.in_(ids)))).all()
+    picks = (
+        await session.exec(
+            select(Pick).where(
+                Pick.informante_id.in_(ids),
+                Pick.usuario_id == current_user.id,
+            )
+        )
+    ).all()
     parsed_picks = (
         await session.exec(select(ParsedPick).where(ParsedPick.informante_id.in_(ids)))
     ).all()

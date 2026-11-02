@@ -123,8 +123,10 @@ const MyPicksScreen = () => {
   }, [apuestasFiltradas]);
 
   const handleInformantePress = (informante: string) => {
-    console.log("Navegando hacia:", informante);
-    router.push(`/dynamic-routes/${informante}` as any);
+    router.push({
+      pathname: "/dynamic-routes/[informante]",
+      params: { informante },
+    });
   };
 
   const getMaxApuestas = () => {

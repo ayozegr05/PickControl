@@ -302,7 +302,10 @@ export default function Analysis() {
                     <Text style={styles.informanteName}>{informante}</Text>
                     <TouchableOpacity
                       onPress={() =>
-                        router.push(`/dynamic-routes/${informante}` as any)
+                        router.push({
+                          pathname: "/dynamic-routes/[informante]",
+                          params: { informante },
+                        })
                       }
                       style={styles.statsButton}
                     >

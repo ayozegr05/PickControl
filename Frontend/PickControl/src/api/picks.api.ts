@@ -66,7 +66,7 @@ export function toPickItem(raw: RawPick): PickItem {
 }
 
 export async function listPicks(): Promise<PickItem[]> {
-  const raw = await apiRequest<RawPick[]>("/apuestas");
+  const raw = await apiRequest<RawPick[]>("/apuestas", { auth: true });
   return raw.map(toPickItem);
 }
 

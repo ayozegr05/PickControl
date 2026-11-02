@@ -559,9 +559,13 @@ export default function ParsedPicksScreen() {
         Canal:{" "}
         <Text
           style={styles.channelLink}
-          onPress={() =>
-            router.push(`/dynamic-routes/${pick.informante}` as any)
-          }
+          onPress={() => {
+            if (!pick.informante) return;
+            router.push({
+              pathname: "/dynamic-routes/[informante]",
+              params: { informante: pick.informante },
+            });
+          }}
         >
           {cleanChannel(pick.informante)}
         </Text>

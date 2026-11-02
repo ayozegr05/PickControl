@@ -63,7 +63,10 @@ const Main = () => {
   );
 
   const handleTipsterPress = (nombre: string) => {
-    router.push(`/dynamic-routes/${nombre}` as any);
+    router.push({
+      pathname: "/dynamic-routes/[informante]",
+      params: { informante: nombre },
+    });
   };
 
   if (!isAuthenticated) {
