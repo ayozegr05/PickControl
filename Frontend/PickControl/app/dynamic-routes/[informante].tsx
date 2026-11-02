@@ -19,7 +19,7 @@ import { useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { getInformanteStats } from "@/src/api/informantes.api";
+import { useInformanteStats } from "@/src/hooks/useInformanteStats";
 import { deletePick, updatePick } from "@/src/api/picks.api";
 import {
   updateParsedPickAcierto,
@@ -38,8 +38,9 @@ import { formatDateShort } from "@/src/utils/format";
 
 export default function InformantDetail() {
   const { informante } = useLocalSearchParams(); // Obtener el parámetro dinámico
-  const [data, setData] = useState<InformanteStats | null>(null); // Para almacenar la respuesta del backend
-  const [loading, setLoading] = useState(true); // Para manejar el estado de carga
+  const { data, loading, reload, setData } = useInformanteStats(
+    String(informante)
+  );
   const [apuestas, setApuestas] = useState<PickItem[]>([]);
   const [modalUpdateVisible, setModalUpdateVisible] = useState(false);
   const [modalDeleteVisible, setModalDeleteVisible] = useState(false);
@@ -70,24 +71,7 @@ export default function InformantDetail() {
   const insets = useSafeAreaInsets();
   const screenWidth = Dimensions.get("window").width; // Usado para hacer el gráfico responsivo
 
-  // Hacer fetch a la API con los datos del informante
-  const fetchInformanteData = async () => {
-    try {
-      setLoading(true);
-      const result = await getInformanteStats(String(informante));
-      console.log("INFORMACION INFORMANTE ACTUALIZADA: ", result);
-      setData(result);
-      setApuestas(result.apuestas || []);
-    } catch (error) {
-      console.error("Error al obtener datos del informante:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchInformanteData();
-  }, [informante]);
+  // El hook fetcha al montar y refetchea si cambia `informante`.
 
   // Al abrir el detalle de un pick de Telegram, pide su comparación de
   // cuotas (tipster vs mercado) para la sección "Cuota de mercado".
@@ -425,7 +409,7 @@ export default function InformantDetail() {
     try {
       await updateParsedPickAcierto(pick.id, update);
       setSelectedTelegramPick(null);
-      await fetchInformanteData();
+      await reload();
     } catch (error) {
       console.error("Error al corregir el pick:", error);
       const message =
@@ -472,7 +456,7 @@ export default function InformantDetail() {
       });
       setJugarModalVisible(false);
       setSelectedTelegramPick(null);
-      await fetchInformanteData();
+      await reload();
       Alert.alert(
         "Apuesta registrada",
         "Se ha añadido a tus apuestas de este tipster."
@@ -504,7 +488,7 @@ export default function InformantDetail() {
         });
         console.log("Fecha actualizada en el servidor");
         // Esperar a que se complete la recarga de datos
-        await fetchInformanteData();
+        await reload();
         console.log("Datos del informante recargados");
         Alert.alert("Éxito", "Fecha actualizada correctamente");
       } catch (error) {

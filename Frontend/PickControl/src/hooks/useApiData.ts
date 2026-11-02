@@ -3,6 +3,11 @@
 // ya hacen dentro de useFocusEffect. El fetcher llega memoizado por
 // useCallback en el hook concreto — si cambia (p. ej. nuevo nombre en
 // la ruta dinámica) se refetchea solo.
+//
+// `enabled=false` evita el fetch automático (p. ej. la landing sin
+// sesión: pegarle a la API sería un 401 que dispara el logout
+// global). reload() manual sigue funcionando para cuando la
+// pantalla decida.
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type ApiData<T> = {
@@ -10,11 +15,15 @@ export type ApiData<T> = {
   loading: boolean;
   error: string | null;
   reload: () => Promise<void>;
+  setData: React.Dispatch<React.SetStateAction<T | null>>;
 };
 
-export function useApiData<T>(fetcher: () => Promise<T>): ApiData<T> {
+export function useApiData<T>(
+  fetcher: () => Promise<T>,
+  enabled = true
+): ApiData<T> {
   const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
@@ -35,11 +44,11 @@ export function useApiData<T>(fetcher: () => Promise<T>): ApiData<T> {
 
   useEffect(() => {
     mountedRef.current = true;
-    reload();
+    if (enabled) reload();
     return () => {
       mountedRef.current = false;
     };
-  }, [reload]);
+  }, [reload, enabled]);
 
-  return { data, loading, error, reload };
+  return { data, loading, error, reload, setData };
 }

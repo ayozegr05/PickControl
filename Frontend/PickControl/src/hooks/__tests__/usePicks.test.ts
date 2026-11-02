@@ -80,6 +80,26 @@ describe("usePicks", () => {
 describe("useInformantes", () => {
   beforeEach(() => jest.clearAllMocks());
 
+  it("enabled=false no fetchea (landing sin sesión → no hay 401)", async () => {
+    const { result } = await renderHook(() => useInformantes(false));
+    expect(mockListInformantes).not.toHaveBeenCalled();
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("enabled false→true dispara el fetch (al hacer login)", async () => {
+    mockListInformantes.mockResolvedValue([fakeInformante]);
+    const { result, rerender } = await renderHook(
+      ({ on }: { on: boolean }) => useInformantes(on),
+      { initialProps: { on: false } }
+    );
+    expect(mockListInformantes).not.toHaveBeenCalled();
+
+    await rerender({ on: true });
+    await waitFor(() =>
+      expect(result.current.informantes).toEqual([fakeInformante])
+    );
+  });
+
   it("éxito → informantes poblado", async () => {
     mockListInformantes.mockResolvedValue([fakeInformante]);
     const { result } = await renderHook(() => useInformantes());

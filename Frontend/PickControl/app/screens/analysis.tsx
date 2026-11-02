@@ -12,7 +12,7 @@ import { useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
 import { MaterialIcons } from "@expo/vector-icons";
 import LottieView from "lottie-react-native";
-import { listPicks } from "@/src/api/picks.api";
+import { usePicks } from "@/src/hooks/usePicks";
 import {
   EstadisticaInput,
   calcularEstadisticas as statsDeApuestas,
@@ -34,66 +34,46 @@ export default function Analysis() {
   const [selectedInformante, setSelectedInformante] = useState<string>("");
   const [inversionDiaria, setInversionDiaria] = useState("10");
   const [apuestasPorDia, setApuestasPorDia] = useState("1");
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
   const [pendientes, setPendientes] = useState(0);
   const loadingRef = useRef(null);
 
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
+  // Fetch centralizado: loading/error vienen del hook.
+  const { apuestas: picks, loading, error, reload } = usePicks();
+  const loadError = error !== null;
+
+  // Derivar Apuesta[] (solo liquidadas con cuota/cantidad) + listas
+  // auxiliares cuando llega la lista cruda.
   useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-      setLoadError(false);
-      const picks = await listPicks();
-      console.log("Datos obtenidos:", picks);
-
-      // Organizar apuestas por informante
-      const apuestasPorInformante: Record<string, Apuesta[]> = {};
-      picks.forEach((pick) => {
-        // Solo incluir apuestas que no estén pendientes y tengan
-        // cuota/cantidad (en picks de Telegram pueden ser null: no se
-        // inventan valores para el cálculo de ROI).
-        if (
-          pick.acierto !== "Pending" &&
-          pick.cantidadApostada != null &&
-          pick.cuota != null
-        ) {
-          if (!apuestasPorInformante[pick.informante]) {
-            apuestasPorInformante[pick.informante] = [];
-          }
-          apuestasPorInformante[pick.informante].push({
-            Acierto: pick.acierto === "True",
-            CantidadApostada: pick.cantidadApostada,
-            Cuota: pick.cuota,
-            Fecha: pick.fecha,
-            Informante: pick.informante,
-          });
+    const apuestasPorInformante: Record<string, Apuesta[]> = {};
+    picks.forEach((pick) => {
+      // Solo incluir apuestas que no estén pendientes y tengan
+      // cuota/cantidad (en picks de Telegram pueden ser null: no se
+      // inventan valores para el cálculo de ROI).
+      if (
+        pick.acierto !== "Pending" &&
+        pick.cantidadApostada != null &&
+        pick.cuota != null
+      ) {
+        if (!apuestasPorInformante[pick.informante]) {
+          apuestasPorInformante[pick.informante] = [];
         }
-      });
+        apuestasPorInformante[pick.informante].push({
+          Acierto: pick.acierto === "True",
+          CantidadApostada: pick.cantidadApostada,
+          Cuota: pick.cuota,
+          Fecha: pick.fecha,
+          Informante: pick.informante,
+        });
+      }
+    });
 
-      const informantesList = Object.keys(apuestasPorInformante);
-      setInformantes(informantesList);
-      setPendientes(picks.filter((pick) => pick.acierto === "Pending").length);
-
-      // Convertir a array plano para los cálculos, excluyendo apuestas pendientes
-      const allApuestas = Object.values(apuestasPorInformante).flat();
-
-      setApuestas(allApuestas);
-    } catch (error) {
-      console.error("Error al obtener las apuestas:", error);
-      setApuestas([]);
-      setInformantes([]);
-      setLoadError(true);
-    } finally {
-      setTimeout(() => setLoading(false), 500); // Pequeño delay para suavizar la transición
-    }
-  };
+    setInformantes(Object.keys(apuestasPorInformante));
+    setPendientes(picks.filter((pick) => pick.acierto === "Pending").length);
+    setApuestas(Object.values(apuestasPorInformante).flat());
+  }, [picks]);
 
   // Adaptador: la pantalla usa `Apuesta` (campos en mayúscula, solo
   // liquidadas); los utils operan con `EstadisticaInput` (camelCase).
@@ -168,7 +148,7 @@ export default function Analysis() {
             <Text style={styles.errorText}>
               No se pudieron cargar los datos
             </Text>
-            <TouchableOpacity style={styles.retryButton} onPress={fetchData}>
+            <TouchableOpacity style={styles.retryButton} onPress={reload}>
               <Text style={styles.retryButtonText}>Reintentar</Text>
             </TouchableOpacity>
           </View>

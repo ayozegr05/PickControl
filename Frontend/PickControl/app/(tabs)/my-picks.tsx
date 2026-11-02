@@ -13,10 +13,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Redirect, useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
 import { useAuth } from "@/src/context/AuthContext";
-import { listPicks, updatePick } from "@/src/api/picks.api";
+import { updatePick } from "@/src/api/picks.api";
 import { PickItem, Acierto } from "@/src/types/pick.types";
-
-type RankingItem = { informante: string; porcentajeAcierto: number };
+import { usePicks } from "@/src/hooks/usePicks";
+import {
+  rankingInformantes,
+  pendientesDe,
+  maxApuestasPorInformante,
+  RankingItem,
+} from "@/src/utils/picks";
 
 const MyPicksScreen = () => {
   const [apuestasOriginales, setApuestasOriginales] = useState<
@@ -51,74 +56,31 @@ const MyPicksScreen = () => {
     return <Text>-</Text>;
   };
 
-  const fetchApuestas = async () => {
-    if (!isAuthenticated) return;
-    try {
-      const picks = await listPicks();
-      console.log("Datos obtenidos:", picks);
+  const { apuestas, reload } = usePicks(isAuthenticated);
 
-      const apuestasPorInformante: Record<string, PickItem[]> = {};
-      // Primero ordenamos todas las apuestas por fecha
-      const apuestasOrdenadas = [...picks].sort(
-        (a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime()
-      );
+  // Ordena por fecha y agrupa por informante cuando llega la lista.
+  useEffect(() => {
+    const apuestasPorInformante: Record<string, PickItem[]> = {};
+    const apuestasOrdenadas = [...apuestas].sort(
+      (a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime()
+    );
 
-      // Luego las agrupamos por informante manteniendo el orden
-      apuestasOrdenadas.forEach((pick) => {
-        if (!apuestasPorInformante[pick.informante]) {
-          apuestasPorInformante[pick.informante] = [];
-        }
-        apuestasPorInformante[pick.informante].push(pick);
-      });
-
-      setApuestasOriginales(apuestasPorInformante); // Guardamos los datos originales
-      setApuestasFiltradas(apuestasPorInformante); // Inicialmente, los datos filtrados son iguales a los originales
-      const informantesList = Object.keys(apuestasPorInformante);
-      setInformantes(informantesList);
-    } catch (error) {
-      console.error("Error al obtener las apuestas:", error);
-    }
-  };
-
-  const calcularRanking = (
-    apuestasPorInformante: Record<string, PickItem[]>
-  ) => {
-    const rankingArray: RankingItem[] = Object.entries(
-      apuestasPorInformante
-    ).map(([informante, apuestas]) => {
-      // Filtrar apuestas que no estén en estado "Pending"
-      const apuestasFinalizadas = apuestas.filter(
-        (apuesta) => apuesta.acierto !== "Pending"
-      );
-      const totalApuestasFinalizadas = apuestasFinalizadas.length;
-      const totalAciertos = apuestasFinalizadas.filter(
-        (apuesta) => apuesta.acierto === "True"
-      ).length;
-      const porcentajeAcierto =
-        totalApuestasFinalizadas > 0
-          ? (totalAciertos / totalApuestasFinalizadas) * 100
-          : 0;
-
-      return { informante, porcentajeAcierto };
+    apuestasOrdenadas.forEach((pick) => {
+      if (!apuestasPorInformante[pick.informante]) {
+        apuestasPorInformante[pick.informante] = [];
+      }
+      apuestasPorInformante[pick.informante].push(pick);
     });
 
-    // Ordenar por porcentaje de aciertos descendente y tomar los 5 primeros
-    const topRanking = rankingArray
-      .sort((a, b) => b.porcentajeAcierto - a.porcentajeAcierto)
-      .slice(0, 5);
-
-    setRanking(topRanking);
-  };
-
-  useEffect(() => {
-    fetchApuestas();
-  }, [isAuthenticated]);
+    setApuestasOriginales(apuestasPorInformante); // Guardamos los datos originales
+    setApuestasFiltradas(apuestasPorInformante); // Inicialmente, los datos filtrados son iguales a los originales
+    setInformantes(Object.keys(apuestasPorInformante));
+  }, [apuestas]);
 
   useEffect(() => {
     if (Object.keys(apuestasFiltradas).length > 0) {
-      const pendientes = calcularApuestasPendientes(apuestasFiltradas);
-      setApuestasPendientes(pendientes);
-      calcularRanking(apuestasFiltradas);
+      setApuestasPendientes(pendientesDe(apuestasFiltradas));
+      setRanking(rankingInformantes(apuestasFiltradas));
     }
   }, [apuestasFiltradas]);
 
@@ -129,18 +91,7 @@ const MyPicksScreen = () => {
     });
   };
 
-  const getMaxApuestas = () => {
-    if (Object.keys(apuestasFiltradas).length === 0) {
-      return 0;
-    }
-
-    const apuestasCount = Object.values(apuestasFiltradas).map(
-      (apuestas) => apuestas.length
-    );
-    const max = Math.max(...apuestasCount);
-    console.log("Número máximo de apuestas:", max);
-    return max > 0 ? max : 0;
-  };
+  const getMaxApuestas = () => maxApuestasPorInformante(apuestasFiltradas);
 
   const handleActualizarApuesta = (apuesta: PickItem) => {
     console.log("Apuesta seleccionada:", apuesta);
@@ -154,30 +105,11 @@ const MyPicksScreen = () => {
     try {
       await updatePick(selectedApuesta.id, { acierto });
       console.log("Apuesta actualizada");
-      fetchApuestas(); // Volvemos a cargar las apuestas
+      reload(); // Volvemos a cargar las apuestas
       setModalVisible(false); // Cerramos el modal
     } catch (error) {
       console.error("Error al actualizar la apuesta:", error);
     }
-  };
-
-  const calcularApuestasPendientes = (
-    apuestasPorInformante: Record<string, PickItem[]>
-  ) => {
-    const pendientes: PickItem[] = [];
-
-    // Recorremos cada informante y sus apuestas
-    Object.entries(apuestasPorInformante).forEach(([informante, apuestas]) => {
-      apuestas.forEach((apuesta) => {
-        // Solo añadimos las apuestas con 'acierto' pendiente
-        if (apuesta.acierto === "Pending") {
-          pendientes.push({ ...apuesta, informante });
-        }
-      });
-    });
-
-    console.log("Apuestas Pendientes:", pendientes); // Verificamos que las apuestas pendientes se están obteniendo correctamente
-    return pendientes;
   };
 
   // Manejo de scroll para mostrar/ocultar el TopBar

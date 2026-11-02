@@ -13,8 +13,8 @@ export type PicksData = {
   reload: () => Promise<void>;
 };
 
-export function usePicks(): PicksData {
+export function usePicks(enabled = true): PicksData {
   const fetcher = useCallback(() => listPicks(), []);
-  const { data, loading, error, reload } = useApiData(fetcher);
+  const { data, loading, error, reload } = useApiData(fetcher, enabled);
   return { apuestas: data ?? [], loading, error, reload };
 }

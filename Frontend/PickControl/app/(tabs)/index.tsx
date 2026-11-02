@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useRef } from "react";
 import {
   Text,
   View,
@@ -13,19 +13,20 @@ import TopBar from "@/src/components/top-bar";
 import { useAuth } from "@/src/context/AuthContext";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { listInformantes } from "@/src/api/informantes.api";
-import { InformanteSummary } from "@/src/types/informante.types";
+import { useInformantes } from "@/src/hooks/useInformantes";
 import DonutChart from "@/src/components/donut-chart";
 import { metricColor } from "@/src/theme";
 
 const Main = () => {
-  const [tipsters, setTipsters] = useState<InformanteSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
   const router = useRouter();
   const { isAuthenticated } = useAuth();
   const insets = useSafeAreaInsets();
+  const {
+    informantes: tipsters,
+    loading,
+    error,
+    reload,
+  } = useInformantes(isAuthenticated);
 
   const introVideoPlayer = useVideoPlayer(
     require("../../assets/video/intro.mp4"),
@@ -36,24 +37,17 @@ const Main = () => {
     }
   );
 
-  const loadTipsters = useCallback(async () => {
-    if (!isAuthenticated) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await listInformantes();
-      setTipsters(data);
-    } catch (err: any) {
-      setError(err.message || "Error cargando informantes");
-    } finally {
-      setLoading(false);
-    }
-  }, [isAuthenticated]);
-
+  // El hook ya fetchea al montar (enabled=isAuthenticated): el focus
+  // solo fuerza recarga al VOLVER a la pestaña, no en el primer foco.
+  const firstFocus = useRef(true);
   useFocusEffect(
     useCallback(() => {
-      loadTipsters();
-    }, [loadTipsters])
+      if (firstFocus.current) {
+        firstFocus.current = false;
+        return;
+      }
+      if (isAuthenticated) reload();
+    }, [isAuthenticated, reload])
   );
 
   const handleTipsterPress = (nombre: string) => {

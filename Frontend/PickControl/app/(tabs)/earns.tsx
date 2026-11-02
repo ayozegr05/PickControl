@@ -4,15 +4,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import LottieView from "lottie-react-native";
 import TopBar from "@/src/components/top-bar";
-import { listPicks } from "@/src/api/picks.api";
-import { PickItem } from "@/src/types/pick.types";
+import { usePicks } from "@/src/hooks/usePicks";
 import {
   gananciasPor,
   totalGanancias as sumarGanancias,
 } from "@/src/utils/picks";
 
 const GananciasPage = () => {
-  const [apuestas, setApuestas] = useState<PickItem[]>([]);
+  const { apuestas, loading: fetching } = usePicks();
   const [totalGanancias, setTotalGanancias] = useState(0);
   const [gananciasInformante, setGananciasInformante] = useState<
     Record<string, number>
@@ -29,42 +28,29 @@ const GananciasPage = () => {
   const loadingRef = useRef<LottieView>(null);
   const insets = useSafeAreaInsets();
 
-  const fetchApuestas = async () => {
-    if (dataLoaded) return; // Evitar múltiples cargas si ya tenemos datos
-
-    try {
-      const picks = await listPicks();
-
-      // Procesar todos los datos antes de actualizar estados
-      const ganancias = sumarGanancias(picks);
-      const porInformante = gananciasPor(picks, "informante");
-      const porBookmaker = gananciasPor(picks, "casa");
-
-      // Actualizar todos los estados juntos
-      setApuestas(picks);
-      setTotalGanancias(ganancias);
-      setGananciasInformante(porInformante);
-      setGananciasBookmaker(porBookmaker);
-      setDataLoaded(true);
-
-      // Iniciar la animación después de que los datos estén listos
-      Animated.timing(animatedValue, {
-        toValue: ganancias,
-        duration: 1500,
-        useNativeDriver: false,
-      }).start(() => {
-        setIsLoading(false);
-      });
-    } catch (error) {
-      console.error("Error al obtener las apuestas:", error);
-      setIsLoading(false);
-      setDataLoaded(true);
-    }
-  };
-
+  // El hook fetchea al montar; cuando llegan los datos se agregan y
+  // arranca la animación (equivalente al antiguo `dataLoaded` guard:
+  // el proceso solo ocurre la primera vez).
+  const processed = useRef(false);
   useEffect(() => {
-    fetchApuestas();
-  }, []); // Solo se ejecuta una vez al montar el componente
+    if (fetching || processed.current) return;
+    processed.current = true;
+
+    const ganancias = sumarGanancias(apuestas);
+    setTotalGanancias(ganancias);
+    setGananciasInformante(gananciasPor(apuestas, "informante"));
+    setGananciasBookmaker(gananciasPor(apuestas, "casa"));
+    setDataLoaded(true);
+
+    // Iniciar la animación después de que los datos estén listos
+    Animated.timing(animatedValue, {
+      toValue: ganancias,
+      duration: 1500,
+      useNativeDriver: false,
+    }).start(() => {
+      setIsLoading(false);
+    });
+  }, [fetching]);
 
   useEffect(() => {
     const listener = animatedValue.addListener(({ value }) => {

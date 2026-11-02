@@ -12,8 +12,8 @@ export type InformantesData = {
   reload: () => Promise<void>;
 };
 
-export function useInformantes(): InformantesData {
+export function useInformantes(enabled = true): InformantesData {
   const fetcher = useCallback(() => listInformantes(), []);
-  const { data, loading, error, reload } = useApiData(fetcher);
+  const { data, loading, error, reload } = useApiData(fetcher, enabled);
   return { informantes: data ?? [], loading, error, reload };
 }
