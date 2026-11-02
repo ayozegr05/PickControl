@@ -89,3 +89,7 @@ backend/push_check.py
 _*.json
 nul
 backend/nul
+backend/run5dollar_tmp.py
+backend/sport.html
+backend/ubo.json
+pendientes_cuotas_*.txt
