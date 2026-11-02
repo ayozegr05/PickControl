@@ -1009,6 +1009,12 @@ partidos). Mismo backend, mismo token.
   si el 403 persiste, eliminar el provider del todo (calls=0 la
   semana observada; `verificado_provider` no le atribuye ninguna
   liquidación — su hueco ya lo cubren scores365, espn y nhl.py).
+- **Userscript de OddsPortal (`userscripts/`, Tampermonkey)**:
+  canal de cosecha manual de cuotas — backend y cola ya integrados,
+  pero hoy NO se usa (sin Tampermonkey instalado). **Revisar junto
+  con lo de Sofascore en ~2-3 meses**: si sigue sin usarse, sacar
+  del repo (userscript + endpoints `/odds-harvest`) o portarlo a la
+  app como WebView oculto (idea apuntada arriba).
 - **`/api/v1/search/all` de Sofascore devuelve 0 resultados para
   cualquier query** (ni "real madrid"): el search cambió o está
   baneado igual — solo funcionan los `entity_id` ya cacheados en
