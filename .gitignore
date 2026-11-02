@@ -80,3 +80,12 @@ backend/backups/
 # APKs locales (builds manuales)
 *.apk
 google-services.json
+
+# ============================
+# Scripts de diagnóstico / probes ad-hoc
+# ============================
+backend/_*.py
+backend/push_check.py
+_*.json
+nul
+backend/nul
