@@ -11,7 +11,6 @@ import {
   TouchableOpacity,
   Alert,
   Platform,
-  TextInput,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams } from "expo-router"; // Obtener los parámetros de búsqueda
@@ -36,6 +35,8 @@ import {
   iconoAnulada,
 } from "@/src/utils/picks";
 import { formatDateShort } from "@/src/utils/format";
+import PickDetailModal from "@/src/components/pick-detail-modal";
+import JugarModal, { JugarFormValues } from "@/src/components/jugar-modal";
 
 export default function InformantDetail() {
   const { informante } = useLocalSearchParams(); // Obtener el parámetro dinámico
@@ -58,9 +59,9 @@ export default function InformantDetail() {
   // del usuario (cantidad, cuota y casa conseguidas pueden diferir de las
   // publicadas por el tipster).
   const [jugarModalVisible, setJugarModalVisible] = useState(false);
-  const [jugarCantidad, setJugarCantidad] = useState("");
-  const [jugarCuota, setJugarCuota] = useState("");
-  const [jugarCasa, setJugarCasa] = useState("");
+  const [jugarInitial, setJugarInitial] = useState<Partial<JugarFormValues>>(
+    {}
+  );
   const [jugando, setJugando] = useState(false);
   const [periodoSeleccionado, setPeriodoSeleccionado] = useState("semana");
   // Combinadas expandidas: id del padre -> true si se muestran sus patas.
@@ -442,21 +443,26 @@ export default function InformantDetail() {
   // datos del pick del tipster (cuota/stake/casa), editables porque la
   // cuota real conseguida puede ser distinta de la publicada.
   const abrirModalJugar = (pick: PickItem) => {
-    setJugarCantidad("");
-    setJugarCuota(pick.cuota ? String(Number(pick.cuota)) : "");
-    setJugarCasa(pick.casa || "");
+    setJugarInitial({
+      cuota: pick.cuota ? String(Number(pick.cuota)) : "",
+      casa: pick.casa || "",
+    });
     setJugarModalVisible(true);
   };
 
-  const confirmarJugarPick = async () => {
+  const confirmarJugarPick = async ({
+    cantidad: cantidadInput,
+    cuota: cuotaInput,
+    casa: casaInput,
+  }: JugarFormValues) => {
     if (!selectedTelegramPick) return;
-    const cantidad = Number(jugarCantidad.replace(",", "."));
+    const cantidad = Number(cantidadInput.replace(",", "."));
     if (!cantidad || cantidad <= 0) {
       Alert.alert("Error", "Introduce la cantidad apostada.");
       return;
     }
-    const cuota = jugarCuota ? Number(jugarCuota.replace(",", ".")) : 0;
-    if (jugarCuota && (!cuota || cuota <= 1)) {
+    const cuota = cuotaInput ? Number(cuotaInput.replace(",", ".")) : 0;
+    if (cuotaInput && (!cuota || cuota <= 1)) {
       Alert.alert("Error", "La cuota debe ser mayor que 1.");
       return;
     }
@@ -465,7 +471,7 @@ export default function InformantDetail() {
       await jugarParsedPick(selectedTelegramPick.id, {
         cantidadApostada: cantidad,
         cuota: cuota > 1 ? cuota : undefined,
-        casa: jugarCasa.trim() || undefined,
+        casa: casaInput.trim() || undefined,
       });
       setJugarModalVisible(false);
       setSelectedTelegramPick(null);
@@ -1222,266 +1228,27 @@ export default function InformantDetail() {
           </View>
         </Modal>
         {/* Detalle de un pick de Telegram + corrección manual del resultado */}
-        <Modal
-          animationType="slide"
-          transparent={true}
-          visible={selectedTelegramPick !== null}
-          onRequestClose={() => setSelectedTelegramPick(null)}
-        >
-          <View style={styles.modalContainer}>
-            <View style={styles.modalContent}>
-              <TouchableOpacity
-                style={styles.closeButton}
-                onPress={() => setSelectedTelegramPick(null)}
-              >
-                <Text style={styles.closeButtonText}>
-                  <MaterialCommunityIcons
-                    name="close"
-                    size={26}
-                    color="white"
-                  />
-                </Text>
-              </TouchableOpacity>
-
-              {selectedTelegramPick && (
-                <>
-                  <Text style={styles.modalTitle}>
-                    {selectedTelegramPick.apuesta || "(sin nombre)"}
-                  </Text>
-                  <View style={styles.detailRows}>
-                    <Text style={styles.detailRow}>
-                      Resultado:{" "}
-                      {selectedTelegramPick.acierto === "True"
-                        ? "Acertó ✅"
-                        : selectedTelegramPick.acierto === "False"
-                          ? "Falló ❌"
-                          : "Pendiente ❓"}
-                    </Text>
-                    {selectedTelegramPick.evento ? (
-                      <Text style={styles.detailRow}>
-                        Evento: {selectedTelegramPick.evento}
-                      </Text>
-                    ) : null}
-                    <Text style={styles.detailRow}>
-                      Mercado: {selectedTelegramPick.tipoDeApuesta || "-"}
-                    </Text>
-                    <Text style={styles.detailRow}>
-                      Cuota:{" "}
-                      {selectedTelegramPick.cuota != null
-                        ? Number(selectedTelegramPick.cuota).toFixed(2)
-                        : "—"}{" "}
-                      · Stake:{" "}
-                      {selectedTelegramPick.cantidadApostada != null
-                        ? Number(selectedTelegramPick.cantidadApostada).toFixed(
-                            2
-                          )
-                        : "—"}
-                      u
-                    </Text>
-                    <Text style={styles.detailRow}>
-                      Fecha: {formatDateShort(selectedTelegramPick.fecha)}
-                    </Text>
-                    {selectedTelegramPick.casa ? (
-                      <Text style={styles.detailRow}>
-                        Casa: {selectedTelegramPick.casa}
-                      </Text>
-                    ) : null}
-                  </View>
-
-                  {pickOddsLoading ? (
-                    <ActivityIndicator
-                      size="small"
-                      color="#ff9f1c"
-                      style={{ marginVertical: 8 }}
-                    />
-                  ) : pickOdds ? (
-                    <View style={styles.oddsBox}>
-                      <Text style={styles.oddsTitle}>Cuota de mercado</Text>
-                      {pickOdds.mapeado ? (
-                        <>
-                          <Text style={styles.oddsRow}>
-                            {pickOdds.mercado_api}
-                            {pickOdds.opcion_api
-                              ? ` · ${pickOdds.opcion_api}`
-                              : ""}
-                            {pickOdds.linea_api
-                              ? ` (${pickOdds.linea_api})`
-                              : ""}
-                          </Text>
-                          <Text style={styles.oddsRow}>
-                            Tipster {pickOdds.cuota_tipster?.toFixed(2) ?? "-"}{" "}
-                            · Apertura{" "}
-                            {pickOdds.cuota_apertura?.toFixed(2) ?? "-"} · Al
-                            publicar{" "}
-                            {pickOdds.cuota_publicacion?.toFixed(2) ?? "-"} ·
-                            Cierre {pickOdds.cuota_cierre?.toFixed(2) ?? "-"}
-                          </Text>
-                          <View style={styles.oddsBadges}>
-                            {pickOdds.cuota_disponible === false && (
-                              <Text style={styles.oddsBadgeInflada}>
-                                ⚠ Cuota inflada
-                              </Text>
-                            )}
-                            {pickOdds.cuota_disponible === true && (
-                              <Text style={styles.oddsBadgeOk}>
-                                ✓ Cuota real
-                              </Text>
-                            )}
-                            {pickOdds.clv_pct !== null && (
-                              <Text
-                                style={
-                                  pickOdds.clv_pct >= 0
-                                    ? styles.oddsBadgeOk
-                                    : styles.oddsBadgeInflada
-                                }
-                              >
-                                CLV {pickOdds.clv_pct > 0 ? "+" : ""}
-                                {pickOdds.clv_pct.toFixed(1)}%
-                              </Text>
-                            )}
-                          </View>
-                        </>
-                      ) : (
-                        <Text style={styles.oddsRowMuted}>
-                          Sin mercado comparable en el proveedor
-                        </Text>
-                      )}
-                    </View>
-                  ) : null}
-
-                  {apuestas.some(
-                    (a) => a.parsedPickId === selectedTelegramPick.id
-                  ) ? (
-                    <Text style={styles.jugadaText}>
-                      ✓ Ya la tienes registrada en tus apuestas
-                    </Text>
-                  ) : (
-                    <TouchableOpacity
-                      style={styles.jugarButton}
-                      onPress={() => abrirModalJugar(selectedTelegramPick)}
-                    >
-                      <Text style={styles.jugarButtonText}>
-                        Yo también la jugué
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-
-                  <Text style={styles.modalText}>Corregir resultado:</Text>
-                  <View style={styles.detailButtons}>
-                    <TouchableOpacity
-                      style={[
-                        styles.detailButton,
-                        { backgroundColor: "#1e3a24" },
-                      ]}
-                      onPress={() =>
-                        corregirPickTelegram(selectedTelegramPick, {
-                          acierto: true,
-                          anulada: false,
-                        })
-                      }
-                    >
-                      <Text style={styles.detailButtonText}>✅ Acertó</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.detailButton,
-                        { backgroundColor: "#3a1e1e" },
-                      ]}
-                      onPress={() =>
-                        corregirPickTelegram(selectedTelegramPick, {
-                          acierto: false,
-                          anulada: false,
-                        })
-                      }
-                    >
-                      <Text style={styles.detailButtonText}>❌ Falló</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.detailButton,
-                        { backgroundColor: "#2a2a2a" },
-                      ]}
-                      onPress={() =>
-                        corregirPickTelegram(selectedTelegramPick, {
-                          anulada: true,
-                        })
-                      }
-                    >
-                      <Text style={styles.detailButtonText}>Anulada</Text>
-                    </TouchableOpacity>
-                  </View>
-                </>
-              )}
-            </View>
-          </View>
-        </Modal>
+        <PickDetailModal
+          pick={selectedTelegramPick}
+          odds={pickOdds}
+          oddsLoading={pickOddsLoading}
+          yaRegistrada={
+            selectedTelegramPick !== null &&
+            apuestas.some((a) => a.parsedPickId === selectedTelegramPick.id)
+          }
+          onClose={() => setSelectedTelegramPick(null)}
+          onJugar={abrirModalJugar}
+          onCorregir={corregirPickTelegram}
+        />
 
         {/* "Yo también la jugué": registra la apuesta real del usuario */}
-        <Modal
-          animationType="slide"
-          transparent={true}
+        <JugarModal
           visible={jugarModalVisible}
-          onRequestClose={() => setJugarModalVisible(false)}
-        >
-          <View style={styles.modalContainer}>
-            <View style={styles.modalContent}>
-              <TouchableOpacity
-                style={styles.closeButton}
-                onPress={() => setJugarModalVisible(false)}
-              >
-                <Text style={styles.closeButtonText}>
-                  <MaterialCommunityIcons
-                    name="close"
-                    size={26}
-                    color="white"
-                  />
-                </Text>
-              </TouchableOpacity>
-
-              <Text style={styles.modalTitle}>Yo también la jugué</Text>
-              <Text style={styles.jugarHint}>
-                Cantidad, cuota y casa reales — pueden diferir de las del
-                tipster y así se compara el yield publicado con el tuyo.
-              </Text>
-
-              <TextInput
-                style={styles.jugarInput}
-                placeholder="Cantidad apostada (obligatorio)"
-                placeholderTextColor="#888"
-                keyboardType="numeric"
-                value={jugarCantidad}
-                onChangeText={setJugarCantidad}
-              />
-              <TextInput
-                style={styles.jugarInput}
-                placeholder="Cuota conseguida (opcional)"
-                placeholderTextColor="#888"
-                keyboardType="numeric"
-                value={jugarCuota}
-                onChangeText={setJugarCuota}
-              />
-              <TextInput
-                style={styles.jugarInput}
-                placeholder="Casa (opcional)"
-                placeholderTextColor="#888"
-                value={jugarCasa}
-                onChangeText={setJugarCasa}
-              />
-
-              <TouchableOpacity
-                style={[styles.jugarButton, jugando && { opacity: 0.6 }]}
-                onPress={confirmarJugarPick}
-                disabled={jugando}
-              >
-                {jugando ? (
-                  <ActivityIndicator size="small" color="white" />
-                ) : (
-                  <Text style={styles.jugarButtonText}>Registrar apuesta</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
+          loading={jugando}
+          initialValues={jugarInitial}
+          onClose={() => setJugarModalVisible(false)}
+          onSubmit={confirmarJugarPick}
+        />
         {showDatePicker && (
           <DateTimePicker
             value={new Date(selectedApuestaToUpdate?.fecha || new Date())}
@@ -1573,116 +1340,10 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     textAlign: "center",
   },
-  detailRows: {
-    alignSelf: "stretch",
-    marginBottom: 10,
-  },
   eventoText: {
     fontSize: 11,
     color: "#999",
     marginTop: 2,
-  },
-  detailRow: {
-    fontSize: 15,
-    color: "#ddd",
-    marginBottom: 6,
-  },
-  oddsBox: {
-    alignSelf: "stretch",
-    backgroundColor: "#141414",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#333",
-    padding: 10,
-    marginBottom: 10,
-  },
-  oddsTitle: {
-    fontSize: 12,
-    color: "#ff9f1c",
-    fontWeight: "bold",
-    textTransform: "uppercase",
-    marginBottom: 6,
-  },
-  oddsRow: {
-    fontSize: 13,
-    color: "#ddd",
-    marginBottom: 3,
-  },
-  oddsRowMuted: {
-    fontSize: 13,
-    color: "#888",
-  },
-  oddsBadges: {
-    flexDirection: "row",
-    gap: 10,
-    marginTop: 4,
-  },
-  oddsBadgeOk: {
-    fontSize: 12,
-    color: "#4caf50",
-    fontWeight: "bold",
-  },
-  oddsBadgeInflada: {
-    fontSize: 12,
-    color: colors.danger,
-    fontWeight: "bold",
-  },
-  detailButtons: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "center",
-    gap: 8,
-    marginTop: 4,
-  },
-  detailButton: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: "#555",
-  },
-  detailButtonText: {
-    color: "white",
-    fontSize: 13,
-    fontWeight: "bold",
-  },
-  jugarButton: {
-    backgroundColor: "#ff9f1c",
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: 8,
-    marginTop: 6,
-    marginBottom: 4,
-    alignSelf: "center",
-  },
-  jugarButtonText: {
-    color: "#0d0d0d",
-    fontSize: 15,
-    fontWeight: "bold",
-  },
-  jugadaText: {
-    color: "#4caf50",
-    fontSize: 14,
-    fontWeight: "bold",
-    marginTop: 6,
-    marginBottom: 4,
-    alignSelf: "center",
-  },
-  jugarHint: {
-    color: "#aaa",
-    fontSize: 12,
-    textAlign: "center",
-    marginBottom: 12,
-  },
-  jugarInput: {
-    alignSelf: "stretch",
-    height: 44,
-    backgroundColor: "white",
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    marginVertical: 6,
-    fontSize: 15,
-    color: "#000",
   },
   modalButtons: {
     flexDirection: "row",

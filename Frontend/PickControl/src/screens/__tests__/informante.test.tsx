@@ -153,7 +153,7 @@ describe("[informante] screen", () => {
       expect(screen.getByText("Over 2.5 goles")).toBeTruthy()
     );
 
-    fireEvent.press(screen.getAllByText("Over 2.5 goles")[0]);
+    await fireEvent.press(screen.getAllByText("Over 2.5 goles")[0]);
 
     await waitFor(() =>
       expect(screen.getByText("Yo también la jugué")).toBeTruthy()
@@ -167,21 +167,25 @@ describe("[informante] screen", () => {
     await waitFor(() =>
       expect(screen.getByText("Over 2.5 goles")).toBeTruthy()
     );
-    fireEvent.press(screen.getAllByText("Over 2.5 goles")[0]);
+    await fireEvent.press(screen.getAllByText("Over 2.5 goles")[0]);
     await waitFor(() =>
       expect(screen.getByText("Yo también la jugué")).toBeTruthy()
     );
 
-    fireEvent.press(screen.getByText("Yo también la jugué"));
+    await fireEvent.press(screen.getByText("Yo también la jugué"));
 
+    // El formulario pide cantidad (y quedan el botón del detalle + el
+    // título del modal como dos "Yo también la jugué").
     await waitFor(() =>
-      expect(screen.getByText("Yo también la jugué")).toBeTruthy()
+      expect(
+        screen.getByPlaceholderText("Cantidad apostada (obligatorio)")
+      ).toBeTruthy()
     );
-    // El formulario pide cantidad y cuota.
-    await waitFor(() => {
-      const texts = screen.getAllByText(/[Cc]antidad|[Cc]uota/);
-      expect(texts.length).toBeGreaterThan(0);
-    });
+    await waitFor(() =>
+      expect(
+        screen.getByPlaceholderText("Cuota conseguida (opcional)")
+      ).toBeTruthy()
+    );
   });
 
   it("canal sin picks muestra el mensaje de vacío", async () => {

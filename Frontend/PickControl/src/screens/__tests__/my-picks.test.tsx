@@ -119,14 +119,14 @@ describe("my-picks screen", () => {
     const screen = await render(<MyPicksScreen />);
     await waitFor(() => expect(screen.getByText("Mi pick")).toBeTruthy());
 
-    fireEvent.press(screen.getByText("❓"));
+    await fireEvent.press(screen.getByText("❓"));
     await waitFor(() =>
       expect(
         screen.getByText("¿Cuál es el resultado de la apuesta?")
       ).toBeTruthy()
     );
 
-    fireEvent.press(screen.getByText("✔️"));
+    await fireEvent.press(screen.getByText("✔️"));
     await waitFor(() =>
       expect(mockUpdatePick).toHaveBeenCalledWith(42, { acierto: "True" })
     );

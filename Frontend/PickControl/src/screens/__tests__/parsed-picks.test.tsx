@@ -172,7 +172,7 @@ describe("parsed-picks screen — vista de canal", () => {
     await waitFor(() => expect(screen.getAllByText("Canal A FREE").length).toBeGreaterThan(0));
 
     const chip = screen.getAllByText("Canal A FREE")[0];
-    fireEvent.press(chip);
+    await fireEvent.press(chip);
 
     await waitFor(() =>
       expect(mockGetParsedPicks).toHaveBeenCalledWith(
@@ -196,10 +196,10 @@ describe("parsed-picks screen — vista de canal", () => {
     await waitFor(() =>
       expect(screen.getAllByText("Canal A FREE").length).toBeGreaterThan(0)
     );
-    fireEvent.press(screen.getAllByText("Canal A FREE")[0]);
+    await fireEvent.press(screen.getAllByText("Canal A FREE")[0]);
 
     await waitFor(() => expect(screen.getByText("Cargar más")).toBeTruthy());
-    fireEvent.press(screen.getByText("Cargar más"));
+    await fireEvent.press(screen.getByText("Cargar más"));
 
     await waitFor(() =>
       expect(mockGetParsedPicks).toHaveBeenCalledWith(
@@ -256,7 +256,7 @@ describe("parsed-picks screen — toggles", () => {
       expect(screen.getByText("Over 2.5 goles")).toBeTruthy()
     );
 
-    fireEvent.press(screen.getByText("Solo pendientes de liquidar"));
+    await fireEvent.press(screen.getByText("Solo pendientes de liquidar"));
 
     await waitFor(() =>
       expect(mockGetParsedPicks).toHaveBeenCalledWith(
