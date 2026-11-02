@@ -33,6 +33,33 @@ logger = get_logger("app.results.base")
 # es justo lo que hace fallar una similitud global estricta.
 _WORD_PATTERN = re.compile(r"\w+")
 _HINT_SEPARATORS = re.compile(r"\s[-–—/|]\s|\s+vs?\.?\s+", re.IGNORECASE)
+# Sufijos de club genéricos: se ignoran en la contención de tokens
+# ("Al-Faisaly FC" ≡ "al faisaly harmah"). "real" NO entra —
+# discrimina (Real Madrid vs Atlético Madrid).
+_CLUB_TOKENS = {
+    "fc",
+    "cf",
+    "ud",
+    "sc",
+    "ac",
+    "cd",
+    "afc",
+    "club",
+    "fk",
+    "sk",
+    "bk",
+    "rc",
+    "rcd",
+    "sd",
+    "sv",
+    "vfb",
+    "as",
+    "us",
+    "ss",
+    "if",
+    "ff",
+    "ca",
+}
 _SCORE_SUBSET = 0.85
 _SCORE_SUPSET = 0.75
 
@@ -90,8 +117,8 @@ def _tokens(text: str) -> set[str]:
 
 def _part_score(part: str, team: str) -> float:
     score = _similar(part, team)
-    part_tokens = _tokens(part)
-    team_tokens = _tokens(team)
+    part_tokens = _tokens(part) - _CLUB_TOKENS
+    team_tokens = _tokens(team) - _CLUB_TOKENS
     if part_tokens and part_tokens <= team_tokens:
         # "alavés" ⊂ "deportivo alavés" (subset total).
         score = max(score, _SCORE_SUBSET)
@@ -153,6 +180,7 @@ TEAM_ALIASES = {
     "union saint-gilloise": "union st gilloise",
     "union saint gilloise": "union st gilloise",
     "union sg": "union st gilloise",
+    "oporto": "fc porto",
 }
 
 
@@ -429,6 +457,22 @@ def _save_state() -> None:
         for name, n in providers.items():
             target[name] = max(int(target.get(name, 0)), int(n))
     state["calls"] = merged_calls
+    # Contadores mensuales billables (oddspapi y cía): gana el mayor
+    # por proveedor — sondas `docker exec` y el backend pueden sumar a
+    # la vez; un merge por clave perdería el gasto del otro proceso.
+    merged_billable: dict[str, dict] = {
+        p: dict(e)
+        for p, e in (disk.get("billable_month") or {}).items()
+        if isinstance(e, dict)
+    }
+    for prov, entry in (state.get("billable_month") or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        prev = merged_billable.get(prov)
+        if prev is None or int(entry.get("count") or 0) >= int(prev.get("count") or 0):
+            merged_billable[prov] = entry
+    if merged_billable:
+        state["billable_month"] = merged_billable
     # Podar entradas viejas para que el archivo no crezca sin límite.
     state["rate_limited"] = {
         k: v for k, v in state["rate_limited"].items() if v >= today
@@ -910,11 +954,36 @@ def clear_missed(key: str) -> None:
     Se usa cuando cambia la premisa que hizo fallar la búsqueda — p.
     ej. el backfill corrige `fecha_evento` con la fecha real del
     fixture: las marcas "nofixture" dejadas buscando en el día
-    equivocado ya no son válidas y hay que reintentar."""
+    equivocado ya no son válidas y hay que reintentar.
+
+    NB: no se puede borrar la clave — el merge `{**disco, **memoria}`
+    de `_save_state` la resucitaría desde disco. La lápida es una
+    fecha vieja: gana el merge, `is_missed` la ve caducada y la poda
+    posterior la elimina del archivo."""
     state = _load_state()
     if key in state["missed"]:
-        del state["missed"][key]
+        state["missed"][key] = "1970-01-01"
         _save_state()
+
+
+def clear_missed_for_pick(pick_id: int) -> int:
+    """Invalida todas las marcas `missed` de un pick concreto
+    (`{provider}|{kind}|{pick_id}`), sea cual sea la fuente.
+
+    Se usa cuando una reparación cambia la premisa que hizo fallar la
+    búsqueda (selección, evento, mercado): la próxima pasada reintenta
+    en vez de esperar los 15 días del TTL. Devuelve cuántas se
+    invalidaron. El segmento final se compara entero para no confundir
+    `|23` con `|123`."""
+    state = _load_state()
+    cleared = 0
+    for key in state["missed"]:
+        if key.rsplit("|", 1)[-1] == str(pick_id):
+            state["missed"][key] = "1970-01-01"
+            cleared += 1
+    if cleared:
+        _save_state()
+    return cleared
 
 
 def is_missed(key: str, ttl: Optional[timedelta] = None) -> bool:

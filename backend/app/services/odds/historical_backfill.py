@@ -60,6 +60,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Optional, Protocol, Union
 
@@ -78,7 +79,9 @@ from app.models.telegram_raw_message import TelegramRawMessage  # noqa: F401
 from app.models.user import User  # noqa: F401  (FKs de TelegramRawMessage)
 from app.services.odds import (
     betsapi,
+    fivedollar,
     football_csv,
+    harvest,
     oddsfeed,
     oddspapi,
     static_pages,
@@ -110,10 +113,14 @@ from app.services.odds.snapshotter import _canonical_sport, _lookup_hint
 from app.services.odds.sofascore import SofaScoreOddsProvider
 from app.services.results import compat_llm
 from app.services.results.base import (
+    _CLUB_TOKENS,
+    _HINT_SEPARATORS,
     clear_missed,
+    clear_missed_for_pick,
     count_missed_prefix,
     count_odds_rows_written,
     count_provider_call,
+    fold_name,
     is_missed,
     is_rate_limited,
     loop_history,
@@ -282,6 +289,143 @@ class _HistorySource(Protocol):
         ...
 
 
+# Selecciones en español -> nombre del catálogo (inglés). Solo
+# selecciones: para clubes los nombres suelen coincidir.
+_TEAM_ALIASES = {
+    "espana": "spain",
+    "belgica": "belgium",
+    "noruega": "norway",
+    "ucrania": "ukraine",
+    "turquia": "turkiye",
+    "estados unidos": "united states",
+    "suecia": "sweden",
+    "polonia": "poland",
+    "moldavia": "moldova",
+    "francia": "france",
+    "suiza": "switzerland",
+    "inglaterra": "england",
+    "chequia": "czechia",
+    "dinamarca": "denmark",
+    "holanda": "netherlands",
+    "paises bajos": "netherlands",
+    "alemania": "germany",
+    "croacia": "croatia",
+    "escocia": "scotland",
+    "gales": "wales",
+    "irlanda": "ireland",
+    "republica de irlanda": "republic of ireland",
+    "islas feroe": "faroe islands",
+    "macedonia del norte": "north macedonia",
+    "corea del sur": "south korea",
+    "japon": "japan",
+    "mexico": "mexico",
+    "nueva zelanda": "new zealand",
+    "arabia saudi": "saudi arabia",
+    "costa de marfil": "ivory coast",
+    "estados unidos femenino": "united states w",
+}
+
+# Entidades que nunca son el equipo real del pick: ligas simuladas
+# (SRL), filiales y juveniles — el catálogo los mezcla con los
+# seniors y el substring boost los empataba ("elche" -> Elche
+# Ilicitano, "malaga" -> Malaga CF Srl).
+# Entidades que nunca son el equipo real del pick: ligas simuladas
+# (SRL), filiales y juveniles — el catálogo los mezcla con los
+# seniors y el substring boost los empataba ("elche" -> Elche
+# Ilicitano, "malaga" -> Malaga CF Srl).
+_NOT_REAL_TEAM = re.compile(
+    r"\bsrl\b|simulated|\bilicitano\b|\bii\b|\b(b|u1[789]|u2[013])\b"
+)
+# Variante femenina del catálogo ("(W)", "Women") — solo se penaliza
+# cuando el pick no va de un equipo femenino ("lyon femenino",
+# "fc koln (f)").
+_WOMEN_TEAM = re.compile(r"\bwomen\b|\bfemenin|\bw$|\(w\)")
+_WOMEN_HINT = re.compile(r"\bfemenin|\(f\)$|\sf$|\sw$")
+# Fichas máximas que se piden por equipo: el catálogo duplica clubes
+# por competición ("Liverpool" = solo Champions, "Liverpool FC" =
+# doméstica) — 3 fichas cubren los duplicados reales sin inflar la
+# factura (cada ficha = 1 llamada billable, cacheada para siempre).
+_PARTICIPANT_MAX_IDS = 3
+
+# Sufijos de club genéricos: no discriminan en la contención por
+# tokens ("Al Nassr FC" ≡ "al-nassr riyadh" comparten {al, nassr}).
+# Compartido con `results.base._part_score` ("real" queda fuera a
+# propósito: discrimina Real Madrid vs Atlético Madrid).
+_CLUB_SUFFIXES = _CLUB_TOKENS
+
+
+def _participant_score(name: str, candidate: str, women: bool = False) -> float:
+    """Similitud nombre del tipster vs. nombre del catálogo (0-1).
+
+    Tenis: el catálogo guarda "Apellido, Nombre" — se prueba también
+    la variante reordenada ("nombre apellido").
+    """
+    a, b = fold_name(name), fold_name(candidate)
+    if not a or not b:
+        return 0.0
+    variants = [b]
+    if "," in b:
+        last, _, first = b.partition(",")
+        variants.append(f"{first.strip()} {last.strip()}")
+    best = 0.0
+    for v in variants:
+        if v == a:
+            return 1.0
+        score = SequenceMatcher(None, a, v).ratio()
+        if len(a) >= 5 and len(v) >= 5 and (a in v or v in a):
+            score = max(score, 0.85)
+        # Contención por tokens: "al-nassr riyadh" vs "Al Nassr FC" —
+        # el ratio de cadena queda en ~0.69 por el sufijo del club,
+        # pero todos los tokens identificativos están. Los genéricos
+        # (fc/cf/ud/...) no aportan y se ignoran en ambos lados.
+        a_toks = set(re.split(r"[\s\-]+", a)) - _CLUB_SUFFIXES
+        v_toks = set(re.split(r"[\s\-]+", v)) - _CLUB_SUFFIXES
+        if a_toks and v_toks and (a_toks <= v_toks or v_toks <= a_toks):
+            score = max(score, 0.85)
+        best = max(best, score)
+    if _NOT_REAL_TEAM.search(b) or (_WOMEN_TEAM.search(b) and not women):
+        # Filial/SRL/femenino: solo casa si no hay candidato senior —
+        # el multiplicador lo baja del umbral cuando compite.
+        best *= 0.5
+    return best
+
+
+def _participant_ids_for_hint(catalog: dict[int, str], hint: str) -> set[int]:
+    """participantIds que casan con los equipos del hint ("A vs B")."""
+    parts = [
+        p.strip()
+        for p in re.split(r"\s+(?:vs?\.?|[-–—]|@)\s+", hint, maxsplit=2)
+        if len(p.strip()) >= 3
+    ]
+    if not parts:
+        parts = [hint.strip()] if len(hint.strip()) >= 3 else []
+    ids: set[int] = set()
+    for part in parts:
+        folded = fold_name(part)
+        is_w = bool(_WOMEN_HINT.search(folded))
+        # Limpia el marcador de género para comparar nombres ("fc
+        # koln (f)" -> "fc koln") y aplica alias de selección.
+        if is_w:
+            folded = re.sub(r"\s*\(f\)$|\s+f$|\s+w$|\s*femenin\w*$", "", folded).strip()
+        search = _TEAM_ALIASES.get(folded, folded)
+        scored: list[tuple[float, int]] = []
+        for pid, name in catalog.items():
+            # Pick femenino: solo candidatas (W); masculino: las (W)
+            # compiten penalizadas dentro de _participant_score.
+            if is_w and not _WOMEN_TEAM.search(fold_name(name)):
+                continue
+            score = _participant_score(search, name, women=is_w)
+            if score >= 0.75:
+                scored.append((score, pid))
+        # Mejor score primero; a igualdad gana el pid más BAJO — las
+        # fichas canónicas del proveedor se crearon antes (Ipswich
+        # Town=32) que los duplicados regionales/SRL (Ipswich FC de
+        # Australia=1098127). Se llevan hasta _PARTICIPANT_MAX_IDS.
+        scored.sort(key=lambda t: (-t[0], t[1]))
+        ids.update(pid for _score, pid in scored[:_PARTICIPANT_MAX_IDS])
+    return ids
+
+
 class _OddsPapiSource:
     """bet36528: catálogo /markets + /historical-odds por fixture.
 
@@ -302,13 +446,18 @@ class _OddsPapiSource:
     search_deltas = (0, -1, 1, -2, 2, -3, 3, -4, 4)
 
     def __init__(
-        self, api_key: str, api_host: str, data_dir: Optional[Path] = None
+        self,
+        api_key: str,
+        api_host: str = oddspapi._DEFAULT_HOST,
+        direct: bool = False,
+        data_dir: Optional[Path] = None,
     ) -> None:
-        self._client = OddsPapiClient(api_key=api_key, api_host=api_host)
+        self._client = OddsPapiClient(api_key=api_key, api_host=api_host, direct=direct)
         # Días ya servidos por alguna llamada de rango: pedir el día D
         # tras descargar D±4 no vuelve a pagar cuota.
         self._covered_days: dict[int, dict[date, list[OddsPapiFixture]]] = {}
         self._data_dir = data_dir
+        self._participant_catalogs: dict[int, dict[int, str]] = {}
 
     def _over_budget(self) -> bool:
         return self._client.calls >= _PAPI_MAX_CALLS_PER_RUN
@@ -317,12 +466,9 @@ class _OddsPapiSource:
     def sport_ids(self) -> dict[str, int]:
         return oddspapi.SPORT_IDS
 
-    def pick_supported(self, pick: ParsedPick) -> bool:
-        """False si el pick es prop de jugador: la traducción solo lee
-        `players["0"]` (líneas de equipo) — gastar la llamada del
-        fixture para cero opciones posibles es cuota quemada."""
-        text = f"{pick.mercado or ''} {pick.seleccion or ''}"
-        return not _PROP_PICK.search(text)
+    # Los props de jugador YA son soportados: `translate_history` lee
+    # `players["<playerId>"]` y resuelve el nombre con el diccionario
+    # de /v4/players (players_<sport>.json en disco).
 
     async def fixtures(self, http, sport_id: int, day: date):
         if self._over_budget():
@@ -330,6 +476,14 @@ class _OddsPapiSource:
         days = self._covered_days.setdefault(sport_id, {})
         if day in days:
             return days[day]
+        today = utc_now().date()
+        # El listado de un día pasado es inmutable y billable: a disco
+        # — la próxima pasada no vuelve a pagar el mismo rango.
+        if day < today:
+            cached = oddspapi.load_fixture_day(sport_id, day, self._data_dir)
+            if cached is not None:
+                days[day] = cached
+                return cached
         first = day - timedelta(days=_PAPI_FIXTURE_DAYS)
         last = day + timedelta(days=_PAPI_FIXTURE_DAYS)
         events = await self._client.fixtures(http, sport_id, first, last)
@@ -342,7 +496,80 @@ class _OddsPapiSource:
         for offset in range(-_PAPI_FIXTURE_DAYS, _PAPI_FIXTURE_DAYS + 1):
             d = day + timedelta(days=offset)
             days[d] = by_day.get(d, [])
+            if d < today:
+                oddspapi.save_fixture_day(sport_id, d, days[d], self._data_dir)
         return days[day]
+
+    async def fixtures_for_picks(self, http, sport_id, day, picks):
+        """Descubrimiento dirigido por participante (canal directo).
+
+        ("ok", fixtures) — los equipos de TODOS los picks del cubo
+        resolvieron a participantId: se unen los fixtures de cada
+        equipo (~1 billable por equipo nuevo, cacheado a disco) en
+        lugar de barrer días calendario.
+        ("fallback", None) — algún pick no resuelve equipo en el
+        catálogo: el barrido por día sigue siendo la red de seguridad.
+        ("error", None) — API caída/sin cuota: reintento luego.
+        """
+        if not self._client._direct:
+            return "fallback", None
+        catalog = await self._participants(http, sport_id)
+        if catalog is None:
+            return "error", None
+        pids: set[int] = set()
+        for pick in picks:
+            sport = _canonical_sport(pick.deporte)
+            hint = _lookup_hint(pick, sport) or ""
+            ids = _participant_ids_for_hint(catalog, hint)
+            if not ids:
+                return "fallback", None
+            pids |= ids
+        pool: dict[str, OddsPapiFixture] = {}
+        for pid in sorted(pids):
+            cached = oddspapi.load_participant_fixtures(sport_id, pid, self._data_dir)
+            if cached is not None:
+                events = cached
+            else:
+                if self._over_budget():
+                    return "error", None
+                events = await self._client.fixtures_by_participant(http, pid, sport_id)
+                if events is None:
+                    return "error", None
+                oddspapi.save_participant_fixtures(
+                    sport_id, pid, events, self._data_dir
+                )
+            for fixture in events:
+                pool[fixture.fixture_id] = fixture
+        # Recorta a la ventana del cubo: la lista de un equipo trae
+        # años de fixtures y `match` solo necesita los cercanos a la
+        # fecha del pick (su tolerancia propia hace el resto).
+        window = _PAPI_FIXTURE_DAYS + 1
+        in_range = [
+            f
+            for f in pool.values()
+            if f.start is not None and abs((f.start.date() - day).days) <= window
+        ]
+        return "ok", in_range
+
+    async def _participants(
+        self, http: httpx.AsyncClient, sport_id: int
+    ) -> Optional[dict[int, str]]:
+        """Catálogo equipo -> participantId: memoria -> disco -> API."""
+        cached_mem = self._participant_catalogs.get(sport_id)
+        if cached_mem is not None:
+            return cached_mem
+        cached_disk = oddspapi.load_participants(sport_id, self._data_dir)
+        if cached_disk is not None:
+            self._participant_catalogs[sport_id] = cached_disk
+            return cached_disk
+        if self._over_budget():
+            return None
+        catalog = await self._client.participants(http, sport_id)
+        if catalog is None:
+            return None
+        oddspapi.save_participants(sport_id, catalog, self._data_dir)
+        self._participant_catalogs[sport_id] = catalog
+        return catalog
 
     def match(self, fixtures, hint, dt, sofascore_id):
         return oddspapi_match(fixtures, hint, dt, sofascore_id)
@@ -371,9 +598,16 @@ class _OddsPapiSource:
                 markets = oddspapi.load_markets(self._data_dir)
         if markets is None:
             return "error", []
+        # Diccionario playerId->nombre para traducir props: disco o
+        # nada (si no existe, los props se omiten igual que antes).
+        players = oddspapi.load_players(self.sport_ids.get(sport) or 0, self._data_dir)
         if cached is not None:
             return "ok", oddspapi.translate_history(
-                cached["payload"], markets, fixture.home_name, fixture.away_name
+                cached["payload"],
+                markets,
+                fixture.home_name,
+                fixture.away_name,
+                players,
             )
         if self._over_budget():
             return "budget", []
@@ -385,7 +619,7 @@ class _OddsPapiSource:
             return "error", []
         oddspapi.save_payload(fixture, ext_id, payload, self._data_dir)
         return "ok", oddspapi.translate_history(
-            payload, markets, fixture.home_name, fixture.away_name
+            payload, markets, fixture.home_name, fixture.away_name, players
         )
 
 
@@ -648,6 +882,94 @@ class _BetsApiSource:
         return "ok", betsapi.translate_prematch(
             payload, sport, fixture.home_name, fixture.away_name, when=fixture.start
         )
+
+
+class _FiveDollarSource:
+    """5DollarFootballAPI: apertura + cierre REALES de bet365 en las
+    5 grandes ligas (Free: 60 req/h, ~3 meses de histórico, una
+    llamada por fixture tras el listado de día).
+
+    Su valor frente a las demás fuentes: es la única que trae el
+    precio de APERTURA además del cierre, y documenta qué línea
+    existió de verdad (la línea de córners bet365 9-10.5 vs las
+    enteras del tipster) — el payload queda en disco para
+    re-traducir sin nueva llamada (`revisit_done`)."""
+
+    name = fivedollar.NAME
+    revisit_done = True
+    # ±2: cada delta es un listado de día (1 llamada, cacheada); el
+    # sondeo de football_csv ya corrige las fechas de repost antes.
+    search_deltas = (0, -1, 1, -2, 2)
+    # Ventana del plan Free (~3 meses) con margen: fuera de ella el
+    # fixture no existe en la API — miss seguro sin gastar llamada.
+    _HISTORY_DAYS = 100
+
+    def __init__(self, api_key: str, data_dir: Optional[Path] = None) -> None:
+        self._client = fivedollar.FiveDollarClient(api_key)
+        self._data_dir = data_dir
+        self._days: dict[date, list[fivedollar.FiveFixture]] = {}
+
+    def _over_budget(self) -> bool:
+        return self._client.calls >= fivedollar.MAX_CALLS_PER_RUN
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return {"futbol": 0}
+
+    def pick_supported(self, pick: ParsedPick) -> bool:
+        """False si el pick está fuera de la ventana del plan Free
+        (~3 meses) o es prop de jugador (mercados que la API no
+        publica): ambos son miss garantizado — marcarlos sin llamada
+        evita re-pagar 5 listados de día por pick inalcanzable."""
+        if pick.fecha_evento is not None and (
+            utc_now() - pick.fecha_evento
+        ) > timedelta(days=self._HISTORY_DAYS):
+            return False
+        text = f"{pick.mercado or ''} {pick.seleccion or ''}"
+        return not _PROP_PICK.search(text)
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        if self._over_budget():
+            return None
+        if day in self._days:
+            return self._days[day]
+        # El listado de un día pasado es inmutable: a disco — una
+        # pasada nueva no vuelve a pagar lo que otra ya descargó.
+        if day < utc_now().date():
+            cached = fivedollar.load_day(day, self._data_dir)
+            if cached is not None:
+                self._days[day] = cached
+                return cached
+        fixtures = await self._client.fixtures(http, day)
+        if fixtures is None:
+            return None
+        self._days[day] = fixtures
+        if day < utc_now().date():
+            fivedollar.save_day(day, fixtures, self._data_dir)
+        return fixtures
+
+    def match(self, fixtures, hint, dt, sofascore_id):
+        return fivedollar.match_fixture(fixtures, hint, dt)
+
+    def ext_id(self, fixture: fivedollar.FiveFixture) -> str:
+        return fivedollar.event_ext_id(fixture)
+
+    def fixture_key(self, fixture: fivedollar.FiveFixture) -> str:
+        return str(fixture.fixture_id)
+
+    async def choices(self, http, fixture: fivedollar.FiveFixture, sport, picks):
+        ext_id = self.ext_id(fixture)
+        cached = fivedollar.load_payload(ext_id, self._data_dir)
+        if cached is not None:
+            return "ok", fivedollar.translate_odds(cached["payload"], fixture)
+        if self._over_budget():
+            return "budget", []
+        await asyncio.sleep(_FETCH_DELAY)
+        payload = await self._client.odds(http, fixture.fixture_id)
+        if payload is None:
+            return "error", []
+        fivedollar.save_payload(fixture, ext_id, payload, self._data_dir)
+        return "ok", fivedollar.translate_odds(payload, fixture)
 
 
 class _TennisDataSource:
@@ -1384,21 +1706,32 @@ _BACKFILL_PROVIDERS = (
     oddspapi.NAME,
     oddsfeed.NAME,
     betsapi.NAME,
+    # Cosecha manual por userscript (OddsPortal): sus filas resuelven
+    # el embudo igual que cualquier fuente automática.
+    harvest.NAME,
     *_LLM_EXTRACTOR_PROVIDERS,
 )
 
 
-async def _load_picks(session, limit: int | None) -> list[ParsedPick]:
+async def _load_picks(
+    session, limit: int | None, uncovered_sports: bool = False
+) -> list[ParsedPick]:
     result = await session.exec(
         select(ParsedPick)
         .where(ParsedPick.es_apuesta == True)  # noqa: E712
         .where(ParsedPick.es_combinada == False)  # noqa: E712
+        .where(ParsedPick.anulada == False)  # noqa: E712
         .where(ParsedPick.deporte != None)  # noqa: E711
         .where(ParsedPick.fecha_evento != None)  # noqa: E711
         .where(ParsedPick.fecha_evento <= utc_now() - _EVENT_MARGIN)
         .order_by(ParsedPick.fecha_evento)
     )
     sports = set().union(*(s.sport_ids for s in _sources(get_settings())))
+    if uncovered_sports:
+        # El goteo LLM no necesita provider de API: deportes sin
+        # fuente (F1, hockey...) también tienen intento honesto de
+        # auditar cuota en vez de quedar invisibles para siempre.
+        return [p for p in result.all()][:limit] if limit else list(result.all())
     picks = [p for p in result.all() if _canonical_sport(p.deporte) in sports]
     return picks[:limit] if limit else picks
 
@@ -1443,17 +1776,27 @@ def _sources(settings) -> list[_HistorySource]:
     betsapi_token = getattr(settings, "betsapi_token", None)
     if betsapi_token:
         sources.append(_BetsApiSource(token=betsapi_token))
-    if settings.rapidapi_tennis_key:
+    fivedollar_key = getattr(settings, "fivedollar_key", None)
+    if fivedollar_key:
+        sources.append(_FiveDollarSource(api_key=fivedollar_key))
+    # OddsPapi: con key directa (api.oddspapi.io) el histórico es
+    # gratis ilimitado — se prefiere sobre el canal RapidAPI, que
+    # queda como respaldo latente por si la directa se retira.
+    oddspapi_direct = getattr(settings, "oddspapi_direct_key", None)
+    if oddspapi_direct:
+        sources.append(_OddsPapiSource(api_key=oddspapi_direct, direct=True))
+    elif getattr(settings, "rapidapi_tennis_key", None):
         sources.append(
             _OddsPapiSource(
                 api_key=settings.rapidapi_tennis_key,
-                api_host=settings.rapidapi_oddspapi_host,
+                api_host=getattr(settings, "rapidapi_oddspapi_host", None),
             )
         )
+    if getattr(settings, "rapidapi_tennis_key", None):
         sources.append(
             _OddsFeedSource(
                 api_key=settings.rapidapi_tennis_key,
-                api_host=settings.rapidapi_oddsfeed_host,
+                api_host=getattr(settings, "rapidapi_oddsfeed_host", None),
             )
         )
     return sources
@@ -1637,6 +1980,53 @@ async def _register_event(session, event: OddsEvent, registered: set[str]) -> No
     registered.add(ext_id)
 
 
+_LINK_WEAK_TOKENS = _CLUB_TOKENS | {
+    "de",
+    "del",
+    "la",
+    "el",
+    "los",
+    "las",
+    "e",
+    "y",
+    "tenis",
+    "futbol",
+    "encuentro",
+    "partido",
+    "match",
+    "juego",
+    "torneo",
+    "liga",
+}
+
+
+def _link_consistent(pick: ParsedPick, event: OddsEvent, sport: str) -> bool:
+    """El enlace pick->OddsEvent es creíble solo si AMBOS lados del
+    hint del pick comparten algún token con los equipos del evento.
+
+    El snapshotter en vivo casa por tokens parciales — un apellido
+    compartido basta para enlazar "Djere vs Glinka" al partido
+    "Martínez vs Djere" (grupo D del estudio de backlog): con un
+    enlace así las fuentes buscan/escriben datos del partido
+    equivocado. Sin dos lados legibles no hay evidencia para dudar.
+    """
+    hint = _lookup_hint(pick, sport) or pick.evento or ""
+    texto = _translate_countries(fold_name(hint))
+    lados = [x.strip() for x in _HINT_SEPARATORS.split(texto) if x.strip()]
+    if len(lados) < 2:
+        return True
+    teams = set(
+        _translate_countries(
+            fold_name(f"{event.home_team or ''} {event.away_team or ''}")
+        ).split()
+    )
+    for lado in lados[:2]:
+        tokens = set(lado.split()) - _LINK_WEAK_TOKENS
+        if tokens and tokens.isdisjoint(teams):
+            return False
+    return True
+
+
 async def _run_source(
     source: _HistorySource,
     picks: list[ParsedPick],
@@ -1661,6 +2051,22 @@ async def _run_source(
     nomarket_key = f"{source.name}|nomarket|{{}}"
     hist_key = f"{source.name}|hist|{{}}"
 
+    # Enlaces pick->OddsEvent del snapshotter en vivo: cuando el
+    # `fecha_evento` del pick está corrupto (extractor/repost), la
+    # fecha real del enlace ancla día y match (grupo C). Si el evento
+    # enlazado no comparte ambos lados con el pick, el link apunta a
+    # otro partido (grupo D): se suelta y se desatribuyen sus filas.
+    event_ids = {p.odds_event_id for p in picks if p.odds_event_id}
+    events: dict[str, OddsEvent] = {}
+    if event_ids:
+        with session.no_autoflush:
+            ev_rows = await session.exec(
+                select(OddsEvent).where(OddsEvent.event_ext_id.in_(event_ids))
+            )
+            events = {e.event_ext_id: e for e in ev_rows.all()}
+    anchors: dict[int, datetime] = {}
+    unlinked_reported: set[int] = set()
+
     # Resolución pick -> fixture agrupada por (deporte, día): una
     # llamada de eventos por cubo cubre todos sus picks.
     buckets: dict[tuple[int, object], list[ParsedPick]] = {}
@@ -1668,12 +2074,54 @@ async def _run_source(
         sport = _canonical_sport(pick.deporte)
         if sport not in source.sport_ids:
             continue
+        linked = events.get(pick.odds_event_id or "")
+        if linked is not None and not _link_consistent(pick, linked, sport):
+            # El enlace era del snapshotter y apunta a OTRO partido:
+            # buscar por él fija el día equivocado y las filas
+            # atribuidas son precios de un evento que no es.
+            if pick.id not in unlinked_reported:
+                unlinked_reported.add(pick.id)
+                report.detalles.append(
+                    f"  ~ pick {pick.id}: odds_event_id "
+                    f"{pick.odds_event_id} es {linked.home_team}-"
+                    f"{linked.away_team} (no es el pick); enlace soltado"
+                )
+            if apply:
+                with session.no_autoflush:
+                    wrong_rows = (
+                        await session.exec(
+                            select(OddsSnapshot).where(
+                                OddsSnapshot.parsed_pick_id == pick.id
+                            )
+                        )
+                    ).all()
+                for row in wrong_rows:
+                    row.parsed_pick_id = None
+                    session.add(row)
+                pick.odds_event_id = None
+                session.add(pick)
+                clear_missed_for_pick(pick.id)
+            linked = None
         if pick.odds_event_id in done and not getattr(source, "revisit_done", False):
             continue
         if resolved_picks is not None and pick.id in resolved_picks:
             continue
-        if is_missed(nofixture_key.format(pick.id)) or is_missed(
-            nomarket_key.format(pick.id)
+        anchor = linked.start if linked is not None else None
+        if anchor is not None:
+            anchors[pick.id or 0] = anchor
+        # Un enlace consistente con fecha distinta invalida las marcas
+        # previas: se escribieron buscando el día equivocado (grupo C).
+        stale_marks = anchor is not None and anchor.date() != pick.fecha_evento.date()
+        if stale_marks and apply:
+            cleared = clear_missed_for_pick(pick.id or 0)
+            if cleared:
+                report.detalles.append(
+                    f"  ~ pick {pick.id}: {cleared} marcas borradas "
+                    "(fecha del enlace difiere de fecha_evento)"
+                )
+        if not stale_marks and (
+            is_missed(nofixture_key.format(pick.id))
+            or is_missed(nomarket_key.format(pick.id))
         ):
             continue
         # Fuentes que declaran `pick_supported` pueden descartar el
@@ -1689,9 +2137,8 @@ async def _run_source(
             if apply:
                 mark_missed(nomarket_key.format(pick.id))
             continue
-        buckets.setdefault(
-            (source.sport_ids[sport], pick.fecha_evento.date()), []
-        ).append(pick)
+        day = (anchor or pick.fecha_evento).date()
+        buckets.setdefault((source.sport_ids[sport], day), []).append(pick)
 
     fixtures_picks: dict[str, tuple[object, str, list[ParsedPick]]] = {}
     # Días más recientes primero: los picks frescos (los que más
@@ -1706,17 +2153,31 @@ async def _run_source(
         fixtures: list = []
         search_space: Optional[_SofaSearchSpace] = None
         api_error = False
-        for delta in getattr(source, "search_deltas", (-1, 0, 1)):
-            day_fixtures = await source.fixtures(
-                http, sport_id, day + timedelta(days=delta)
-            )
-            if day_fixtures is None:
+        use_day_scan = True
+        # Descubrimiento dirigido (oddspapi por participante): ahorra
+        # las billables del barrido de días cuando TODOS los picks del
+        # cubo resuelven a equipos del catálogo.
+        discover = getattr(source, "fixtures_for_picks", None)
+        if discover is not None:
+            mode, directed = await discover(http, sport_id, day, day_picks)
+            if mode == "ok":
+                fixtures = list(directed or [])
+                use_day_scan = False
+            elif mode == "error":
                 api_error = True
-                break
-            if isinstance(day_fixtures, _SofaSearchSpace):
-                search_space = search_space or day_fixtures
-                continue
-            fixtures += day_fixtures
+                use_day_scan = False
+        if use_day_scan:
+            for delta in getattr(source, "search_deltas", (-1, 0, 1)):
+                day_fixtures = await source.fixtures(
+                    http, sport_id, day + timedelta(days=delta)
+                )
+                if day_fixtures is None:
+                    api_error = True
+                    break
+                if isinstance(day_fixtures, _SofaSearchSpace):
+                    search_space = search_space or day_fixtures
+                    continue
+                fixtures += day_fixtures
         if api_error:
             report.sin_revisar += len(day_picks)
             report.detalles.append(
@@ -1728,14 +2189,31 @@ async def _run_source(
         # resuelven evento a evento contra allsportsapi2.
         match_space = search_space if not fixtures else None
         for pick in day_picks:
+            # Con enlace consistente el dt de match es la fecha real
+            # del OddsEvent, no la (a veces corrupta) fecha_evento.
+            match_dt = anchors.get(pick.id or 0) or pick.fecha_evento
             hint = _lookup_hint(pick, sport) or ""
             found = source.match(
                 match_space if match_space is not None else fixtures,
                 hint,
-                pick.fecha_evento,
+                match_dt,
                 _sofascore_id(pick),
             )
             fixture = await found if inspect.isawaitable(found) else found
+            if fixture is None:
+                # El alias traducido pudo perder tokens ("deportivo de
+                # a coruña" -> "la coruna" no casa con "RC Deportivo de
+                # A Coruna" de OddsPapi): segunda oportunidad con el
+                # `evento` original, sin coste de API.
+                raw_hint = (pick.evento or "").strip().lower()
+                if raw_hint and raw_hint != hint.lower():
+                    found = source.match(
+                        match_space if match_space is not None else fixtures,
+                        raw_hint,
+                        match_dt,
+                        _sofascore_id(pick),
+                    )
+                    fixture = await found if inspect.isawaitable(found) else found
             if fixture is _SEARCH_FAILED:
                 report.sin_revisar += 1
                 report.detalles.append(
@@ -2080,6 +2558,11 @@ async def _run_gemini_pass(
             continue
         pending.append(pick)
 
+    # Deportes sin provider de API: el comparador web no distingue,
+    # pero su `evento` no siempre es un cruce "A vs B" (F1: "GP
+    # ITALIA") — para ellos el propio nombre del evento es el hint.
+    api_sports = set().union(*(s.sport_ids for s in _sources(settings)))
+
     # Agrupa por evento: patas/picks del mismo partido comparten la
     # página del comparador — una búsqueda + una extracción por página
     # resuelven el grupo entero en vez de un ciclo por pick.
@@ -2092,7 +2575,13 @@ async def _run_gemini_pass(
         sport = _canonical_sport(pick.deporte)
         hint = (_lookup_hint(pick, sport) or "") if sport else ""
         desc = _market_desc(pick)
-        if sport not in GeminiResearchProvider.SUPPORTED_SPORTS or not desc:
+        if (
+            sport in api_sports and sport not in GeminiResearchProvider.SUPPORTED_SPORTS
+        ) or not desc:
+            # El gate SUPPORTED_SPORTS aplica a deportes con provider:
+            # para los sin fuente el LLM es agnóstico (el deporte solo
+            # se interpola en el prompt) — marcarlos "done" sin intento
+            # sería otra forma de hacerlos invisibles.
             if apply:
                 mark_missed(done_key.format(pick.id))
             continue
@@ -2111,6 +2600,7 @@ async def _run_gemini_pass(
             sport == "tenis"
             or looks_like_match_hint((pick.evento or "").strip())
             or looks_like_match_hint(hint)
+            or (sport not in api_sports and len(hint.strip()) >= 5)
         )
         rescued_ok = False
         if not usable and sport != "tenis":
@@ -2371,7 +2861,11 @@ async def run_gemini_odds_pass(apply: bool) -> Optional[BackfillReport]:
     if _gemini_pass_lock.locked():
         return None
     async with _gemini_pass_lock, AsyncSessionLocal() as session:
-        picks = await _load_picks(session, None)
+        # uncovered_sports: el comparador web no distingue deportes —
+        # F1/hockey/otros sin provider de API también se auditan aquí
+        # (la única vía para ellos; los del backfill diario siguen
+        # filtrados porque necesitan fixture en una fuente real).
+        picks = await _load_picks(session, None, uncovered_sports=True)
         done = await _done_event_ids(session)
         resolved = await _resolved_pick_ids(session)
         done_key = _llm_done_key()

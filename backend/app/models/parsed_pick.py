@@ -103,6 +103,15 @@ class ParsedPickBase(SQLModel):
     anulada_rechecks: int = Field(default=0)
     anulada_last_recheck: Optional[datetime] = None
 
+    # Sospecha de mercado sobre la liquidación (NO la cambia — solo la
+    # marca para revisión/auditoría). "3way": el pick se liquidó como
+    # push asiático en línea entera (córners/tarjetas), pero el
+    # tipster probablemente juega el mercado a 3 vías (1xBet:
+    # Más/Exactamente/Menos), donde caer justo en la línea PIERDE.
+    # Sin evidencia del mercado real de ese día queda como sospecha;
+    # con snapshots 1xBet se puede confirmar por huella de precio.
+    sospecha_mercado: Optional[str] = Field(default=None, max_length=40)
+
 
 class ParsedPick(ParsedPickBase, table=True):
     """Pick estructurado ligado a un mensaje crudo de Telegram."""

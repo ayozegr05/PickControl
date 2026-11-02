@@ -8,6 +8,7 @@ from app.api.v1 import (
     channels,
     devices,
     informantes,
+    odds_harvest,
     picks,
     system,
     telegram,
@@ -22,3 +23,4 @@ api_router.include_router(channels.router)
 api_router.include_router(analisis.router)
 api_router.include_router(devices.router)
 api_router.include_router(system.router)
+api_router.include_router(odds_harvest.router)

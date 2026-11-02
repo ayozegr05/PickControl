@@ -899,3 +899,26 @@ class TestGeminiPassGuards:
 
         rescue.assert_not_awaited()
         multi.assert_awaited_once()
+
+    async def test_deporte_sin_fuente_llega_a_la_busqueda(self, session, monkeypatch):
+        """Automovilismo no tiene provider de API ni cruce "A vs B"
+        ("GP ITALIA" es un evento, no un partido) — el goteo LLM debe
+        intentarlo igual en vez de dejarlo invisible para siempre."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        multi = AsyncMock(return_value={})
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        pick = self._pick(
+            id=54,
+            deporte="automovilismo",
+            evento="GP ITALIA",
+            mercado="coches clasificados",
+            seleccion="Menos de 19,5 coches",
+            linea=19.5,
+        )
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [pick], set(), set(), session, apply=True, report=report
+        )
+
+        multi.assert_awaited()
+        assert results_base.is_missed("llm-odds|done|54")

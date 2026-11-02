@@ -6,7 +6,7 @@ El test de integración pasa las filas virtuales por `map_pick_choices`
 el vocabulario traducido casa con el comparador real.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
 from app.models.odds_snapshot import OddsEvent, OddsSnapshot
 from app.models.parsed_pick import ParsedPick
@@ -17,11 +17,17 @@ from app.services.odds.oddspapi import (
     PricePoint,
     downsample,
     event_ext_id,
+    load_fixture_day,
     load_markets,
+    load_participant_fixtures,
+    load_participants,
     load_payload,
     match_fixture,
     parse_fixture,
+    save_fixture_day,
     save_markets,
+    save_participant_fixtures,
+    save_participants,
     save_payload,
     translate_history,
 )
@@ -373,6 +379,26 @@ class TestTranslateHistory:
     def test_payload_vacio(self):
         assert translate_history({}, _MARKETS, "A", "B") == []
 
+    def test_bet365_regional_se_une_al_traducir(self):
+        """Las cuotas viven en bet365.es/bet365.de...: el slug global
+        "bet365" vacío no debe esconder los mercados regionales."""
+        history = {
+            "bookmakers": {
+                "bet365.es": _HISTORY["bookmakers"]["bet365"],
+            }
+        }
+        choices = translate_history(history, _MARKETS, "Sevilla FC", "FC Barcelona")
+        assert choices, "bet365.es debía traducir igual que bet365"
+        # bet365 global gana cuando compite con la variante regional:
+        both = {
+            "bookmakers": {
+                "bet365.es": {"markets": {"101": {"outcomes": {}}}},
+                "bet365": _HISTORY["bookmakers"]["bet365"],
+            }
+        }
+        merged = translate_history(both, _MARKETS, "Sevilla FC", "FC Barcelona")
+        assert len(merged) == len(choices)
+
 
 class TestPersistencia:
     """Payloads y catálogo a disco: re-traducir no vuelve a pagar la
@@ -402,6 +428,156 @@ class TestPersistencia:
         path.parent.mkdir(parents=True)
         path.write_text("{no json", encoding="utf-8")
         assert load_payload("sofascore:9", base=tmp_path) is None
+
+    def test_fixture_day_roundtrip(self, tmp_path):
+        """El listado billable de un día pasado se conserva a disco —
+        la próxima pasada no vuelve a pagar el mismo rango."""
+        day = date(2026, 9, 15)
+        save_fixture_day(10, day, [_FIXTURE], base=tmp_path)
+        loaded = load_fixture_day(10, day, base=tmp_path)
+        assert loaded is not None
+        assert loaded[0].fixture_id == "id1200390574632744"
+        assert loaded[0].sofascore_id == 17085930
+        assert loaded[0].home_name == "Sevilla FC"
+        assert loaded[0].start == datetime(2026, 9, 15, 18, 0)
+        assert loaded[0].sport_id == 10
+        assert load_fixture_day(10, date(2026, 9, 16), base=tmp_path) is None
+        # Día sin fixtures: la lista vacía también se conserva.
+        save_fixture_day(10, date(2026, 9, 17), [], base=tmp_path)
+        assert load_fixture_day(10, date(2026, 9, 17), base=tmp_path) == []
+
+    def test_participants_roundtrip(self, tmp_path):
+        """El catálogo equipo->id (1 llamada billable) se conserva —
+        el descubrimiento dirigido no lo re-paga cada pasada."""
+        save_participants(10, {34: "Real Betis", 35: "Sevilla FC"}, base=tmp_path)
+        assert load_participants(10, base=tmp_path) == {
+            34: "Real Betis",
+            35: "Sevilla FC",
+        }
+        assert load_participants(12, base=tmp_path) is None
+
+    def test_participant_fixtures_roundtrip(self, tmp_path):
+        save_participant_fixtures(10, 35, [_FIXTURE], base=tmp_path)
+        loaded = load_participant_fixtures(10, 35, base=tmp_path)
+        assert loaded is not None
+        assert loaded[0].fixture_id == "id1200390574632744"
+        assert loaded[0].home_name == "Sevilla FC"
+        assert load_participant_fixtures(10, 99, base=tmp_path) is None
+
+
+class TestDirectMode:
+    """Modo directo (api.oddspapi.io): /v4 + apiKey por query,
+    cooldown por endpoint y historical-odds fuera de la cuota."""
+
+    def _client_cls(self):
+        from app.services.odds.oddspapi import OddsPapiClient
+
+        return OddsPapiClient
+
+    def _http(self, seen: list, payload=None):
+        import httpx
+
+        def handler(request):
+            seen.append(request)
+            return httpx.Response(200, json=payload if payload is not None else [])
+
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    async def test_url_v4_y_apikey_en_query(self):
+        OddsPapiClient = self._client_cls()
+        client = OddsPapiClient(api_key="KEY123", direct=True)
+        seen: list = []
+        async with self._http(seen, payload={"ok": True}) as http:
+            status, _ = await client._get(http, "/historical-odds")
+        assert status == 200
+        request = seen[0]
+        assert str(request.url).startswith("https://api.oddspapi.io/v4/historical-odds")
+        assert request.url.params["apiKey"] == "KEY123"
+        assert "x-rapidapi-key" not in request.headers
+
+    async def test_rapidapi_sigue_con_headers(self):
+        OddsPapiClient = self._client_cls()
+        client = OddsPapiClient(api_key="K", api_host="h.test")
+        seen: list = []
+        async with self._http(seen) as http:
+            await client._get(http, "/fixtures")
+        request = seen[0]
+        assert str(request.url).startswith("https://h.test/fixtures")
+        assert request.headers["x-rapidapi-key"] == "K"
+        assert "apiKey" not in request.url.params
+
+    async def test_historical_odds_no_cuenta_cuota_en_directo(self):
+        OddsPapiClient = self._client_cls()
+        client = OddsPapiClient(api_key="K", direct=True)
+        async with self._http([]) as http:
+            await client._get(http, "/historical-odds")
+            await client._get(http, "/fixtures")
+            await client._get(http, "/markets")
+        # Solo fixtures y markets son billables en directo.
+        assert client.calls == 2
+
+    async def test_rapidapi_cuenta_todo(self):
+        OddsPapiClient = self._client_cls()
+        client = OddsPapiClient(api_key="K", api_host="h")
+        async with self._http([]) as http:
+            await client._get(http, "/historical-odds")
+            await client._get(http, "/fixtures")
+        assert client.calls == 2
+
+    async def test_cooldown_espera_entre_llamadas(self, monkeypatch):
+        import app.services.odds.oddspapi as mod
+
+        OddsPapiClient = self._client_cls()
+        client = OddsPapiClient(api_key="K", direct=True)
+        sleeps: list[float] = []
+
+        async def fake_sleep(seconds):
+            sleeps.append(seconds)
+
+        monkeypatch.setattr(mod.asyncio, "sleep", fake_sleep)
+        async with self._http([]) as http:
+            await client._get(http, "/historical-odds")
+            await client._get(http, "/historical-odds")
+        # La segunda llamada espera los 5 s completos del cooldown
+        # (el reloj mockeado no avanza durante el test).
+        assert sleeps and max(sleeps) > 0
+
+    async def test_billable_count_persistente(self):
+        """Las billables del canal directo se acumulan en
+        provider_state entre procesos — el histórico gratis no suma."""
+        import app.services.odds.oddspapi as mod
+
+        OddsPapiClient = self._client_cls()
+        client = OddsPapiClient(api_key="K", direct=True)
+        assert mod.direct_billable_count() == 0
+        async with self._http([]) as http:
+            await client._get(http, "/fixtures")
+            await client._get(http, "/historical-odds")
+        assert mod.direct_billable_count() == 1
+
+    async def test_tope_mensual_frena_billables_no_gratis(self):
+        """Al llegar al tope mensual, las billables se cortan ANTES de
+        emitir HTTP — pero el histórico gratis sigue pasando. Es el
+        seguro para que la cuota nunca llegue a 250/250 (donde el
+        histórico también muere)."""
+        import app.services.odds.oddspapi as mod
+        from app.services.results.base import _load_state, _save_state
+
+        OddsPapiClient = self._client_cls()
+        client = OddsPapiClient(api_key="K", direct=True)
+        state = _load_state()
+        state.setdefault("billable_month", {})["oddspapi"] = {
+            "period": mod._billable_period(),
+            "count": mod._DIRECT_MONTHLY_CAP,
+        }
+        _save_state()
+        seen: list = []
+        async with self._http(seen) as http:
+            status, _ = await client._get(http, "/fixtures")
+            status2, _ = await client._get(http, "/historical-odds")
+        assert status == 0  # freno: ni siquiera emitió la request
+        assert status2 == 200
+        assert len(seen) == 1  # solo el histórico hizo HTTP
 
 
 class TestDownsample:
@@ -544,3 +720,272 @@ class TestIntegracionCompare:
             pick, self._corner_event(), self._virtual_rows(choices)
         )
         assert matched is None
+
+
+# --- Props de jugador --------------------------------------------------------
+
+_PROP_MARKETS = {
+    10730: MarketDef(
+        market_name="Anytime Goal Scorer",
+        market_type="players-anytimegoalscorer",
+        period="fulltime",
+        handicap=0.0,
+        outcomes={10730: "Yes"},
+    ),
+    102598: MarketDef(
+        market_name="Over Under Player Assists (incl. overtime)",
+        market_type="playertotals-assists",
+        period="result",
+        handicap=0.5,
+        outcomes={102598: "Over", 102599: "Under"},
+    ),
+    102700: MarketDef(
+        market_name="Player Fouls Committed (incl. overtime)",
+        market_type="players-foulscommitted",
+        period="result",
+        handicap=0.0,
+        outcomes={102700: "0", 102701: "1+", 102702: "2+"},
+    ),
+    102732: MarketDef(
+        market_name="Player To Be Carded (incl. overtime)",
+        market_type="players-cards",
+        period="result",
+        handicap=0.0,
+        outcomes={102732: "Yes"},
+    ),
+}
+
+# Ipswich Town - Liverpool FC: playerIds reales del payload historico
+# y del diccionario /v4/players (ya normalizados "Nombre Apellido").
+_PLAYERS = {
+    "1058437": "Cody Gakpo",
+    "1245194": "Alexis Mac Allister",
+    "9999999": "Alexander Isak",
+}
+
+_PROP_HISTORY = {
+    "bookmakers": {
+        "bet365.es": {
+            "markets": {
+                "10730": {
+                    "outcomes": {
+                        "10730": {
+                            "players": {
+                                "1058437": [_point("2026-09-04T18:53:00.000Z", 4.33)],
+                                "1245194": [_point("2026-09-04T18:53:00.000Z", 6.0)],
+                                "9999999": [_point("2026-09-04T18:53:00.000Z", 3.4)],
+                            }
+                        }
+                    }
+                },
+                "102598": {
+                    "outcomes": {
+                        "102598": {
+                            "players": {
+                                "1058437": [_point("2026-09-04T18:53:00.000Z", 2.5)],
+                            }
+                        }
+                    }
+                },
+                "102700": {
+                    "outcomes": {
+                        "102701": {
+                            "players": {
+                                "1245194": [_point("2026-09-04T18:53:00.000Z", 1.8)],
+                            }
+                        },
+                        "102702": {
+                            "players": {
+                                "1245194": [_point("2026-09-04T18:53:00.000Z", 4.0)],
+                            }
+                        },
+                    }
+                },
+                "102732": {
+                    "outcomes": {
+                        "102732": {
+                            "players": {
+                                "1245194": [_point("2026-09-04T18:53:00.000Z", 3.75)],
+                            }
+                        }
+                    }
+                },
+            }
+        }
+    }
+}
+
+
+def _prop_choices(players=_PLAYERS):
+    return translate_history(
+        _PROP_HISTORY, _PROP_MARKETS, "Ipswich Town", "Liverpool FC", players
+    )
+
+
+class TestPropTranslation:
+    def test_scorer_anytime_jugadores(self):
+        choices = _prop_choices()
+        scorers = [c for c in choices if c.market_name == "Goalscorer anytime"]
+        assert {c.choice_name for c in scorers} == {
+            "Cody Gakpo",
+            "Alexis Mac Allister",
+            "Alexander Isak",
+        }
+        gakpo = next(c for c in scorers if c.choice_name == "Cody Gakpo")
+        assert gakpo.choice_group is None
+        assert gakpo.points[0].cuota == 4.33
+
+    def test_prop_linea_ou_lleva_grupo(self):
+        choices = _prop_choices()
+        assists = [c for c in choices if c.market_name == "Player assists"]
+        assert len(assists) == 1
+        assert assists[0].choice_name == "Cody Gakpo"
+        assert assists[0].choice_group == "Over 0.5"
+
+    def test_prop_conteo_normaliza_linea_entera(self):
+        """'1+' == Over 0.5 y '2+' == Over 1.5: mismo contrato."""
+        choices = _prop_choices()
+        fouls = [c for c in choices if c.market_name == "Player fouls"]
+        groups = {c.choice_group for c in fouls}
+        assert groups == {"Over 0.5", "Over 1.5"}
+        one = next(c for c in fouls if c.choice_group == "Over 0.5")
+        assert one.points[0].cuota == 1.8
+
+    def test_prop_cardeado(self):
+        choices = _prop_choices()
+        cards = [c for c in choices if c.market_name == "Player to be booked"]
+        assert len(cards) == 1
+        assert cards[0].choice_name == "Alexis Mac Allister"
+        assert cards[0].choice_group is None
+
+    def test_sin_diccionario_no_emite_props(self):
+        assert _prop_choices(players=None) == []
+        assert _prop_choices(players={}) == []
+
+    def test_playerid_desconocido_salta(self):
+        choices = _prop_choices(players={"1058437": "Cody Gakpo"})
+        names = {c.choice_name for c in choices}
+        assert names == {"Cody Gakpo"}
+
+    def test_la_clave_0_no_es_jugador(self):
+        # Un outcome con precio de equipo dentro de un mercado prop no
+        # genera fila: "0" es la resolucion de equipo, no un jugador.
+        hist = {
+            "bookmakers": {
+                "bet365.es": {
+                    "markets": {
+                        "10730": {
+                            "outcomes": {
+                                "10730": {
+                                    "players": {
+                                        "0": [_point("2026-09-04T18:00:00.000Z", 9.0)]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert translate_history(hist, _PROP_MARKETS, "A", "B", _PLAYERS) == []
+
+
+class TestPropIntegracionCompare:
+    """Filas prop -> map_pick_choices contra picks reales del backlog."""
+
+    def _virtual(self, choices):
+        return [
+            OddsSnapshot(
+                provider="oddspapi",
+                event_ext_id="sofascore:16363261",
+                market_name=c.market_name,
+                choice_name=c.choice_name,
+                choice_group=c.choice_group,
+                cuota=p.cuota,
+                cuota_apertura=c.cuota_apertura,
+                captured_at=p.captured_at,
+            )
+            for c in choices
+            for p in c.points
+        ]
+
+    def _event(self):
+        return OddsEvent(
+            event_ext_id="sofascore:16363261",
+            sport="futbol",
+            home_team="Ipswich Town",
+            away_team="Liverpool FC",
+            start=datetime(2026, 9, 4, 18, 30),
+        )
+
+    def test_pick_marca_gol_nombre_al_final(self):
+        """'Anota gol en cualquier momento Alexander Isak': el nombre
+        va al final — el patron de cierre lo rescata."""
+        rows = self._virtual(_prop_choices())
+        pick = ParsedPick(
+            mercado="ganador",
+            seleccion="Anota gol en cualquier momento Alexander Isak",
+            deporte="fútbol",
+            es_apuesta=True,
+        )
+        m = map_pick_choices(pick, self._event(), rows)
+        assert m is not None
+        assert m.market_name == "Goalscorer anytime"
+        assert m.choice_name == "Alexander Isak"
+        assert m.rows[-1].cuota == 3.4
+
+    def test_pick_tarjeta_jugador(self):
+        rows = self._virtual(_prop_choices())
+        pick = ParsedPick(
+            mercado="ganador",
+            seleccion="Recibe amonestación Alexis Mac Allister",
+            deporte="fútbol",
+            es_apuesta=True,
+        )
+        m = map_pick_choices(pick, self._event(), rows)
+        assert m is not None
+        assert m.market_name == "Player to be booked"
+        assert m.rows[-1].cuota == 3.75
+
+    def test_pick_prop_linea_minima_en_empate(self):
+        """'comete falta' sin linea -> Over 0.5 (al menos una), nunca
+        Over 1.5: el desempate por linea menor da el contrato real."""
+        rows = self._virtual(_prop_choices())
+        pick = ParsedPick(
+            mercado="jugador",
+            seleccion="Comete falta Alexis Mac Allister",
+            deporte="fútbol",
+            es_apuesta=True,
+        )
+        m = map_pick_choices(pick, self._event(), rows)
+        assert m is not None
+        assert m.market_name == "Player fouls"
+        assert m.choice_group == "Over 0.5"
+        assert m.rows[-1].cuota == 1.8
+
+    def test_pick_recibira_tarjeta_con_dos_puntos(self):
+        """'Alexis Mac Allister: Recibirá una tarjeta' — nombre
+        delante con ':', verbo 'recibirá' (forma real del backlog)."""
+        rows = self._virtual(_prop_choices())
+        pick = ParsedPick(
+            mercado="jugador",
+            seleccion="Alexis Mac Allister: Recibirá una tarjeta",
+            deporte="fútbol",
+            es_apuesta=True,
+        )
+        m = map_pick_choices(pick, self._event(), rows)
+        assert m is not None
+        assert m.market_name == "Player to be booked"
+        assert m.choice_name == "Alexis Mac Allister"
+
+    def test_pick_marca_o_asiste_sin_mercado_es_miss_honesto(self):
+        """'marca o asiste' no tiene mercado en OddsPapi: None, no
+        una caida silenciosa al anytime scorer."""
+        rows = self._virtual(_prop_choices())
+        pick = ParsedPick(
+            mercado="jugador",
+            seleccion="Marca o asiste Cody Gakpo",
+            deporte="fútbol",
+            es_apuesta=True,
+        )
+        assert map_pick_choices(pick, self._event(), rows) is None

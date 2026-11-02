@@ -6,13 +6,14 @@ quedó sin presupuesto de llamadas o la API falló — quedan pendientes
 sin marca, a diferencia de `sin_fixture`/`sin_historial` (intentados).
 """
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 
 from app.models.parsed_pick import ParsedPick
 from app.services.odds.historical_backfill import (
     BackfillReport,
+    _participant_ids_for_hint,
     _run_source,
 )
 from app.services.odds.oddspapi import HistoricalChoice, MarketDef, PricePoint
@@ -173,6 +174,125 @@ async def test_fixture_en_otra_fecha_corrige_fecha_evento(session):
     assert report.con_fixture == 1
     assert report.fechas_corregidas == 1
     assert pick.fecha_evento == _EarlyFixture.start
+
+
+class _DirectedSource(_FakeSource):
+    """Fuente con descubrimiento dirigido (duck-type de
+    `fixtures_for_picks` — caso oddspapi por participante)."""
+
+    def __init__(self, mode, directed=None, **kw):
+        super().__init__(**kw)
+        self._mode = mode
+        self._directed = directed or []
+        self.discover_calls = []
+
+    async def fixtures_for_picks(self, http, sport_id, day, picks):
+        self.discover_calls.append(day)
+        return self._mode, list(self._directed)
+
+
+async def test_descubrimiento_dirigido_evita_el_barrido(session):
+    """Cuando la vía dirigida resuelve, el barrido por día NO se
+    llama — eso es lo que ahorra las billables de /fixtures."""
+    src = _DirectedSource("ok", directed=[_Fixture()], fixtures_return=[])
+    picks = [_pick(1, 20)]
+    report = BackfillReport()
+
+    await _run_source(src, picks, set(), set(), session, None, False, report)
+
+    assert src.days_requested == []
+    assert report.con_fixture == 1
+
+
+async def test_descubrimiento_fallback_vuelve_al_barrido(session):
+    """Un pick sin equipo resoluble en el catálogo devuelve el cubo
+    al barrido por día — la red de seguridad no se pierde."""
+    src = _DirectedSource("fallback", fixtures_return=[_Fixture()])
+    picks = [_pick(1, 20)]
+    report = BackfillReport()
+
+    await _run_source(src, picks, set(), set(), session, None, False, report)
+
+    assert src.days_requested != []
+    assert report.con_fixture == 1
+
+
+async def test_descubrimiento_error_cuenta_sin_revisar(session):
+    src = _DirectedSource("error", fixtures_return=[_Fixture()])
+    picks = [_pick(1, 20), _pick(2, 20)]
+    report = BackfillReport()
+
+    await _run_source(src, picks, set(), set(), session, None, False, report)
+
+    assert src.days_requested == []
+    assert report.sin_revisar == 2
+
+
+def test_participant_ids_por_hint():
+    catalog = {34: "Real Betis", 35: "Sevilla FC", 99: "Machac, Tomas"}
+    assert _participant_ids_for_hint(catalog, "Sevilla vs Real Betis") == {34, 35}
+    # Tenis: el catálogo guarda "Apellido, Nombre".
+    assert _participant_ids_for_hint(catalog, "Tomas Machac vs Otro") == {99}
+    assert _participant_ids_for_hint(catalog, "Zzz Qqq Fcfc") == set()
+
+
+def test_participant_ids_prefiere_senior_y_descarta_srl():
+    catalog = {
+        1: "Elche CF",
+        2: "Elche Ilicitano CF",
+        3: "Malaga CF",
+        4: "Malaga CF Srl",
+        5: "Sporting CP",
+        6: "Sporting Clube Farense",
+    }
+    # El filial queda penalizado bajo el umbral: solo el senior.
+    assert _participant_ids_for_hint(catalog, "elche - otro") == {1}
+    # La variante SRL queda por debajo del umbral.
+    assert _participant_ids_for_hint(catalog, "malaga - otro") == {3}
+    # Multi-ficha: "sporting" casa con Sporting CP y Farense — se
+    # devuelven ambas para unir sus fixtures.
+    assert _participant_ids_for_hint(catalog, "sporting - otro") == {5, 6}
+
+
+def test_participant_ids_fichas_duplicadas():
+    # El caso Liverpool real: la ficha exacta es solo-Champions y las
+    # "FC" domésticas comparten el club — hay que llevarse varias.
+    catalog = {
+        90134: "Liverpool",
+        44: "Liverpool FC",
+        36556: "Liverpool FC",
+        32: "Ipswich Town",
+        397536: "Ipswich Town",
+        1098127: "Ipswich FC",
+        694839: "Liverpool FC SRL",
+        203621: "Liverpool Montevideo",
+    }
+    ids = _participant_ids_for_hint(catalog, "ipswich - liverpool")
+    # Incluye la ficha Champions + las dos domésticas (top-3 por
+    # score) y el Ipswich Town canónico — no la Ipswich australiana.
+    assert 44 in ids and 90134 in ids
+    assert 32 in ids
+    assert 694839 not in ids  # SRL penalizada
+    assert len(ids) <= 6  # 2 equipos x 3 fichas máx.
+
+
+def test_participant_ids_selecciones_en_espanol():
+    catalog = {7: "Belgium", 8: "Norway", 9: "Spain", 10: "Real CD Espana"}
+    assert _participant_ids_for_hint(catalog, "francia - bélgica") == {7}
+    assert _participant_ids_for_hint(catalog, "portugal - noruega") == {8}
+    # "españa" casa con Spain, no con el club hondureño "España".
+    assert _participant_ids_for_hint(catalog, "inglaterra - españa") == {9}
+
+
+def test_participant_ids_femenino():
+    catalog = {11: "Chelsea (W)", 12: "Chelsea", 13: "1. FC Koln (W)"}
+    # Pick masculino: la variante (W) queda penalizada.
+    assert _participant_ids_for_hint(catalog, "chelsea - otro") == {12}
+    # Pick femenino: se permite la variante (W).
+    assert _participant_ids_for_hint(catalog, "lyon femenino vs chelsea femenino") == {
+        11
+    }
+    assert _participant_ids_for_hint(catalog, "fc koln (f) vs otro") == {13}
 
 
 async def test_fixture_misma_fecha_no_corrige(session):
@@ -436,3 +556,243 @@ class TestOddsPapiSource:
         # markets + historical-odds = 2 llamadas; el payload quedó.
         assert client.calls == 2
         assert load_payload("oddspapi:f1", base=tmp_path) is not None
+
+
+# --- _FiveDollarSource: filtro de ventana/props + caché de día -----
+
+
+async def test_fivedollar_pick_supported():
+    """La fuente descarta sin llamada los picks fuera de la ventana
+    Free (~3 meses) y los props de jugador — ambos son miss
+    garantizado en su catálogo."""
+    from app.core.dates import utc_now
+    from app.services.odds.historical_backfill import _FiveDollarSource
+
+    src = _FiveDollarSource(api_key="x")
+
+    reciente = _pick(1, 20)
+    reciente.fecha_evento = utc_now() - timedelta(days=30)
+    assert src.pick_supported(reciente) is True
+
+    viejo = _pick(2, 20)
+    viejo.fecha_evento = utc_now() - timedelta(days=200)
+    assert src.pick_supported(viejo) is False
+
+    prop = _pick(3, 20)
+    prop.fecha_evento = utc_now() - timedelta(days=10)
+    prop.mercado = "jugador"
+    prop.seleccion = "Aubameyang marca gol"
+    assert src.pick_supported(prop) is False
+
+
+async def test_fivedollar_day_cache_roundtrip(tmp_path):
+    """El listado de un día pasado se guarda a disco (es inmutable):
+    una pasada nueva lo lee sin repetir la llamada a la API — incluso
+    los días sin fixtures, que también se pagan una sola vez."""
+    from app.services.odds import fivedollar
+
+    day = date(2026, 9, 20)
+    fixtures = [
+        fivedollar.FiveFixture(
+            fixture_id=7,
+            home_name="A",
+            away_name="B",
+            start=datetime(2026, 9, 20, 18),
+            league_name="LaLiga",
+        )
+    ]
+    fivedollar.save_day(day, fixtures, tmp_path)
+    loaded = fivedollar.load_day(day, tmp_path)
+    assert loaded is not None
+    assert loaded[0].fixture_id == 7
+    assert loaded[0].home_name == "A"
+    assert loaded[0].start == datetime(2026, 9, 20, 18)
+    assert loaded[0].league_name == "LaLiga"
+    assert fivedollar.load_day(date(2026, 9, 21), tmp_path) is None
+    fivedollar.save_day(date(2026, 9, 22), [], tmp_path)
+    assert fivedollar.load_day(date(2026, 9, 22), tmp_path) == []
+
+
+def _event(ext_id: str, sport: str, home: str, away: str, start):
+    from app.models.odds_snapshot import OddsEvent
+
+    return OddsEvent(
+        event_ext_id=ext_id,
+        sport=sport,
+        home_team=home,
+        away_team=away,
+        start=start,
+    )
+
+
+def test_link_consistent_ambos_lados():
+    """El enlace solo es creíble si AMBOS lados del pick aparecen en
+    los equipos del OddsEvent (caso base: traducción de países)."""
+    from app.services.odds.historical_backfill import _link_consistent
+
+    pick = _pick(1, 19)
+    pick.evento = "Albania - San Marino"
+    ev = _event("e:1", "futbol", "Albania", "San Marino", datetime(2026, 10, 6))
+    assert _link_consistent(pick, ev, "futbol") is True
+
+
+def test_link_consistent_rechaza_lado_ausente():
+    """Grupo D: 'Djere vs Glinka' enlazado a 'Martinez vs Djere' —
+    un solo apellido compartido no basta."""
+    from app.services.odds.historical_backfill import _link_consistent
+
+    pick = _pick(1, 11)
+    pick.deporte = "tenis"
+    pick.evento = "Laslo Djere vs Daniil Glinka"
+    pick.seleccion = "Laslo Djere gana"
+    ev = _event(
+        "sofascore:1",
+        "tenis",
+        "Pedro Martinez",
+        "Laslo Djere",
+        datetime(2026, 10, 10),
+    )
+    assert _link_consistent(pick, ev, "tenis") is False
+
+
+def test_link_consistent_alias_ciudad():
+    """'Betis - Oporto' vs 'Real Betis-FC Porto': el alias de ciudad
+    no rompe la consistencia."""
+    from app.services.odds.historical_backfill import _link_consistent
+
+    pick = _pick(1, 18)
+    pick.evento = "Betis - Oporto"
+    ev = _event(
+        "espn:1",
+        "futbol",
+        "Real Betis",
+        "FC Porto",
+        datetime(2026, 10, 14),
+    )
+    assert _link_consistent(pick, ev, "futbol") is True
+
+
+async def test_enlace_ancla_dia_de_busqueda(session):
+    """Grupo C: con fecha_evento corrupta, el bucket y el match usan
+    la fecha real del OddsEvent enlazado."""
+    ev = _event(
+        "espn:soccer:x:1",
+        "futbol",
+        "Albania",
+        "San Marino",
+        datetime(2026, 10, 6, 18, 45),
+    )
+    session.add(ev)
+    await session.flush()
+    pick = _pick(1, 19)
+    pick.fecha_evento = datetime(2026, 8, 19)
+    pick.evento = "Albania - San Marino"
+    pick.odds_event_id = ev.event_ext_id
+    src = _FakeSource(fixtures_return=[])
+    report = BackfillReport()
+
+    await _run_source(src, [pick], set(), set(), session, None, False, report)
+
+    assert date(2026, 10, 6) in src.days_requested
+    assert date(2026, 8, 19) not in src.days_requested
+
+
+async def test_enlace_inconsistente_se_suelta_y_desatribuye(session):
+    """Grupo D (apply): enlace a otro partido → odds_event_id=None,
+    marcas borradas y filas del evento equivocado desatribuidas."""
+    from app.models.odds_snapshot import OddsSnapshot
+    from app.services.results.base import mark_missed
+
+    ev = _event(
+        "sofascore:1",
+        "tenis",
+        "Pedro Martinez",
+        "Laslo Djere",
+        datetime(2026, 10, 10),
+    )
+    snap = OddsSnapshot(
+        provider="sofascore",
+        event_ext_id=ev.event_ext_id,
+        market_name="Ganador",
+        choice_name="1",
+        cuota=2.0,
+        parsed_pick_id=7,
+    )
+    session.add_all([ev, snap])
+    await session.flush()
+    pick = _pick(7, 11)
+    pick.deporte = "tenis"
+    pick.evento = "Laslo Djere vs Daniil Glinka"
+    pick.seleccion = "Laslo Djere gana"
+    pick.fecha_evento = datetime(2026, 10, 11)
+    pick.odds_event_id = ev.event_ext_id
+    mark_missed("fakefeed|nofixture|7")
+    src = _FakeSource(fixtures_return=[])
+    src.sport_ids = {"tenis": 1}
+    report = BackfillReport()
+
+    await _run_source(src, [pick], set(), set(), session, None, True, report)
+
+    assert pick.odds_event_id is None
+    assert snap.parsed_pick_id is None
+    # El pick se reintentó por su propia fecha (sin ancla) — el
+    # nofixture fresco demuestra que la marca vieja se había borrado
+    # y la búsqueda volvió a correr de verdad.
+    assert report.sin_fixture == 1
+    assert date(2026, 10, 11) in src.days_requested
+    assert is_missed("fakefeed|nofixture|7")
+
+
+async def test_ancla_invalida_marcas_de_fecha_corrupta(session):
+    """Grupo C (apply): las marcas escritas buscando el día equivocado
+    no blindan el pick — se borran y el pick se reintenta anclado."""
+    ev = _event(
+        "espn:soccer:x:2",
+        "futbol",
+        "Albania",
+        "San Marino",
+        datetime(2026, 10, 6, 18, 45),
+    )
+    session.add(ev)
+    await session.flush()
+    pick = _pick(1, 19)
+    pick.fecha_evento = datetime(2026, 8, 19)
+    pick.evento = "Albania - San Marino"
+    pick.odds_event_id = ev.event_ext_id
+    from app.services.results.base import mark_missed
+
+    mark_missed("fakefeed|nofixture|1")
+    src = _FakeSource(fixtures_return=[])
+    report = BackfillReport()
+
+    await _run_source(src, [pick], set(), set(), session, None, True, report)
+
+    assert report.sin_fixture == 1  # reintentado, no saltado por marca
+    assert date(2026, 10, 6) in src.days_requested
+
+
+async def test_ancla_no_salta_marcas_si_fecha_coincide(session):
+    """Enlace con la MISMA fecha que el pick: las marcas no están
+    contaminadas y el skip funciona como siempre."""
+    ev = _event(
+        "espn:soccer:x:3",
+        "futbol",
+        "Albania",
+        "San Marino",
+        datetime(2026, 9, 20, 18, 45),
+    )
+    session.add(ev)
+    await session.flush()
+    pick = _pick(1, 20)
+    pick.evento = "Albania - San Marino"
+    pick.odds_event_id = ev.event_ext_id
+    from app.services.results.base import mark_missed
+
+    mark_missed("fakefeed|nofixture|1")
+    src = _FakeSource(fixtures_return=[])
+    report = BackfillReport()
+
+    await _run_source(src, [pick], set(), set(), session, None, True, report)
+
+    assert report.sin_fixture == 0  # marca respetada, ni una llamada
+    assert src.days_requested == []

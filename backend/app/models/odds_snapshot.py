@@ -60,7 +60,7 @@ class OddsSnapshot(SQLModel, table=True):
     provider: str = Field(max_length=40, index=True)
     event_ext_id: str = Field(max_length=60, index=True)
     market_name: str = Field(max_length=80)
-    choice_group: Optional[str] = Field(default=None, max_length=20)
+    choice_group: Optional[str] = Field(default=None, max_length=80)
     choice_name: str = Field(max_length=120)
     cuota: float
     cuota_apertura: Optional[float] = None

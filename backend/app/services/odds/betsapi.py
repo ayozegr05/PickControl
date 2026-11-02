@@ -7,22 +7,37 @@ de prematch devuelve el payload COMPLETO de mercados del evento aunque
 ya se haya jugado (las cuotas quedan congeladas al entrar en vivo) —
 justo el cierre que audita el comparador.
 
-Rutas (verificadas 2026-10-21, trial "Bet365 API" 1.800 req/hora):
+Rutas — dos transportes sobre el mismo feed bet365:
 
-- `GET /v1/bet365/upcoming?sport_id&day=YYYYMMDD&page=N` -> eventos
-  del día (50/página, `pager.total` da el tope). OJO: `per_page` se
-  ignora — siempre pagina de 50 en 50, y el esoccer inunda las
-  primeras páginas (los partidos reales quedan enterrados; hay que
-  paginar hasta el final). Los eventos terminados siguen listados en
-  su día — sirve de archivo histórico (verificado hasta ~7 semanas).
-  `sport_id` del feed bet365: 1=fútbol, 13=tenis, 18=basket
-  (¡2 es carreras de caballos, no tenis!).
-- `GET /v4/bet365/prematch?FI=<id>` -> mercados del evento agrupados
-  por secciones (`result`, `goals`, `corners`, `cards_fouls`,
-  `asian_lines`, `scorers`, `games`, `main`, `set`, `half`,
-  `game`, `quarter`, `team`...) cada una con `sp.<market_key>.odds`.
-  Entradas de opción: `{odds, name, header, handicap, team}` — el
-  significado de cada campo depende del mercado (ver `_emit_*`).
+- **Directo** `api.b365api.com` (token=..., trial/paquete de pago —
+  el que SÍ sirve archivo histórico de prematch):
+  - `GET /v1/bet365/upcoming?sport_id&day=YYYYMMDD&page=N` -> eventos
+    del día (50/página, `pager.total` da el tope). OJO: `per_page` se
+    ignora — siempre pagina de 50 en 50, y el esoccer inunda las
+    primeras páginas (los partidos reales quedan enterrados; hay que
+    paginar hasta el final). Los eventos terminados siguen listados en
+    su día — sirve de archivo histórico (verificado hasta ~7 semanas).
+  - `GET /v4/bet365/prematch?FI=<id>` -> mercados del evento.
+- **RapidAPI** `betsapi2.p.rapidapi.com` (headers X-RapidAPI-Key/Host,
+  plan gratis ~24 req/día — verificado 2026-10-27): mismas rutas pero
+  bajo `/v3` (`/v3/bet365/upcoming`, `/v3/bet365/prematch`). El payload
+  es IDÉNTICO en estructura al v4, pero el prematch solo se sirve
+  mientras el partido no ha empezado: un evento terminado devuelve el
+  stub `{FI, event_id, sport_id}` sin mercados (verificado con un
+  partido Premier). Sirve para CONGELAR cuotas de picks nuevos al
+  publicarse (snapshotter), no para el backlog.
+
+`sport_id` del feed bet365: 1=fútbol, 13=tenis, 18=basket
+(¡2 es carreras de caballos, no tenis!).
+
+El prematch devuelve mercados agrupados por secciones (`result`,
+`goals`, `corners`, `cards_fouls`, `asian_lines`, `scorers`, `games`,
+`main`, `set`, `half`, `game`, `quarter`, `team`...) cada una con
+`sp.<market_key>.odds` — salvo `others`, que es una LISTA de
+secciones `{sp: ...}` (doble oportunidad, totales de equipo,
+goleadores por equipo...). Entradas de opción:
+`{odds, name, header, handicap, team, name2}` — el significado de
+cada campo depende del mercado (ver `_emit_*`).
 
 Traducción al vocabulario del comparador (`compare.py`): cada mercado
 se emite con los nombres que `map_pick_choices` ya sabe leer ("Full
@@ -41,7 +56,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -49,6 +64,7 @@ from typing import Any, Optional
 import httpx
 
 from app.core.logging import get_logger
+from app.services.odds.base import EventRef, MarketChoice
 from app.services.odds.oddspapi import HistoricalChoice, PricePoint
 from app.services.results.base import (
     is_rate_limited,
@@ -62,7 +78,11 @@ from app.services.results.espn import _translate_countries
 logger = get_logger("app.odds.betsapi")
 
 NAME = "betsapi"
+# Provider del snapshotter vía wrapper RapidAPI: nombre propio para
+# no compartir el estado de cuota con el cliente directo de pago.
+NAME_RAPID = "betsapi_rapid"
 _BASE_URL = "https://api.b365api.com"
+_RAPIDAPI_HOST = "betsapi2.p.rapidapi.com"
 # Deporte canónico -> sport_id del feed bet365 (no el de Events API:
 # ahí tenis es 2, aquí 2 son carreras de caballos).
 SPORT_IDS = {"futbol": 1, "tenis": 13, "baloncesto": 18}
@@ -74,6 +94,11 @@ _WIDE_MIN_SCORE = 0.75
 # en un día grande (esoccer incluido) -> ~30 páginas. El tope evita
 # quemar la hora si el pager miente.
 _MAX_PAGES = 40
+# Paginación acotada del plan gratis (~24 req/día): un barrido
+# completo de un día grande costaría más que la cuota entera. Con
+# parada temprana al casar el partido, 8 páginas (400 eventos)
+# suelen bastar — el resto queda como miss provisional.
+_FREE_MAX_PAGES = 8
 # Ligas que no son deporte real: el feed mezcla esoccer/virtuals en
 # el mismo listado — nunca casan con un pick, saltarlos ahorra el
 # 90% del volumen de páginas.
@@ -222,8 +247,8 @@ def _side_name(*fields: Any) -> Optional[str]:
     Según el mercado el lado viaja en `header` (tenis, equipo) o en
     `name` (basket game_lines, donde header dice "Spread"/"ML").
     """
-    for field in fields:
-        raw = str(field or "").strip()
+    for candidate in fields:
+        raw = str(candidate or "").strip()
         if raw in ("1", "2"):
             return raw
     return None
@@ -272,9 +297,26 @@ class _Emitter:
             if side is not None:
                 self.add(market, side, None, _cuota(o.get("odds")))
 
-    def emit_double_chance(self, odds: list[dict]) -> None:
+    def emit_double_chance(
+        self, odds: list[dict], home: str = "", away: str = ""
+    ) -> None:
+        """Doble oportunidad: códigos "1X"/"X2"/"12" o nombres
+        "Sevilla or Draw" / "Draw or Osasuna" / "Sevilla or Osasuna"
+        (el orden del nombre varía — el equipo NO-draw decide el lado)."""
         for o in odds:
-            code = _DC_NORM.get(str(o.get("name") or "").lower().replace(" ", ""))
+            name = str(o.get("name") or "")
+            code = _DC_NORM.get(name.lower().replace(" ", ""))
+            if code is None:
+                parts = [p.strip() for p in re.split(r"\s+or\s+", name, flags=re.I)]
+                if len(parts) == 2:
+                    low = [p.lower() for p in parts]
+                    if "draw" in low:
+                        other = parts[1 - low.index("draw")]
+                        home_score = match_score(other, home, home)
+                        away_score = match_score(other, away, away)
+                        code = "1X" if home_score >= away_score else "X2"
+                    else:
+                        code = "12"
             self.add("Double chance", code or "", None, _cuota(o.get("odds")))
 
     def emit_yes_no(self, market: str, odds: list[dict]) -> None:
@@ -283,24 +325,46 @@ class _Emitter:
             if name in ("Yes", "No"):
                 self.add(market, name, None, _cuota(o.get("odds")))
 
-    def emit_totals(
-        self, market: str, odds: list[dict], *, skip_exactly: bool = True
-    ) -> None:
-        """Over/Under con línea: name=línea+header, o handicap='Over X'."""
+    def emit_totals(self, market: str, odds: list[dict]) -> None:
+        """Over/Under con línea: name=línea+header, o handicap='Over X'.
+
+        Las filas 'Exactly' (líneas enteras 3-way) también se emiten
+        como evidencia del resultado exacto — su choice_name nunca
+        casa con un pick Over/Under.
+        """
         for o in odds:
             header = str(o.get("header") or "").strip()
-            if skip_exactly and header.lower() == "exactly":
+            header_low = header.lower()
+            if header_low == "exactly":
+                line = _num(o.get("name"))
+                if line is not None:
+                    self.add(market, "Exactly", _fmt_line(line), _cuota(o.get("odds")))
                 continue
             side, line = _ou_split(o.get("handicap"))
-            if side is None:
+            if side is None and header_low in ("over", "under"):
                 # Formato fútbol/tenis: name=línea, header=Over/Under
-                header_low = header.lower()
-                if header_low in ("over", "under"):
-                    side = header_low.capitalize()
-                    line = _num(o.get("name"))
+                side = header_low.capitalize()
+                line = _num(o.get("name"))
             if side is None or line is None:
                 continue
             self.add(market, side, _fmt_line(line), _cuota(o.get("odds")))
+
+    def emit_totals_flex(
+        self, market_2w: str, market_3w: str, odds: list[dict]
+    ) -> None:
+        """Totales con nombre según contenido: si el mercado trae
+        opción 'Exactly' es el 3-way de líneas enteras del tipster
+        ("Más de 8 | Exactamente 8 | Menos de 8"); si no, el 2-way de
+        medias líneas. Así `corners`/`alternative_corners` caen en
+        "Corners 3-Way" y `corners_2_way` en "Corners 2-Way"."""
+        market = (
+            market_3w
+            if any(
+                str(o.get("header") or "").strip().lower() == "exactly" for o in odds
+            )
+            else market_2w
+        )
+        self.emit_totals(market, odds)
 
     def emit_spread(self, market: str, odds: list[dict], home: str, away: str) -> None:
         """Hándicap con lado: '(-2.5) Home' / '(+2.5) Away' + línea firmada."""
@@ -331,6 +395,79 @@ class _Emitter:
             self.add(
                 market_tpl.format(side), ou, _fmt_line(line), _cuota(o.get("odds"))
             )
+
+    def emit_score_or_assist(self, odds: list[dict]) -> None:
+        """'Score or Assist' del feed: un precio por jugador y tipo
+        (header 'Score'/'Assist'/'Score or Assist'). En la sección
+        `main` la fila de precio NO trae `name` — el jugador va en
+        filas 'PC<id>' con header 'Player/Last 5' que comparten el id
+        numérico; en `scorers` el nombre viaja en la propia fila."""
+        names = {
+            str(o.get("id") or "")[2:]: str(o.get("name") or "").strip()
+            for o in odds
+            if str(o.get("id") or "").startswith("PC")
+            and str(o.get("name") or "").strip()
+        }
+        for o in odds:
+            market = {
+                "score": "Goalscorer anytime",
+                "assist": "Player assists",
+                "score or assist": "Goalscorer or assist",
+            }.get(str(o.get("header") or "").strip().lower())
+            if market is None:
+                continue
+            player = str(o.get("name") or "").strip() or names.get(
+                str(o.get("id") or ""), ""
+            )
+            if not player or player in ("1", "2"):
+                continue
+            self.add(market, player, None, _cuota(o.get("odds")))
+
+    def emit_scorers(self, odds: list[dict], *, team_scoped: bool = False) -> None:
+        """Goleadores: name=jugador, header=First/Last/Anytime (o
+        'N or More' en multi_scorers). `team_scoped` marca el mercado
+        'Team Goalscorer' — su 'First' es el primer goleador DE SU
+        EQUIPO, no del partido: se guarda con su propio nombre en vez
+        de colarse en 'First goalscorer'."""
+        for o in odds:
+            player = str(o.get("name") or "").strip()
+            if not player or player in ("1", "2"):
+                continue
+            header = str(o.get("header") or "").strip()
+            low = header.lower()
+            cuota = _cuota(o.get("odds"))
+            if "or more" in low or re.search(r"\d\s*\+", low):
+                self.add("Multi scorers", player, header or None, cuota)
+            elif team_scoped and low in ("first", "last"):
+                self.add("Team goalscorer", player, header, cuota)
+            elif "first" in low:
+                self.add("First goalscorer", player, None, cuota)
+            elif "last" in low:
+                self.add("Last goalscorer", player, None, cuota)
+            else:
+                self.add("Goalscorer anytime", player, None, cuota)
+
+    def emit_player_lines(self, market: str, odds: list[dict]) -> None:
+        """Props de jugador por umbral ('Shots', 'Shots On Target'):
+        header 'N+' con name=jugador. '1+' equivale a Over 0.5 — el
+        comparador lee la línea como `choice_group` 'Over X.5'."""
+        for o in odds:
+            player = str(o.get("name") or "").strip()
+            m = re.match(r"(\d+)\s*\+", str(o.get("header") or "").strip())
+            if not player or player in ("1", "2") or not m:
+                continue
+            line = int(m.group(1)) - 0.5
+            self.add(market, player, f"Over {line:g}", _cuota(o.get("odds")))
+
+    def emit_named_1x2(self, market: str, odds: list[dict]) -> None:
+        """1X2 con opción de 'nadie' tipo 'No Goals' -> 'X'
+        (First Team to Score)."""
+        for o in odds:
+            name = str(o.get("name") or "").strip()
+            code = _SIDE_1X2.get(name.lower())
+            if code is None and name.lower() in ("no goals", "no goal", "none"):
+                code = "X"
+            self.add(market, code or "", None, _cuota(o.get("odds")))
 
 
 # market_key (normalizado) -> handler, por deporte.
@@ -364,21 +501,34 @@ def translate_prematch(
         if key in ("full_time_result", "to_win_match", "match_odds", "money_line"):
             emitter.emit_1x2("Full time", odds)
         elif key in ("double_chance",):
-            emitter.emit_double_chance(odds)
+            emitter.emit_double_chance(odds, home, away)
         elif key in ("draw_no_bet",):
             emitter.emit_side("Draw no bet", odds, home, away)
         elif key in ("both_teams_to_score",):
             emitter.emit_yes_no("Both teams to score", odds)
+        elif key == "first_team_to_score":
+            emitter.emit_named_1x2("First team to score", odds)
+        elif key == "correct_score":
+            for o in odds:
+                score_name = str(o.get("name") or "").strip()
+                emitter.add("Correct score", score_name, None, _cuota(o.get("odds")))
         # --- fútbol: totales y spreads ---
         elif key in ("goals_over_under", "alternative_total_goals", "goal_line"):
             emitter.emit_totals("Match goals", odds)
         elif key == "team_total_goals":
             emitter.emit_team_totals("Team {} goals", odds, home, away)
-        elif key in ("corners_2_way", "alternative_corners", "asian_total_corners"):
+        elif key in ("corners", "alternative_corners", "corners_3_way"):
+            # Totales de córners a 3 vías (Over/Exactly/Under en líneas
+            # enteras): EL mercado del tipster. Si el mercado llega sin
+            # fila Exactly (suspensa) cae a su equivalente 2-way.
+            emitter.emit_totals_flex("Corners 2-Way", "Corners 3-Way", odds)
+        elif key in ("corners_2_way", "asian_total_corners"):
             emitter.emit_totals("Corners 2-Way", odds)
         elif key == "team_corners":
             emitter.emit_team_totals("Team {} corners", odds, home, away)
-        elif key in ("number_of_cards_in_match", "asian_total_cards"):
+        elif key in ("cards", "alternative_cards", "number_of_cards_in_match"):
+            emitter.emit_totals_flex("Cards in match", "Cards 3-Way", odds)
+        elif key == "asian_total_cards":
             emitter.emit_totals("Cards in match", odds)
         elif key == "team_cards":
             emitter.emit_team_totals("Team {} cards", odds, home, away)
@@ -431,41 +581,39 @@ def translate_prematch(
             emitter.emit_totals("Match goals", odds)
         # --- props de jugador (fútbol) ---
         elif key in ("goalscorers", "anytime_goalscorer"):
-            for o in odds:
-                player = str(o.get("name") or "").strip()
-                self_header = str(o.get("header") or "").lower()
-                if not player or player in ("1", "2"):
-                    continue
-                market = "Goalscorer anytime"
-                if "first" in self_header:
-                    market = "First goalscorer"
-                elif "last" in self_header:
-                    market = "Last goalscorer"
-                emitter.add(market, player, None, _cuota(o.get("odds")))
+            emitter.emit_scorers(odds)
+        elif key == "team_goalscorer":
+            emitter.emit_scorers(odds, team_scoped=True)
+        elif key == "multi_scorers":
+            emitter.emit_scorers(odds)
         elif key in ("score_or_assist", "to_score_or_assist"):
-            for o in odds:
-                player = str(o.get("name") or "").strip()
-                if player and player not in ("1", "2"):
-                    emitter.add(
-                        "Goalscorer or assist", player, None, _cuota(o.get("odds"))
-                    )
+            emitter.emit_score_or_assist(odds)
+        elif key in ("shots_on_target", "player_shots_on_target"):
+            emitter.emit_player_lines("Player shots on target", odds)
+        elif key in ("shots", "player_shots"):
+            emitter.emit_player_lines("Player shots", odds)
 
     for section_key, section in event.items():
         if section_key in ("FI", "event_id", "sport_id"):
             continue
-        for market_key, market in markets_of(section).items():
-            # El feed no es uniforme: casi todo llega {name, odds}
-            # pero hay secciones cuyo valor es la lista de odds
-            # directamente (p.ej. "others") — sin el isinstance la
-            # pasada moría con AttributeError en ese evento.
-            if isinstance(market, dict):
-                odds = market.get("odds") or []
-            elif isinstance(market, list):
-                odds = [o for o in market if isinstance(o, dict)]
-            else:
-                continue
-            if odds:
-                emit(market_key, odds)
+        # `others` llega como LISTA de secciones {sp: {...}} (doble
+        # oportunidad, totales de equipo, goleadores por equipo...) —
+        # sin el aplanado se ignoraba entera.
+        sections = section if isinstance(section, list) else [section]
+        for sec in sections:
+            for market_key, market in markets_of(sec).items():
+                # El feed no es uniforme: casi todo llega {name, odds}
+                # pero hay secciones cuyo valor es la lista de odds
+                # directamente — sin el isinstance la pasada moría
+                # con AttributeError en ese evento.
+                if isinstance(market, dict):
+                    odds = market.get("odds") or []
+                elif isinstance(market, list):
+                    odds = [o for o in market if isinstance(o, dict)]
+                else:
+                    continue
+                if odds:
+                    emit(market_key, odds)
     return emitter.choices
 
 
@@ -521,16 +669,64 @@ def load_payload(ext_id: str, base: Optional[Path] = None) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 
-class BetsApiClient:
-    """Cliente HTTP de api.b365api.com con el manejo de cuota del proyecto."""
+@dataclass
+class _DayBoard:
+    """Progreso del barrido `/upcoming` de un (sport_id, día).
 
-    def __init__(self, token: str) -> None:
-        self.NAME = NAME
+    El plan gratis (~24 req/día) no da para re-paginar el board
+    completo por cada pick: se guardan las páginas ya leídas y cada
+    `upcoming()` reanuda donde quedó. Un día cuesta como mucho
+    `_max_pages` llamadas EN TOTAL entre todos sus picks — los misses
+    sobre un board `complete` son gratis (0 llamadas).
+    """
+
+    fixtures: list[BetsFixture] = field(default_factory=list)
+    seen: set[str] = field(default_factory=set)
+    page_done: int = 0
+    complete: bool = False
+    dead: bool = False
+
+
+class BetsApiClient:
+    """Cliente HTTP del feed bet365 con el manejo de cuota del proyecto.
+
+    Dos transportes (mismo feed, distinto acceso):
+    - `token=` -> api.b365api.com directo (trial/paquete de pago; sirve
+      prematch histórico de partidos terminados).
+    - `rapidapi_key` -> wrapper betsapi2.p.rapidapi.com (plan gratis
+      ~24 req/día; el prematch solo vive hasta que empieza el partido).
+    """
+
+    def __init__(
+        self,
+        token: Optional[str] = None,
+        *,
+        rapidapi_key: Optional[str] = None,
+        rapidapi_host: str = _RAPIDAPI_HOST,
+        name: str = NAME,
+    ) -> None:
+        self.NAME = name
         self._token = token
+        self._rapidapi = rapidapi_key is not None
+        if self._rapidapi:
+            self._base_url = f"https://{rapidapi_host}"
+            self._headers = {
+                "X-RapidAPI-Key": rapidapi_key or "",
+                "X-RapidAPI-Host": rapidapi_host,
+            }
+            self._upcoming_path = "/v3/bet365/upcoming"
+            self._prematch_path = "/v3/bet365/prematch"
+            self._max_pages = _FREE_MAX_PAGES
+        else:
+            self._base_url = _BASE_URL
+            self._headers = {}
+            self._upcoming_path = "/v1/bet365/upcoming"
+            self._prematch_path = "/v4/bet365/prematch"
+            self._max_pages = _MAX_PAGES
         # Peticiones HTTP emitidas por esta instancia: el trial permite
         # 1.800 req/hora — el backfill las dosifica por pasada.
         self.calls = 0
-        self._day_cache: dict[tuple[int, date], Optional[list[BetsFixture]]] = {}
+        self._day_cache: dict[tuple[int, date], _DayBoard] = {}
 
     async def _get(
         self, client: httpx.AsyncClient, path: str, params: Optional[dict] = None
@@ -540,10 +736,14 @@ class BetsApiClient:
         if is_rate_limited(self.NAME):
             return 0, None
         self.calls += 1
+        request_params = dict(params or {})
+        if not self._rapidapi:
+            request_params["token"] = self._token
         try:
             response = await client.get(
-                f"{_BASE_URL}{path}",
-                params={**(params or {}), "token": self._token},
+                f"{self._base_url}{path}",
+                params=request_params,
+                headers=self._headers,
             )
         except httpx.HTTPError as exc:
             logger.warning("[ODDS:%s] Error de red en %s: %s", self.NAME, path, exc)
@@ -570,24 +770,50 @@ class BetsApiClient:
         return response.status_code, data
 
     async def upcoming(
-        self, client: httpx.AsyncClient, sport_id: int, day: date
+        self,
+        client: httpx.AsyncClient,
+        sport_id: int,
+        day: date,
+        *,
+        hint: Optional[str] = None,
+        when: Optional[datetime] = None,
     ) -> Optional[list[BetsFixture]]:
-        """Todos los eventos reales de un día (paginado completo).
+        """Eventos reales de un día (paginado y reanudable).
 
         El esoccer inunda las primeras páginas — hay que recorrer
-        `pager.total` entero o se pierden los partidos grandes.
+        `pager.total` entero o se pierden los partidos grandes. El
+        progreso vive en `_DayBoard`: las páginas ya leídas se
+        comparten entre todos los picks del día y cada llamada
+        reanuda en `page_done + 1`. Si el partido ya aparece en lo
+        acumulado, la búsqueda cuesta CERO llamadas. Con `hint`/`when`
+        hay parada temprana al casar; el board se queda a medias y el
+        siguiente pick continúa (antes se re-paginaba desde la 1 —
+        así se fundía la cuota diaria en misses repetidos).
         """
         key = (sport_id, day)
-        if key in self._day_cache:
-            return self._day_cache[key]
-        collected: list[BetsFixture] = []
-        seen: set[str] = set()
-        page = 1
-        total = None
-        while page <= _MAX_PAGES:
+        board = self._day_cache.get(key)
+        if board is None:
+            board = _DayBoard()
+            self._day_cache[key] = board
+        if board.dead:
+            return None
+        if board.complete:
+            return board.fixtures
+        if (
+            hint is not None
+            and when is not None
+            and board.fixtures
+            and match_fixture(board.fixtures, hint, when) is not None
+        ):
+            # El partido ya cayó en una página leída por otro pick —
+            # match gratis sin gastar ni una llamada más.
+            return board.fixtures
+
+        page = board.page_done + 1
+        while page <= self._max_pages:
             status, data = await self._get(
                 client,
-                "/v1/bet365/upcoming",
+                self._upcoming_path,
                 params={
                     "sport_id": sport_id,
                     "day": day.strftime("%Y%m%d"),
@@ -595,28 +821,40 @@ class BetsApiClient:
                 },
             )
             if status != 200 or not isinstance(data, dict):
-                self._day_cache[key] = None
+                # Fallo (cuota/red): conserva el progreso leído para
+                # reintentar en otro ciclo si el provider revive.
+                board.dead = True
                 return None
+            board.page_done = page
             pager = data.get("pager") or {}
             total = int(pager.get("total") or 0)
             results = data.get("results") or []
             for raw in results:
                 fixture = _parse_event(raw, sport_id)
-                if fixture and fixture.fixture_id not in seen:
-                    seen.add(fixture.fixture_id)
-                    collected.append(fixture)
+                if fixture and fixture.fixture_id not in board.seen:
+                    board.seen.add(fixture.fixture_id)
+                    board.fixtures.append(fixture)
             if page * 50 >= total or not results:
-                break
+                board.complete = True
+                return board.fixtures
+            if hint is not None and when is not None and board.fixtures:
+                if match_fixture(board.fixtures, hint, when) is not None:
+                    return board.fixtures  # parada temprana, progreso guardado
             page += 1
-        self._day_cache[key] = collected
-        return collected
+        board.complete = True
+        return board.fixtures
 
     async def prematch(
         self, client: httpx.AsyncClient, fixture_id: str
     ) -> tuple[int, Optional[dict]]:
-        """Mercados prematch completos del evento (congelados al inicio)."""
+        """Mercados prematch completos del evento (congelados al inicio).
+
+        En el wrapper gratis un partido ya empezado devuelve solo el
+        stub `{FI, event_id, sport_id}` sin secciones — `results`
+        no está vacío pero no hay mercados, así que se detecta por
+        la ausencia de secciones con `sp`."""
         status, data = await self._get(
-            client, "/v4/bet365/prematch", params={"FI": fixture_id}
+            client, self._prematch_path, params={"FI": fixture_id}
         )
         if status != 200 or not isinstance(data, dict):
             return status or 0, None
@@ -624,4 +862,104 @@ class BetsApiClient:
         if not results:
             # Fixture sin mercados publicados — miss definitivo (404 lógico).
             return 404, None
+        event = results[0] if isinstance(results, list) else results
+        if isinstance(event, dict) and not any(
+            k not in ("FI", "event_id", "sport_id") for k in event
+        ):
+            # El plan gratis devuelve el stub {FI, event_id, sport_id}
+            # para partidos empezados/terminados — equivale a un 404
+            # de mercados (miss definitivo en este transporte).
+            return 404, None
         return 200, data
+
+
+# ---------------------------------------------------------------------------
+# Provider del snapshotter (wrapper RapidAPI — plan gratis ~24 req/día)
+# ---------------------------------------------------------------------------
+
+
+class BetsApiOddsProvider:
+    """OddsProvider sobre el wrapper gratis `betsapi2.p.rapidapi.com`.
+
+    Sirve el feed bet365 REAL mientras el partido no ha empezado —
+    su misión es CONGELAR el prematch de los picks nuevos (córners y
+    tarjetas 3-way en líneas enteras, props de jugador, escalera
+    alterna) antes de que la API deje de servirlo al pitido inicial.
+    El backlog histórico es cosa del cliente directo de pago
+    (`historical_backfill` + `BETSAPI_TOKEN`).
+
+    El estado de cuota es independiente del directo (`NAME` propio):
+    un 429 del free no aparca el trial de pago ni viceversa.
+    """
+
+    NAME = NAME_RAPID
+    ID_PREFIX = "betsapi:"
+    SUPPORTED_SPORTS = frozenset(SPORT_IDS)
+
+    def __init__(self, api_key: str, api_host: str = _RAPIDAPI_HOST) -> None:
+        self._client = BetsApiClient(
+            rapidapi_key=api_key, rapidapi_host=api_host, name=self.NAME
+        )
+        # ext_id -> fixture resuelto en find_event: fetch_odds solo
+        # recibe el id, y la traducción necesita home/away (totales de
+        # equipo, hándicaps con nombre).
+        self._fixtures: dict[str, BetsFixture] = {}
+
+    async def find_event(
+        self, sport: str, date: datetime, team_hint: str
+    ) -> Optional[EventRef]:
+        sport_id = SPORT_IDS.get(sport)
+        if sport_id is None or not team_hint:
+            return None
+        async with httpx.AsyncClient(timeout=20) as client:
+            fixtures = await self._client.upcoming(
+                client,
+                sport_id,
+                date.date(),
+                hint=team_hint,
+                when=date,
+            )
+        if not fixtures:
+            return None
+        fixture = match_fixture(fixtures, team_hint, date)
+        if fixture is None:
+            return None
+        ext_id = event_ext_id(fixture)
+        self._fixtures[ext_id] = fixture
+        return EventRef(
+            event_ext_id=ext_id,
+            home_team=fixture.home_name,
+            away_team=fixture.away_name,
+            start=fixture.start,
+        )
+
+    async def fetch_odds(
+        self, event_ext_id: str, sport: str
+    ) -> Optional[list[MarketChoice]]:
+        if not event_ext_id.startswith(self.ID_PREFIX):
+            return None
+        fixture_id = event_ext_id.split(":", 1)[1]
+        async with httpx.AsyncClient(timeout=30) as client:
+            status, payload = await self._client.prematch(client, fixture_id)
+        if status == 404:
+            return []  # empezado/sin mercados en el plan gratis
+        if payload is None:
+            return None  # error/cuota: reintenta en el próximo ciclo
+        fixture = self._fixtures.get(event_ext_id)
+        choices = translate_prematch(
+            payload,
+            sport,
+            fixture.home_name if fixture else "",
+            fixture.away_name if fixture else "",
+            when=fixture.start if fixture else None,
+        )
+        return [
+            MarketChoice(
+                market_name=c.market_name,
+                choice_name=c.choice_name,
+                choice_group=c.choice_group,
+                cuota=c.points[-1].cuota,
+            )
+            for c in choices
+            if c.points
+        ]

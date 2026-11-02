@@ -198,3 +198,166 @@ async def test_cruce_descarta_partido_distinto(session, monkeypatch):
     ).all()
     assert {r.provider for r in rows} == {"espn"}
     assert sofa.fetch_calls == []  # ni siquiera se pidieron sus odds
+
+
+class _SportAwareProvider(_FakeProvider):
+    """Igual que _FakeProvider pero solo responde en el deporte dado."""
+
+    def __init__(self, name, prefix, sports, events_by_sport=None, odds=None):
+        super().__init__(name, prefix, sports, odds=odds)
+        self._events_by_sport = events_by_sport or {}
+        self.tried_sports: list[str] = []
+
+    async def find_event(self, sport, date, team_hint):
+        self.find_calls.append(team_hint)
+        self.tried_sports.append(sport)
+        return self._events_by_sport.get(sport)
+
+
+async def _pick_unlinked(
+    session, message_id, deporte="fútbol", evento="París - Valencia"
+):
+    raw = TelegramRawMessage(
+        channel_id=1,
+        message_id=message_id,
+        channel_name="Test",
+        text="pick",
+        processed=True,
+    )
+    session.add(raw)
+    await session.flush()
+    pick = ParsedPick(
+        raw_message_id=raw.id,
+        es_apuesta=True,
+        deporte=deporte,
+        evento=evento,
+        mercado="ganador",
+        seleccion="Valencia gana",
+        cuota=1.5,
+        fecha_evento=utc_now() + timedelta(hours=5),
+        odds_event_id=None,
+    )
+    session.add(pick)
+    await session.commit()
+    return pick
+
+
+async def test_cross_sport_fallback_reclasifica(session):
+    """El pick dice 'fútbol' pero el evento solo casa en basket:
+    se enlaza, se corrige `deporte` y el OddsEvent nace con el
+    deporte real."""
+    pick = await _pick_unlinked(session, 10)
+    basket_ref = EventRef(
+        event_ext_id="flashscore:A7ObYlS9",
+        home_team="Paris",
+        away_team="Valencia",
+        start=utc_now() + timedelta(hours=5),
+    )
+    providers = [
+        _SportAwareProvider("espn", "espn:", frozenset({"futbol"})),
+        _SportAwareProvider(
+            "apihubflashscore",
+            "flashscore:",
+            frozenset({"baloncesto"}),
+            events_by_sport={"baloncesto": basket_ref},
+        ),
+    ]
+
+    resolved = await snapshotter._resolve_missing_event_ids(session, [pick], providers)
+
+    assert resolved == 1
+    assert pick.odds_event_id == "flashscore:A7ObYlS9"
+    assert pick.deporte == "baloncesto"
+    ev = (
+        await session.exec(
+            select(OddsEvent).where(OddsEvent.event_ext_id == "flashscore:A7ObYlS9")
+        )
+    ).first()
+    assert ev is not None and ev.sport == "baloncesto"
+
+
+async def test_cross_sport_no_toca_si_casa_en_su_deporte(session):
+    """Si el deporte declarado casa, no se prueba nada más ni se
+    toca `deporte`."""
+    pick = await _pick_unlinked(session, 11, evento="Ipswich - Liverpool")
+    ref = EventRef(
+        event_ext_id="espn:soccer:eng:1",
+        home_team="Ipswich Town",
+        away_team="Liverpool",
+        start=utc_now() + timedelta(hours=5),
+    )
+    espn = _SportAwareProvider(
+        "espn", "espn:", frozenset({"futbol"}), events_by_sport={"futbol": ref}
+    )
+    basket = _SportAwareProvider(
+        "apihubflashscore", "flashscore:", frozenset({"baloncesto"})
+    )
+
+    resolved = await snapshotter._resolve_missing_event_ids(
+        session, [pick], [espn, basket]
+    )
+
+    assert resolved == 1
+    assert pick.deporte == "fútbol"
+    assert basket.tried_sports == []  # nunca se probó el board de basket
+
+
+async def test_pulsescore_resuelve_como_ultima_red(session, monkeypatch):
+    """Si toda la cadena falla, PulseScore resuelve el pick y el
+    evento queda bajo su propio espacio de ids."""
+    monkeypatch.setattr(snapshotter, "is_rate_limited", lambda name: False)
+    monkeypatch.setattr(snapshotter, "is_missed", lambda key, ttl: False)
+    monkeypatch.setattr(snapshotter, "mark_missed", lambda key: None)
+    pick = await _pick_unlinked(session, 12, evento="Obscuro FC - Nadie FC")
+    pulse = _SportAwareProvider(
+        "pulsescore",
+        "pulsescore:",
+        frozenset({"futbol", "baloncesto", "tenis"}),
+        events_by_sport={
+            "futbol": EventRef(
+                event_ext_id="pulsescore:555",
+                home_team="Obscuro FC",
+                away_team="Nadie FC",
+                start=utc_now() + timedelta(hours=5),
+            )
+        },
+    )
+    providers = [_SportAwareProvider("espn", "espn:", frozenset({"futbol"}))]
+
+    resolved = await snapshotter._resolve_missing_event_ids(
+        session, [pick], providers, pulse
+    )
+
+    assert resolved == 1
+    assert pick.odds_event_id == "pulsescore:555"
+    # Solo probó el deporte declarado: casó en el primero.
+    assert pulse.tried_sports == ["futbol"]
+
+
+async def test_pulsescore_no_se_consulta_lejos(session, monkeypatch):
+    """Eventos a >3 días: el board 'soonest first' no los lista —
+    ni se gasta la página."""
+    monkeypatch.setattr(snapshotter, "is_rate_limited", lambda name: False)
+    pick = await _pick_unlinked(session, 13)
+    pick.fecha_evento = utc_now() + timedelta(days=10)
+    await session.commit()
+    pulse = _SportAwareProvider("pulsescore", "pulsescore:", frozenset({"futbol"}))
+    providers = [_SportAwareProvider("espn", "espn:", frozenset({"futbol"}))]
+
+    resolved = await snapshotter._resolve_missing_event_ids(
+        session, [pick], providers, pulse
+    )
+
+    assert resolved == 0
+    assert pulse.find_calls == []  # ni una página gastada
+
+
+async def test_capture_missed_expira_en_ventana_cierre(monkeypatch):
+    """La marca nomatch se respeta lejos del inicio y se ignora en
+    las ~3 h previas (última oportunidad antes del pitido)."""
+    monkeypatch.setattr(snapshotter, "is_missed", lambda key, ttl: True)
+    lejos = utc_now() + timedelta(hours=10)
+    cerca = utc_now() + timedelta(hours=1)
+    assert snapshotter._capture_missed("k", timedelta(hours=12), lejos) is True
+    assert snapshotter._capture_missed("k", timedelta(hours=12), cerca) is False
+    assert snapshotter._capture_missed("k", timedelta(hours=12), None) is True
