@@ -1947,7 +1947,9 @@ async def test_endpoint_odds_stats_informante_no_existe(client):
     assert r.status_code == 404
 
 
-async def test_analisis_incluye_odds_por_canal(client, session, crear_canal):
+async def test_analisis_incluye_odds_por_canal(
+    client, session, auth_headers, crear_canal
+):
     canal = await crear_canal("CanalAnalisis")
     pick = await _seed_pick(session)
     pick.informante_id = canal.id
@@ -1955,7 +1957,7 @@ async def test_analisis_incluye_odds_por_canal(client, session, crear_canal):
     session.add(_snap("Full time", "1", 1.6, apertura=1.7))
     await session.commit()
 
-    data = (await client.get("/api/v1/analisis")).json()
+    data = (await client.get("/api/v1/analisis", headers=auth_headers)).json()
     c = next(x for x in data["canales"] if x["informante"] == "CanalAnalisis")
     assert c["odds"]["mapeados"] == 1
     assert c["odds"]["cuotas_infladas"] == 1
