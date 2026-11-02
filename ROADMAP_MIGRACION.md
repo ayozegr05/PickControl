@@ -997,3 +997,24 @@ la app puede abrir un WebView oculto (`react-native-webview`), inyectarlo
 con `injectedJavaScript` y recoger las filas por `onMessage` — botón
 "Cosechar backlog" que corre con la app abierta (~5-10 min para ~60
 partidos). Mismo backend, mismo token.
+
+## Deuda operativa registrada (2026-11-02)
+
+- **`sofascore_direct` (resultados)**: la API de Sofascore devuelve
+  `{"error":{"code":403}}` a nivel aplicación para la IP del VM
+  (ASN de datacenter en lista negra — no es un challenge de CF).
+  Se mantiene en la cascada porque, una vez marcado rate-limited,
+  su coste es ~1 sondeo por semana (backoff escalonado 24h→7d) y se
+  auto-recupera si el baneo se levanta. **Revisar en ~2-3 meses**:
+  si el 403 persiste, eliminar el provider del todo (calls=0 la
+  semana observada; `verificado_provider` no le atribuye ninguna
+  liquidación — su hueco ya lo cubren scores365, espn y nhl.py).
+- **`/api/v1/search/all` de Sofascore devuelve 0 resultados para
+  cualquier query** (ni "real madrid"): el search cambió o está
+  baneado igual — solo funcionan los `entity_id` ya cacheados en
+  `provider_cache.json`. Revisar el endpoint real si algún día el
+  mirror vuelve a ser necesario.
+- **Render `my-backend`**: servicio huérfano en dashboard.render.com
+  apuntando a este repo (era del backend Node viejo). `render.yaml`
+  ya está borrado; falta suspender/borrar el servicio en el
+  dashboard para que deje de intentar builds.
