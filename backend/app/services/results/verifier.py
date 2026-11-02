@@ -231,6 +231,26 @@ _OU_NON_GOALS_PATTERN = re.compile(
     r"remate",
     re.IGNORECASE,
 )
+# Mercados donde el tipster juega líneas enteras en modalidad 3-vías
+# (1xBet "Más/Exactamente/Menos"): córners y tarjetas. En 3-way caer
+# justo en la línea PIERDE — no hay devolución asiática. Un push en
+# una de estas líneas enteras queda marcado `sospecha_mercado="3way"`
+# (solo flag de auditoría; la liquidación no cambia hasta tener
+# evidencia del mercado real, p. ej. precio 1xBet capturado).
+_3WAY_SUBJECTS_PATTERN = re.compile(
+    r"c[oó]rner|esquina|tarjeta|card|booking", re.IGNORECASE
+)
+
+
+def _marca_sospecha_3way(pick: ParsedPick) -> None:
+    """Flag '3way' si el push cayó en línea entera de córners/tarjetas."""
+    if pick.linea is None or pick.linea != int(pick.linea):
+        return
+    texto = f"{pick.mercado or ''} {pick.seleccion or ''}"
+    if _3WAY_SUBJECTS_PATTERN.search(texto):
+        pick.sospecha_mercado = "3way"
+
+
 # "Más de 0.5 goles 1ª parte": el marcador final no dice nada del
 # descanso — no resoluble con los proveedores actuales.
 _FIRST_HALF_PATTERN = re.compile(
@@ -2247,6 +2267,8 @@ async def verify_pick(
         if acierto is not None or anulada:
             pick.verificado_provider = _LAST_PROVIDER_HIT.get()
             pick.motivo_anulada = _LAST_VOID_REASON.get() if anulada else None
+            if anulada and pick.motivo_anulada == "push":
+                _marca_sospecha_3way(pick)
             names = _LAST_MATCH_NAMES.get()
             if names and _evento_feo(pick.evento):
                 # Resuelto por jugador/selección con evento inservible:
@@ -3028,6 +3050,13 @@ async def verify_pending_picks() -> int:
 # pick bien resuelto ayer.
 _VOID_RECHECK_SCHEDULE_DAYS = (1, 3, 6)
 _VOID_RECHECK_MOTIVOS = ("aplazado", "retirada")  # NULL también entra (ver query)
+# Excepción para "push": con stat de provider estructurado es un
+# veredicto con datos reales, pero si lo liquidó un provider de
+# INVESTIGACIÓN (gemini-*) la cifra es texto extraído por LLM y puede
+# estar mal leída — caso real: pick 9118, "7 córners" inventados
+# cuando el partido tuvo 16 (Getafe-Rayo 2026-10-19). Solo esos push
+# entran al re-check; el resto sigue fuera por el motivo de arriba.
+_VOID_RECHECK_PUSH_PROVIDERS = ("gemini%",)
 # Solo anuladas recientes entran al ciclo: las anteriores son históricas
 # ya revisadas — sin el tope, la primera pasada tras desplegar esto
 # re-verificaría años de anuladas de golpe.
@@ -3089,6 +3118,12 @@ async def recheck_suspicious_voids() -> dict[str, int]:
                 .where(
                     (ParsedPick.motivo_anulada == None)  # noqa: E711
                     | ParsedPick.motivo_anulada.in_(_VOID_RECHECK_MOTIVOS)
+                    | (
+                        (ParsedPick.motivo_anulada == "push")
+                        & ParsedPick.verificado_provider.like(
+                            _VOID_RECHECK_PUSH_PROVIDERS[0]
+                        )
+                    )
                 )
                 .where(ParsedPick.anulada_rechecks < len(_VOID_RECHECK_SCHEDULE_DAYS))
                 .where(ParsedPick.verificado_at != None)  # noqa: E711

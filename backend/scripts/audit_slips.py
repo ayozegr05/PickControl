@@ -15,6 +15,7 @@ Uso:
     .venv\\Scripts\\python.exe scripts\\audit_slips.py
     .venv\\Scripts\\python.exe scripts\\audit_slips.py --limit 20
     .venv\\Scripts\\python.exe scripts\\audit_slips.py --raws 372,1833
+    .venv\\Scripts\\python.exe scripts\\audit_slips.py --gemini   # OCR por Gemini (gratis)
     docker exec controlpick-backend python scripts/audit_slips.py
 """
 
@@ -71,11 +72,17 @@ def _reasons(raw: TelegramRawMessage, new_ocr: str | None) -> list[str]:
     return found
 
 
-async def main(limit: int | None, only_raws: list[int] | None, save_ocr: bool) -> None:
+async def main(
+    limit: int | None,
+    only_raws: list[int] | None,
+    save_ocr: bool,
+    gemini: bool = False,
+) -> None:
     settings = get_settings()
-    if not settings.openai_api_key:
-        print("Sin OPENAI_API_KEY — no se puede hacer OCR.")
+    if not (settings.openai_api_key or settings.google_api_key):
+        print("Sin OPENAI_API_KEY ni GOOGLE_API_KEY — no se puede hacer OCR.")
         return
+    api_key = None if gemini else settings.openai_api_key
     async with AsyncSessionLocal() as session:
         picks = list(
             (await session.exec(select(ParsedPick).where(ParsedPick.es_apuesta)))
@@ -109,7 +116,7 @@ async def main(limit: int | None, only_raws: list[int] | None, save_ocr: bool) -
             if not os.path.exists(path):
                 skipped += 1
                 continue
-            new_ocr = await extract_text_from_image(path, settings.openai_api_key)
+            new_ocr = await extract_text_from_image(path, api_key)
             if save_ocr and new_ocr and new_ocr != raw.extracted_text:
                 # Transcripción mejor de la MISMA imagen: el prompt
                 # actual sí transcribe ticks/marcadores — dejarla en el
@@ -159,6 +166,11 @@ if __name__ == "__main__":
         action="store_true",
         help="persiste el OCR nuevo en extracted_text del raw",
     )
+    parser.add_argument(
+        "--gemini",
+        action="store_true",
+        help="fuerza OCR por Gemini vision (ignora OpenAI aunque haya key)",
+    )
     args = parser.parse_args()
     only = [int(x) for x in args.raws.split(",")] if args.raws else None
-    asyncio.run(main(args.limit, only, args.save_ocr))
+    asyncio.run(main(args.limit, only, args.save_ocr, args.gemini))

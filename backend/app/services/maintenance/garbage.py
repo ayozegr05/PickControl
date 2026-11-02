@@ -40,38 +40,20 @@ from app.models.informante import Informante  # noqa: F401
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.models.user import User  # noqa: F401
-from app.services.telegram.pick_extractor import _is_settled_ticket
+from app.services.telegram.pick_extractor import (
+    _is_premium_urgency,
+    _is_settled_ticket,
+    is_reposted_slip,
+    slip_printed_date,
+)
 
-# Solo fechas largas inequívocas, con año explícito — el formato que
-# imprimen las casas en el boleto ("16 de septiembre de 2026, 19:00").
-_MESES_LARGO = {
-    "enero": 1,
-    "febrero": 2,
-    "marzo": 3,
-    "abril": 4,
-    "mayo": 5,
-    "junio": 6,
-    "julio": 7,
-    "agosto": 8,
-    "septiembre": 9,
-    "setiembre": 9,
-    "octubre": 10,
-    "noviembre": 11,
-    "diciembre": 12,
-}
-_SLIP_DATE_RE = re.compile(
-    r"\b(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|"
-    r"agosto|septiembre|setiembre|octubre|noviembre|diciembre)\s+de\s+"
-    r"(\d{4})\b(?:\s*[,·-]?\s*(\d{1,2}):(\d{2}))?",
-    re.IGNORECASE,
-)
-# Formato corto que también imprimen las casas ("24/8/26 19:30").
-_SLIP_DATE_SHORT_RE = re.compile(
-    r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b(?:\s*[,·-]?\s*(\d{1,2}):(\d{2}))?"
-)
 # Cordura: la fecha impresa debe estar cerca de la del mensaje; fuera
 # de este margen es ruido del OCR (fecha de emisión, otro evento...).
-_SLIP_MAX_DISTANCE = timedelta(days=60)
+# 30 días = la misma ventana de plausibilidad que usa el extractor
+# (_EVENT_MAX_FUTURE): un slip impreso meses atrás o a meses vista es
+# marketing/ruido, no la fecha del partido (casos grupo C: -48d, -31d
+# escritos por esta vía).
+_SLIP_MAX_DISTANCE = timedelta(days=30)
 # Para el descarte por republicación el margen es mucho más amplio:
 # un slip de hace meses republicado sigue siendo marketing.
 _SLIP_FLAG_DISTANCE = timedelta(days=400)
@@ -103,43 +85,6 @@ class GarbageReport:
 
     def by_action(self, action: str) -> list[GarbageAction]:
         return [a for a in self.actions if a.action == action]
-
-
-def slip_printed_date(text: Optional[str]) -> Optional[datetime]:
-    """Fecha del partido impresa en el boleto, o None.
-
-    Acepta el formato largo con año ("16 de septiembre de 2026, 19:00")
-    y el corto con barras ("24/8/26 19:30") — ambos inequívocos en slips
-    de casas españolas. Sin fecha impresa clara no se inventa nada.
-    """
-    if not text:
-        return None
-    match = _SLIP_DATE_RE.search(text)
-    if match:
-        day, month_name, year, hour, minute = match.groups()
-        try:
-            return datetime(
-                int(year),
-                _MESES_LARGO[month_name.lower()],
-                int(day),
-                int(hour or 0),
-                int(minute or 0),
-            )
-        except (ValueError, KeyError):
-            return None
-    short = _SLIP_DATE_SHORT_RE.search(text)
-    if not short:
-        return None
-    day, month, year, hour, minute = short.groups()
-    year_int = int(year)
-    if year_int < 100:
-        year_int += 2000
-    try:
-        return datetime(
-            year_int, int(month), int(day), int(hour or 0), int(minute or 0)
-        )
-    except ValueError:
-        return None
 
 
 def _slip_analysis(raw: TelegramRawMessage) -> tuple[Optional[datetime], str]:
@@ -209,6 +154,33 @@ def _analyze_raw(
                 action="flag",
                 reason="slip_liquidado",
                 detail=f"sello/premio cobrado (msg {raw.message_id})",
+            )
+            for pick in picks
+        ]
+
+    # Foto de slip republicada días/semanas después del partido: aunque
+    # el OCR no traiga sello ni premio, una "prueba" vieja nunca es un
+    # pick abierto — el dedup de ±6 h no caza republicaciones tardías.
+    if is_reposted_slip(full_text, raw.received_at):
+        return [
+            GarbageAction(
+                pick_id=pick.id,
+                action="flag",
+                reason="slip_republicado",
+                detail=f"fecha impresa < mensaje (msg {raw.message_id})",
+            )
+            for pick in picks
+        ]
+
+    # Marketing de urgencia del premium ("perdiste la ÚLTIMA PLAZA",
+    # premiumpay): nunca hubo pick — el extractor masticó el anuncio.
+    if _is_premium_urgency(full_text):
+        return [
+            GarbageAction(
+                pick_id=pick.id,
+                action="flag",
+                reason="promo_premium",
+                detail=f"urgencia premium/plazas (msg {raw.message_id})",
             )
             for pick in picks
         ]
@@ -310,6 +282,11 @@ def _analyze_raw(
         # corrección sí exige proximidad — una fecha lejana en el OCR
         # es ruido (emisión del boleto, otro evento...).
         for pick in picks:
+            if pick.es_combinada or pick.combinada_id:
+                # El slip imprime UNA fecha pero cada pata puede ser
+                # de un partido distinto: aplicarla a todas corrompe
+                # las fechas de patas que no son de ese día.
+                continue
             current = pick.fecha_evento
             if current is None or current.date() != slip_date.date():
                 actions.append(

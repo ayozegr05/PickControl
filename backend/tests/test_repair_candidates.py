@@ -322,3 +322,156 @@ class TestLegVerdictInheritance:
         assert inherited == 0
         assert new.anulada is False
         assert new.acierto is None
+
+
+class TestDnbSelfEvidentSeleccion:
+    """La redacción DNB en la propia selección ("X gana empate no
+    cuenta") anula la exclusión _DC_EXPLICIT: ese "empate" no es
+    señal de doble oportunidad (caso real #7496, #7245, #8810)."""
+
+    async def test_dnb_en_seleccion_se_reetiqueta(self, session):
+        from app.models.parsed_pick import ParsedPick
+        from app.models.telegram_raw_message import TelegramRawMessage
+        from app.services.maintenance.repair import fix_dnb_labels
+
+        raw = TelegramRawMessage(
+            id=950,
+            channel_id=-1001,
+            message_id=50,
+            channel_name="c",
+            text="HERTHA BERLIN GANA EL PARTIDO EMPATE NO CUENTA",
+        )
+        pick = ParsedPick(
+            id=950,
+            raw_message_id=950,
+            es_apuesta=True,
+            acierto=None,
+            mercado="doble oportunidad",
+            seleccion="Hertha Berlin gana el partido empate no cuenta",
+        )
+        session.add_all([raw, pick])
+        await session.commit()
+
+        assert await fix_dnb_labels(session) == [950]
+
+    async def test_dc_real_sigue_intocable(self, session):
+        """'X gana o empata' es doble oportunidad legítima (X2)."""
+        from app.models.parsed_pick import ParsedPick
+        from app.models.telegram_raw_message import TelegramRawMessage
+        from app.services.maintenance.repair import fix_dnb_labels
+
+        raw = TelegramRawMessage(
+            id=951,
+            channel_id=-1001,
+            message_id=51,
+            channel_name="c",
+            text="GRANADA GANA O EMPATA",
+        )
+        pick = ParsedPick(
+            id=951,
+            raw_message_id=951,
+            es_apuesta=True,
+            acierto=None,
+            mercado="doble oportunidad",
+            seleccion="Granada gana o empata",
+        )
+        session.add_all([raw, pick])
+        await session.commit()
+
+        assert await fix_dnb_labels(session) == []
+
+
+class TestMaterialBasuraCandidato:
+    """Un boleto liquidado/historial bien extraído también es
+    candidato: el rechazo es determinista y previo al LLM (caso real
+    #6494-6498, combinada MYMATCH con patas correctas)."""
+
+    async def test_pick_sano_con_raw_mymatch_es_candidato(self, session):
+        from app.models.parsed_pick import ParsedPick
+        from app.models.telegram_raw_message import TelegramRawMessage
+        from app.services.maintenance.repair import find_repair_candidates
+
+        raw = TelegramRawMessage(
+            id=960,
+            channel_id=-1001,
+            message_id=60,
+            channel_name="c",
+            text="",
+            extracted_text=(
+                "318,35 € En curso (2) Ganadas Finalizadas Ocultas (1) "
+                "04/10 Países Bajos 2 - 1 Serbia MYMATCH"
+            ),
+        )
+        pick = ParsedPick(
+            id=960,
+            raw_message_id=960,
+            es_apuesta=True,
+            acierto=None,
+            anulada=False,
+            deporte="fútbol",
+            evento="Países Bajos - Serbia",
+            seleccion="Países Bajos gana",
+        )
+        session.add_all([raw, pick])
+        await session.commit()
+
+        assert 960 in await find_repair_candidates(session)
+
+    async def test_pick_sano_con_raw_limpio_no_es_candidato(self, session):
+        from app.models.parsed_pick import ParsedPick
+        from app.models.telegram_raw_message import TelegramRawMessage
+        from app.services.maintenance.repair import find_repair_candidates
+
+        raw = TelegramRawMessage(
+            id=961,
+            channel_id=-1001,
+            message_id=61,
+            channel_name="c",
+            text="STAKE 3 GETAFE GANA",
+        )
+        pick = ParsedPick(
+            id=961,
+            raw_message_id=961,
+            es_apuesta=True,
+            acierto=None,
+            anulada=False,
+            deporte="fútbol",
+            evento="Getafe - Elche",
+            seleccion="Getafe gana",
+        )
+        session.add_all([raw, pick])
+        await session.commit()
+
+        assert 961 not in await find_repair_candidates(session)
+
+    async def test_pick_liquidado_con_raw_mymatch_tambien_es_candidato(self, session):
+        """La basura cerrada contamina stats igual que la pendiente:
+        el barrido de material cubre picks con acierto ya asignado."""
+        from app.models.parsed_pick import ParsedPick
+        from app.models.telegram_raw_message import TelegramRawMessage
+        from app.services.maintenance.repair import find_repair_candidates
+
+        raw = TelegramRawMessage(
+            id=962,
+            channel_id=-1001,
+            message_id=62,
+            channel_name="c",
+            text="",
+            extracted_text=(
+                "En curso (3) Ganadas Finalizadas " "05/10 Sevilla 1 - 0 Getafe MYMATCH"
+            ),
+        )
+        pick = ParsedPick(
+            id=962,
+            raw_message_id=962,
+            es_apuesta=True,
+            acierto=True,  # ya liquidado
+            anulada=False,
+            deporte="fútbol",
+            evento="Sevilla - Getafe",
+            seleccion="Sevilla gana",
+        )
+        session.add_all([raw, pick])
+        await session.commit()
+
+        assert 962 in await find_repair_candidates(session)

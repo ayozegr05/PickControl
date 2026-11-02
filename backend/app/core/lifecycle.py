@@ -214,6 +214,22 @@ async def _run_odds_backfill_loop() -> None:
                         report.filas,
                     )
                 mark_loop_ran("odds_backfill")
+            # Reconciliación del contador billable de OddsPapi contra
+            # /v4/account (endpoint no-medido): el local deriva —
+            # reintentos 429 que el proveedor sí cuenta, rutas sin
+            # bump — y el freno mensual debe leer la realidad.
+            # Se hace tras CADA pasada (el drift solo nace dentro de
+            # ellas) y además cada 24h como respaldo por sondeos
+            # manuales fuera del ciclo.
+            from app.services.odds import oddspapi as _oddspapi
+
+            if settings.oddspapi_direct_key:
+                real = await _oddspapi.sync_billable_count(settings.oddspapi_direct_key)
+                if real is not None:
+                    logger.info(
+                        "[ODDS_BUDGET] oddspapi billables reales: %s",
+                        real,
+                    )
             # Auditoría semanal de las filas almacenadas: va dentro del
             # mismo loop pero con su propio `loop_due` — corre aunque
             # el backfill no sea debido aún en este ciclo.
@@ -306,7 +322,11 @@ async def lifespan(app: FastAPI):
         )
 
     rescue_task: asyncio.Task | None = None
-    if settings.openai_api_key:
+    # El rescate ya no depende de OpenAI: el OCR/extracción puede
+    # correr entero sobre la cascada gratuita (Gemini/compat). Si solo
+    # hay GOOGLE_API_KEY también debe arrancar — caso real nov-2026:
+    # key de OpenAI revocada, 530 fotos esperando OCR por Gemini.
+    if settings.openai_api_key or settings.google_api_key:
         rescue_task = asyncio.create_task(_run_rescue_loop())
         logger.info(
             "[LIFECYCLE] Rescate OCR/reproceso iniciado en segundo plano "

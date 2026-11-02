@@ -15,6 +15,7 @@ from app.services.telegram.pick_extractor import (
     _extract_eventos,
     _extract_linea,
     _is_live_commentary,
+    _is_premium_urgency,
     _is_settled_ticket,
     _is_win_celebration,
     _looks_like_bet,
@@ -23,6 +24,8 @@ from app.services.telegram.pick_extractor import (
     _sanitize_event_date,
     _strip_trailing_competition,
     extract_pick,
+    is_reposted_slip,
+    slip_printed_date,
 )
 
 
@@ -230,6 +233,47 @@ class TestSeleccionAmbigua:
         out = _normalize_pick(pick, text)
         assert out.seleccion == "Ganará el encuentro"
 
+    def test_ganador_generico_slip_cuota_desempata(self):
+        # Caso real (ids 4762/6692...): el slip pone "Jugador 1.50
+        # Ganará el encuentro" — la cuota va pegada SOLO al apostado;
+        # ambos nombres salen sueltos en la cabecera del cruce.
+        text = (
+            "Pendientes Directo Determinadas\n"
+            "1.000,00€ Sencillas  Reutilizar selecciones Compartir\n"
+            "Novak Djokovic 1.50\n"
+            "Ganará el encuentro\n"
+            "Novak Djokovic\n"
+            "Hubert Hurkacz\n"
+            "Imp: 1.000,00€ Ganancias 1.500,00€"
+        )
+        pick = self._pick(
+            "Ganará el encuentro",
+            evento="Novak Djokovic vs Hubert Hurkacz",
+        )
+        out = _normalize_pick(pick, text)
+        assert out.seleccion == "Novak Djokovic gana"
+
+    def test_ganador_slip_casilla_y_hora_no_enganan(self):
+        # Caso real (id=6459): casilla "o" delante del apostado y la
+        # hora del cruce ("Milev 13:00") que se pliega a cuota falsa.
+        # Solo gana el lado cuyo número iguala pick.cuota (1.57).
+        text = (
+            "1.000,00€ Sencillas\n"
+            "o Buvaysar Gadamauri 1.57\n"
+            "Ganará el encuentro\n"
+            "Buvaysar Gadamauri Jue 8 oct\n"
+            "Yanaki Milev 13:00\n"
+            "Imp: Ganancias\n"
+            "1.000,00€ 1.571,42€"
+        )
+        pick = self._pick(
+            "Ganará el encuentro",
+            evento="Buvaysar Gadamauri vs Yanaki Milev",
+        )
+        pick.cuota = 1.57
+        out = _normalize_pick(pick, text)
+        assert out.seleccion == "Buvaysar Gadamauri gana"
+
     def test_ganador_con_sujeto_no_se_toca(self):
         pick = self._pick("Alcaraz gana", evento="Alcaraz - Sinner")
         out = _normalize_pick(pick, "Cuota 1.5")
@@ -397,6 +441,136 @@ class TestIsSettledTicket:
             "Imp: 2.000,00€\nGanancias 3.000,00€\nCerrar apuesta 2.000,00€"
         )
         assert _is_settled_ticket(text) is False
+
+    def test_ganaste_pagado_es_liquidado(self):
+        # Caso real raw 84: slip cobrado de bet365 — el verbo de cobro
+        # "GANASTE <importe>" que la vista liquidada imprime.
+        text = (
+            "Acumulador 5 @ 91.00\nIpswich - Liverpool\n"
+            "✓ Alexander Isak: Marca gol\n"
+            "✓ Menos de +9.5: córners en total\n"
+            "Apuesta 35,00€\nGANASTE 3.185,00€"
+        )
+        assert _is_settled_ticket(text) is True
+
+    def test_retorno_con_id_apuesta_es_liquidado(self):
+        # Caso real raw 909: slip de William Hill liquidado — "Retorno:
+        # € <x>" + "ID De Apuesta". El abierto diría "Retorno potencial".
+        text = (
+            "Shelton, Ben -2.5, € 50.00 @ 1.78\nRetorno: € 89.00\n"
+            "✓ Handicap Asiático del Juegos 2.5\n"
+            "Tien, Learner v Shelton, Ben\nID De Apuesta BT-27000996"
+        )
+        assert _is_settled_ticket(text) is True
+
+    def test_veredictos_por_pata_es_liquidado(self):
+        # Caso real raw 19678: bet-builder ya revisado — cada pata lleva
+        # su "Gana" en línea propia (el slip abierto muestra la cuota).
+        text = (
+            "Crear Apuesta (1 evento - 5 pronósticos)\nSuecia - Polonia\n"
+            "Jugador que anota\nBenjamin Nygren\nGana\n"
+            "Jugador ve tarjeta\nDaniel Svensson\nGana\n"
+            "Resultado del partido 90\nSuecia\nGana"
+        )
+        assert _is_settled_ticket(text) is True
+
+    def test_veredicto_suelto_unico_no_es_liquidado(self):
+        # Un solo "gana" en línea propia no basta: puede ser el OCR
+        # partiendo "Equipo gana" en dos líneas.
+        text = "Crear Apuesta\nResultado\nReal Madrid\nGana\nCuota 1.80"
+        assert _is_settled_ticket(text) is False
+
+    def test_sello_alucinado_con_potenciales_no_es_liquidado(self):
+        # Caso real raw 844: slip VIVO (premio "potenciales") donde el
+        # OCR estampó el sello — la UI de abierto manda sobre el sello.
+        text = (
+            "SELLO: GANADOR\nGanador G.I. Justo\n"
+            "Guido Iván Justo - Juan Bautista Torres\n"
+            "Importe 267,73 €\nGanancias potenciales 428,37 €"
+        )
+        assert _is_settled_ticket(text) is False
+
+    def test_sello_alucinado_cashout_no_es_liquidado(self):
+        # "Cashout"/"En curso" también delatan slip vivo (misma clase
+        # de señal que "Cerrar apuesta").
+        text = "SELLO: GANADOR\nEn curso\nGanador R. Nadal\n" "Cashout 100,00 €"
+        assert _is_settled_ticket(text) is False
+
+
+class TestIsRepostedSlip:
+    _SLIP = (
+        "Crear Apuesta\nSuecia - Polonia\n"
+        "lunes, 28 de septiembre de 2026, 20:45\n"
+        "Jugador que anota\nBenjamin Nygren"
+    )
+
+    def test_fecha_impresa_larga(self):
+        assert slip_printed_date(self._SLIP) == datetime(2026, 9, 28, 20, 45)
+
+    def test_slip_reposteado_dias_despues(self):
+        # Caso real raw 19678: slip del 28-sep republicado el 06-oct.
+        assert is_reposted_slip(self._SLIP, datetime(2026, 10, 6, 10, 0)) is True
+
+    def test_slip_del_dia_anterior_sobrevive(self):
+        # En vivo posteado pasada la medianoche del partido: 1 día de
+        # diferencia no es republicación.
+        assert is_reposted_slip(self._SLIP, datetime(2026, 9, 29, 0, 30)) is False
+
+    def test_slip_previo_al_partido_sobrevive(self):
+        assert is_reposted_slip(self._SLIP, datetime(2026, 9, 28, 12, 0)) is False
+
+    def test_sin_fecha_impresa(self):
+        assert (
+            is_reposted_slip("Madrid gana cuota 1.80", datetime(2026, 10, 6)) is False
+        )
+
+    def test_sin_received_at(self):
+        assert is_reposted_slip(self._SLIP, None) is False
+
+    async def test_extract_pick_rechaza_slip_reposteado(self):
+        pick = await extract_pick(
+            self._SLIP, api_key="", fecha_referencia=datetime(2026, 10, 6)
+        )
+        assert pick is not None
+        assert pick.es_apuesta is False
+        assert pick.metodo == "rejected"
+
+
+class TestIsPremiumUrgency:
+    def test_ultima_plaza(self):
+        # Caso real raw 25581 → pick 10073: el extractor por reglas
+        # masticó el anuncio y sacó seleccion="+ perdiste laÚLTIMA".
+        text = (
+            "👀 Si lees esto y no entras…\n"
+            "🙅‍♂️ perdiste la ÚLTIMA PLAZA ⛔️\n"
+            "🤑 CUOTA 121\n🛍 https://premiumpay.pro/2032/A"
+        )
+        assert _is_premium_urgency(text) is True
+
+    def test_quedan_plazas(self):
+        assert _is_premium_urgency("Quedan 5 plazas para el grupo") is True
+
+    def test_premiumpay(self):
+        assert _is_premium_urgency("Pago aquí: https://premiumpay.pro/x") is True
+
+    def test_entra_al_premium(self):
+        assert _is_premium_urgency("ENTRA AL PREMIUM y no te lo pierdas") is True
+
+    def test_pick_real_sobrevive(self):
+        # "plaza" como nombre propio o mercado no dispara: urgencia +
+        # pago es lo que delata el anuncio.
+        assert _is_premium_urgency("Real Madrid gana @1.80 stake 2") is False
+        assert _is_premium_urgency("Plaza Colón - evento") is False
+
+    async def test_extract_pick_rechaza_urgencia_premium(self):
+        pick = await extract_pick(
+            "perdiste la ÚLTIMA PLAZA ⛔️ CUOTA 121 premiumpay.pro",
+            api_key="",
+            fecha_referencia=datetime(2026, 10, 22),
+        )
+        assert pick is not None
+        assert pick.es_apuesta is False
+        assert pick.metodo == "rejected"
 
 
 class TestExtractLinea:

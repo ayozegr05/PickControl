@@ -594,3 +594,88 @@ class TestSettlementHook:
         await session.refresh(pick)
         assert pick.acierto is True
         assert pick.verificado_por == "auto"
+
+
+class TestEmailAlert:
+    async def test_sin_config_es_noop(self, monkeypatch):
+        from app.services.notifications import email_alert
+
+        monkeypatch.setattr(
+            email_alert,
+            "get_settings",
+            lambda: type("S", (), {"alert_email_to": None, "smtp_host": None})(),
+        )
+        assert await email_alert.send_alert("s", "b") is False
+
+    async def test_envio_llama_smtp(self, monkeypatch):
+        from app.services.notifications import email_alert
+
+        monkeypatch.setattr(
+            email_alert,
+            "get_settings",
+            lambda: type(
+                "S",
+                (),
+                {
+                    "alert_email_to": "admin@x.com",
+                    "smtp_host": "smtp.x.com",
+                    "smtp_port": 587,
+                    "smtp_user": "bot@x.com",
+                    "smtp_pass": "pw",
+                    "smtp_from": None,
+                },
+            )(),
+        )
+        sent = []
+
+        class _FakeSMTP:
+            def __init__(self, host, port, timeout=15):
+                sent.append((host, port))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def ehlo(self):
+                pass
+
+            def starttls(self):
+                pass
+
+            def login(self, user, pw):
+                sent.append(("login", user))
+
+            def send_message(self, msg):
+                sent.append(("msg", msg["To"]))
+
+        monkeypatch.setattr(email_alert.smtplib, "SMTP", _FakeSMTP)
+        assert await email_alert.send_alert("Alerta", "cuerpo") is True
+        assert ("msg", "admin@x.com") in sent
+
+    async def test_error_smtp_no_propaga(self, monkeypatch):
+        from app.services.notifications import email_alert
+
+        monkeypatch.setattr(
+            email_alert,
+            "get_settings",
+            lambda: type(
+                "S",
+                (),
+                {
+                    "alert_email_to": "a@x.com",
+                    "smtp_host": "smtp.x.com",
+                    "smtp_port": 587,
+                    "smtp_user": None,
+                    "smtp_pass": None,
+                    "smtp_from": None,
+                },
+            )(),
+        )
+
+        def _boom(host, port, timeout=15):
+            raise OSError("SMTP down")
+
+        monkeypatch.setattr(email_alert.smtplib, "SMTP", _boom)
+        assert await email_alert.send_alert("s", "b") is False

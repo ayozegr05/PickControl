@@ -469,3 +469,61 @@ class TestDryRunYApply:
             a.pick_id == pick_id and a.reason == "slip_liquidado"
             for a in report.actions
         )
+
+
+class TestHistoryScreen:
+    """Pantalla "Mis apuestas" (MYMATCH): historial republicado, no
+    slip abierto — mismo tratamiento que un boleto liquidado."""
+
+    _MYBETS_OCR = (
+        "318,35 € En curso (2) Ganadas Finalizadas Ocultas (1) "
+        "04/10 Países Bajos 2 - 1 Serbia MYMATCH 1,27 "
+        "Número total de goles Más de 1,5"
+    )
+
+    def test_pantalla_mymatch_es_liquidada(self):
+        raw = _raw(datetime(2026, 10, 8, 10, 54), extracted_text=self._MYBETS_OCR)
+        actions = garbage._analyze_raw(raw, [_pick()])
+        assert len(actions) == 1
+        assert actions[0].action == "flag"
+        assert actions[0].reason == "slip_liquidado"
+
+    def test_slip_abierto_con_en_curso_no_es_historial(self):
+        # "En curso" SIN contador de pestaña = estado de apuesta viva.
+        assert not garbage._is_settled_ticket(
+            "Crear Apuesta Ipswich - Liverpool En curso "
+            "Cerrar apuesta Ganancias potenciales 300€"
+        )
+
+    def test_prosa_con_ganadas_no_es_historial(self):
+        assert not garbage._is_settled_ticket(
+            "STAKE 3 — este mes llevamos 5 ganadas de 7, seguimos así"
+        )
+
+
+class TestFixDateGuardas:
+    """El fix de fecha impresa no toca combinadas ni acepta fechas
+    a más de 30 días (ventana de plausibilidad del extractor)."""
+
+    def test_fix_date_no_toca_pata_de_combinada(self):
+        slip = _SLIP_OCR.replace("septiembre", "octubre")
+        raw = _raw(datetime(2026, 10, 5, 10, 0), extracted_text=slip)
+        pata = _pick(fecha_evento=datetime(2026, 10, 5, 10, 0))
+        pata.combinada_id = 99
+        actions = garbage._analyze_raw(raw, [pata])
+        assert not any(a.action == "fix_date" for a in actions)
+
+    def test_fix_date_no_toca_padre_combinada(self):
+        slip = _SLIP_OCR.replace("septiembre", "octubre")
+        raw = _raw(datetime(2026, 10, 5, 10, 0), extracted_text=slip)
+        padre = _pick(fecha_evento=datetime(2026, 10, 5, 10, 0))
+        padre.es_combinada = True
+        actions = garbage._analyze_raw(raw, [padre])
+        assert not any(a.action == "fix_date" for a in actions)
+
+    def test_fix_date_rechaza_ventana_mayor_30d(self):
+        # +45 días: antes corregía (ventana 60d); ahora es ruido.
+        slip = _SLIP_OCR.replace("septiembre", "noviembre").replace("16 de ", "29 de ")
+        raw = _raw(datetime(2026, 10, 15, 10, 0), extracted_text=slip)
+        pick = _pick(fecha_evento=datetime(2026, 10, 15, 10, 0))
+        assert garbage._analyze_raw(raw, [pick]) == []

@@ -106,6 +106,11 @@ class Settings(BaseSettings):
     # Reutiliza RAPIDAPI_TENNIS_KEY; plan BASIC de 200 req/MES — cuando
     # se agota, el reset real viene en x-ratelimit-requests-reset.
     rapidapi_oddspapi_host: str = "bet36528.p.rapidapi.com"
+    # API directa de OddsPapi (api.oddspapi.io): misma data, pero
+    # /v4/historical-odds NO consume cuota (gratis por diseño); solo
+    # /v4/fixtures y /v4/markets cuentan contra las ~250 req/mes del
+    # plan free. Si hay key directa se prefiere sobre el canal RapidAPI.
+    oddspapi_direct_key: str | None = None
     # Segunda fuente de histórico: "OddsFeed" (odds-feed). Reutiliza la
     # misma key de cuenta (cuota propia: 500 req/mes en BASIC). Cubre
     # solo mercados principales (1X2, O/U, hándicap, BTTS) — sin props.
@@ -143,12 +148,41 @@ class Settings(BaseSettings):
     # cubre Champions, ligas grandes, Challenger/ITF y basket global.
     # Trial "Bet365 API": 1.800 req/hora. Sin token no se registra.
     betsapi_token: str | None = None
+    # Wrapper RapidAPI "BetsAPI" (betsapi2): el MISMO feed bet365 pero
+    # bajo /v3 y plan gratis (~24 req/día). El prematch solo vive
+    # mientras el partido no ha empezado — sirve para congelar cuotas
+    # de picks nuevos en el snapshotter, NO para el backlog histórico
+    # (los terminados devuelven el stub sin mercados). Reutiliza
+    # RAPIDAPI_TENNIS_KEY (la key es por cuenta); sin suscripción al
+    # endpoint el primer 403 lo aparca solo.
+    rapidapi_betsapi_host: str = "betsapi2.p.rapidapi.com"
+    # PulseScore (api.pulsescore.net): espejo NORMALIZADO del feed
+    # bet365 — mismos FI que BetsAPI, esquema canonicalMarket +
+    # selections. Plan BASIC gratis: 500 req/mes, 1 req/segundo,
+    # headers X-RateLimit-*. Solo prematch en vivo (el evento
+    # desaparece del board al empezar) — igual que el wrapper
+    # RapidAPI sirve para congelar futuros, nunca para backlog.
+    # Su listado /{sport}/events ya trae los mercados dentro: una
+    # llamada resuelve evento + cuotas. Auth: header X-Secret.
+    pulsescore_key: str | None = None
+    pulsescore_host: str = "api.pulsescore.net"
+    pulsescore_bookmaker: str = "v3/bet365"
     odds_api_regions: str = "uk,eu"
     odds_api_markets: str = (
         "player_goal_scorer_anytime,player_to_score_or_assist,"
         "player_assists,player_first_goal_scorer,player_last_goal_scorer,"
         "alternate_totals_corners,alternate_totals_cards,correct_score"
     )
+    # APIHub (proxy.apihub.io): wrapper normalizado de 1xBet (mercados
+    # etiquetados: "Corners" -> "3Way Total" — el mercado exacto de
+    # las líneas enteras del tipster) y FlashScore (respaldo vivo
+    # multi-casa, ventana ~7 días). 100 llamadas gratis/mes por
+    # servicio; un 402/403 lo aparca hasta el día 1.
+    apihub_key: str | None = None
+    # 5DollarFootballAPI: apertura + cierre REALES de bet365 en las 5
+    # grandes ligas (Free: 60 req/h, ~3 meses de histórico). Fuente
+    # histórica del backfill y evidencia documentada de nomarket.
+    fivedollar_key: str | None = None
     # Gemini API (proyecto propio en GCP): investigador de último
     # recurso vía url_context (DDG -> webs de resultados). Detecta
     # fixtures cancelados/aplazados/walkover citando fuentes fiables
@@ -165,6 +199,17 @@ class Settings(BaseSettings):
     # volúmenes altos — el envío normal no requiere token.
     push_notifications_enabled: bool = True
     expo_access_token: str | None = None
+    # Alertas por email (canal de emergencia cuando el admin no tiene
+    # la app instalada): solo las alertas críticas de operación
+    # (ingesta caída), no el flujo cotidiano de picks. SMTP estándar —
+    # para Gmail: smtp.gmail.com:587 con contraseña de aplicación.
+    # `alert_email_to` vacío = canal apagado.
+    alert_email_to: str | None = None
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_user: str | None = None
+    smtp_pass: str | None = None
+    smtp_from: str | None = None  # default: smtp_user
     # Cada cuántos minutos corre el snapshotter de odds en segundo
     # plano. Cadencia corta para capturar bien el cierre de cuotas.
     odds_snapshot_interval_minutes: float = 30.0
@@ -179,6 +224,10 @@ class Settings(BaseSettings):
     # Cada cuántas horas corre el backfill de cuotas históricas
     # (OddsPapi). Early-exit sin llamadas si no hay backlog pendiente.
     odds_backfill_interval_hours: float = 24.0
+    # Secreto fijo del userscript de cosecha de cuotas (Tampermonkey/
+    # WebView): cabecera `X-Harvest-Key` en GET /odds-harvest/queue y
+    # POST /odds-harvest/event. Vacío = endpoints deshabilitados (503).
+    odds_harvest_token: str | None = None
 
 
 @lru_cache

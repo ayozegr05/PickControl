@@ -44,9 +44,11 @@ from app.services.pick_service import get_or_create_informante
 from app.services.results.verifier import _evento_feo
 from app.services.telegram.ocr import extract_text_from_image
 from app.services.telegram.pick_extractor import (
+    _is_premium_urgency,
     _is_settled_ticket,
     _llm_extract,
     extract_pick,
+    is_reposted_slip,
 )
 from app.services.telegram.processor import _find_duplicate_pick
 
@@ -426,7 +428,7 @@ async def retry_incomplete_picks(
 # señales que NO existen en un boleto vivo (sello "GANADOR", payout
 # "GANASTE <importe>", "<importe>€ Ganancias" con ✓ por pata...). Si se
 # añade otra regla de rechazo a `pick_extractor`, se suma aquí.
-_DETERMINISTIC_REJECTS = (_is_settled_ticket,)
+_DETERMINISTIC_REJECTS = (_is_settled_ticket, _is_premium_urgency)
 
 
 async def _retriage_source(session, pick: ParsedPick, raw: TelegramRawMessage) -> str:
@@ -477,13 +479,15 @@ async def retriage_pending_picks(
             text = await _retriage_source(session, pick, raw)
             if not text:
                 continue
-            if any(reject(text) for reject in _DETERMINISTIC_REJECTS):
+            if any(reject(text) for reject in _DETERMINISTIC_REJECTS) or (
+                is_reposted_slip(text, raw.received_at)
+            ):
                 pick.es_apuesta = False
                 session.add(pick)
                 resumen["descartados"] += 1
                 logger.info(
                     "[RESCUE] Retriage: pick %s -> es_apuesta=False "
-                    "(raw %s casa con boleto liquidado)",
+                    "(raw %s casa con boleto liquidado/republicado)",
                     pick.id,
                     raw.id,
                 )

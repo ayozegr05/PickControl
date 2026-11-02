@@ -373,6 +373,18 @@ async def notify_ingest_down(detail: str, raws_ventana: int) -> None:
     fotos sin OCR o raws sin procesar — firma de que la cadena de
     extracción está rota (p. ej. OpenAI sin crédito). Información de
     operación, no para usuarios normales."""
+    # Email como canal de emergencia independiente del push: si el
+    # admin no tiene la app instalada, el push muere con el token y
+    # nadie se entera (caso real oct-2026: 10 días de ingesta caída
+    # sin aviso recibido). Sin ALERT_EMAIL_TO configurado es no-op.
+    from app.services.notifications.email_alert import send_alert
+
+    await send_alert(
+        "[ControlPick] Ingesta posiblemente caída",
+        f"{detail} ({raws_ventana} raws en las últimas 3h).\n\n"
+        "El listener de Telegram o la cadena de extracción pueden "
+        "estar rotos. Revisar el backend de producción.",
+    )
     try:
         if not _enabled(get_settings()):
             return

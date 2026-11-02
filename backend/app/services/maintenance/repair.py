@@ -38,12 +38,16 @@ from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
-from app.services.results.base import fold_name
+from app.services.results.base import clear_missed_for_pick, fold_name
 from app.services.results.verifier import _COMBINADA_LOCKED_MOTIVOS
 from app.services.telegram.pick_extractor import (
+    _EVENTO_SIDE_SPLIT,
+    _GENERIC_WINNER_SEL,
     ExtractedPick,
+    _is_premium_urgency,
     _is_settled_ticket,
     extract_pick,
+    is_reposted_slip,
 )
 from app.services.telegram.processor import _persist_patas
 
@@ -306,6 +310,41 @@ async def repair_pick(session, pick: ParsedPick, *, apply: bool) -> RepairReport
     padre, que regenera el boleto completo.
     """
     report = RepairReport(pick_id=pick.id or 0, action="skipped")
+
+    report.old = _pick_snapshot(pick)
+    source, raw = await _source_text(session, pick)
+    if not source:
+        report.action = "skipped"
+        report.detail = "raw sin texto ni OCR"
+        return report
+
+    # El chequeo de material va ANTES de los candados (pata/bloqueada):
+    # rechazar basura (boleto liquidado, slip republicado, promo) es
+    # siempre seguro — no regenera patas ni toca la liquidación, solo
+    # excluye la fila y supersede las suyas. Si va después, las
+    # combinadas anulada·duplicado quedan inalcanzables y su basura
+    # sobrevive para siempre (caso real: 104 picks de slips
+    # "SELLO: GANADOR" atrapados en el deadlock pata↔padre).
+    if (
+        _is_settled_ticket(source)
+        or is_reposted_slip(source, raw.received_at if raw else None)
+        or _is_premium_urgency(source)
+    ):
+        # Boleto ya liquidado (sello/payout), foto de slip antiguo
+        # republicada o marketing de urgencia del premium: no es un
+        # pick abierto y no merece re-extracción — el fallback de
+        # reglas rescataría la palabra "GANADOR" del sello o el
+        # "perdiste la ÚLTIMA PLAZA" del anuncio como si fuera la
+        # selección (casos reales: pick 5158, pick 10073).
+        report.action = "rejected"
+        report.detail = "el material es un boleto liquidado/republicado o promo premium"
+        if apply:
+            pick.es_apuesta = False
+            pick.metodo = "rejected+reext"
+            await _supersede_legs(session, pick)
+            session.add(pick)
+        return report
+
     if pick.combinada_id is not None:
         report.action = "skipped"
         report.detail = "pata de combinada: se repara vía el padre"
@@ -317,27 +356,6 @@ async def repair_pick(session, pick: ParsedPick, *, apply: bool) -> RepairReport
         # deshacer el motivo a mano primero.
         report.action = "skipped"
         report.detail = f"anulada·{pick.motivo_anulada}: fila bloqueada"
-        return report
-
-    report.old = _pick_snapshot(pick)
-    source, raw = await _source_text(session, pick)
-    if not source:
-        report.action = "skipped"
-        report.detail = "raw sin texto ni OCR"
-        return report
-
-    if _is_settled_ticket(source):
-        # Boleto ya liquidado (sello/payout): no es un pick abierto y no
-        # merece re-extracción — el fallback de reglas rescataría la
-        # palabra "GANADOR" del sello como si fuera la selección (caso
-        # real: pick 5158, slip del par ya cobrado).
-        report.action = "rejected"
-        report.detail = "el material es un boleto ya liquidado"
-        if apply:
-            pick.es_apuesta = False
-            pick.metodo = "rejected+reext"
-            await _supersede_legs(session, pick)
-            session.add(pick)
         return report
 
     settings = get_settings()
@@ -406,6 +424,22 @@ async def repair_pick(session, pick: ParsedPick, *, apply: bool) -> RepairReport
     was_combinada = pick.es_combinada
     if apply:
         _apply_fields(pick, new)
+        applied = _pick_snapshot(pick)
+        if pick.id is not None and any(
+            applied[k] != report.old[k]
+            for k in ("seleccion", "evento", "mercado", "linea", "fecha_evento")
+        ):
+            # La premisa de las marcas missed (nofixture/nomarket) era
+            # el dato viejo: con la extracción corregida toca
+            # reintentar ya, no cuando el TTL las caduque en 15 días.
+            cleared = clear_missed_for_pick(pick.id)
+            if cleared:
+                logger.info(
+                    "[REPAIR] pick %s: %s marcas missed invalidadas "
+                    "tras reparar campos de extracción",
+                    pick.id,
+                    cleared,
+                )
         superseded_legs, leg_verdicts = await _supersede_legs(session, pick)
         if n_patas >= 2:
             pick.es_combinada = True
@@ -519,7 +553,11 @@ def _dc_ambiguous_dnb(pick: ParsedPick, source: str) -> bool:
     sin señal explícita y la fuente dice que era Draw No Bet."""
     if not _DC_LABEL.search(pick.mercado or ""):
         return False
-    if _DC_EXPLICIT.search(pick.seleccion or ""):
+    sel = pick.seleccion or ""
+    # "X gana empate no cuenta" dispara _DC_EXPLICIT por el token
+    # "empate" — pero esa redacción prueba DNB, no doble oportunidad:
+    # la señal explícita solo cuenta si NO es la frase DNB en sí.
+    if _DC_EXPLICIT.search(sel) and not _DNB_IN_SOURCE.search(sel):
         return False
     return bool(_DNB_IN_SOURCE.search(source))
 
@@ -570,6 +608,18 @@ def _pick_needs_repair(pick: ParsedPick, active_legs: list[ParsedPick]) -> bool:
             pick.mercado
             and "hándicap" in pick.mercado.lower()
             and _DC_IN_HANDICAP.search(pick.seleccion or "")
+        ):
+            return True
+        # Selección de ganador sin sujeto ("Ganará el encuentro"): con
+        # un evento de dos lados la re-extracción puede recuperar al
+        # apostado del raw (caso real: slips de tenis "Jugador 1.50 /
+        # Ganará el encuentro" — ver _recover_winner_subject).
+        if (
+            _GENERIC_WINNER_SEL.match(pick.seleccion or "")
+            and len(
+                [s for s in _EVENTO_SIDE_SPLIT.split(pick.evento or "") if s.strip()]
+            )
+            == 2
         ):
             return True
     return False
@@ -655,6 +705,74 @@ async def find_repair_candidates(session, limit: int = 10) -> list[int]:
             )
             if _dc_ambiguous_dnb(p, source):
                 candidates.append(p.id)
+
+    # Material-basura como candidatura propia: un boleto liquidado o
+    # pantalla de historial puede venir PERFECTAMENTE extraído (caso
+    # real #6494: combinada MYMATCH con 4 patas correctas) — sin esta
+    # señal nunca llega a repair_pick y la basura sobrevive para
+    # siempre. El rechazo es determinista y sale antes del LLM, así
+    # que ampliar candidatos aquí no cuesta llamadas.
+    material = [
+        p
+        for p in parents
+        if p.id is not None and p.id not in candidates and p.raw_message_id
+    ]
+    # Los ya liquidados también cuentan: la basura cerrada contamina
+    # las stats del tipster igual que la pendiente (#6494 quedó
+    # liquidado como pick real). Se les aplica el mismo check sobre
+    # su propio raw (sin búsqueda de par: son minoría y la consulta
+    # por pick no escala).
+    settled = (
+        (
+            await session.exec(
+                select(ParsedPick)
+                .where(ParsedPick.es_apuesta == True)  # noqa: E712
+                .where(ParsedPick.acierto.is_not(None))  # noqa: E711
+                .where(ParsedPick.anulada == False)  # noqa: E712
+                .where(ParsedPick.combinada_id.is_(None))  # noqa: E711
+            )
+        )
+        .scalars()
+        .all()
+    )
+    material.extend(p for p in settled if p.id is not None and p.id not in candidates)
+    if material:
+        raws = (
+            (
+                await session.exec(
+                    select(TelegramRawMessage).where(
+                        TelegramRawMessage.id.in_(p.raw_message_id for p in material)
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        raw_by_id = {r.id: r for r in raws}
+        for p in material:
+            raw = raw_by_id.get(p.raw_message_id)
+            if raw is None:
+                continue
+            # El slip suele vivir en el raw hermano del par foto+texto:
+            # si el propio no trae OCR, _source_text lo fusiona (solo
+            # en pendientes — en liquidados la consulta por pick no
+            # compensa el caso minoritario).
+            if raw.extracted_text:
+                source = " ".join(
+                    t for t in (raw.text or "", raw.extracted_text or "") if t
+                )
+            elif p.acierto is None:
+                source, _ = await _source_text(session, p)
+            else:
+                source = raw.text or ""
+            if not source:
+                continue
+            if (
+                _is_settled_ticket(source)
+                or is_reposted_slip(source, raw.received_at)
+                or _is_premium_urgency(source)
+            ):
+                candidates.append(p.id)
     return candidates[:limit]
 
 
@@ -684,7 +802,12 @@ async def fix_dnb_labels(session, limit: int = 100) -> list[int]:
         .scalars()
         .all()
     )
-    ambiguous = [p for p in candidates if not _DC_EXPLICIT.search(p.seleccion or "")]
+    ambiguous = [
+        p
+        for p in candidates
+        if not _DC_EXPLICIT.search(p.seleccion or "")
+        or _DNB_IN_SOURCE.search(p.seleccion or "")
+    ]
     if not ambiguous:
         return []
     raws = list(

@@ -506,13 +506,20 @@ class TestBackfillPendingCount:
         await session.commit()
         assert await count_pending_backfill(session) == 1
 
-        # Miss de nofixture en TODAS las fuentes (las claves son por
-        # proveedor: una fuente puede cubrir lo que la otra no).
-        results_base.mark_missed(f"oddspapi|nofixture|{pick.id}")
-        results_base.mark_missed(f"oddsfeed|nofixture|{pick.id}")
-        results_base.mark_missed(f"footballdata|nofixture|{pick.id}")
-        results_base.mark_missed(f"betexplorer|nofixture|{pick.id}")
-        results_base.mark_missed(f"sofascore|nofixture|{pick.id}")
+        # Miss de nofixture en TODAS las fuentes que cubren el deporte
+        # del pick (las claves son por proveedor: una fuente puede
+        # cubrir lo que la otra no). Dinámico: sobrevive a fuentes
+        # nuevas en la cascada (p. ej. fivedollar).
+        from app.core.config import get_settings
+        from app.services.odds.historical_backfill import (
+            _canonical_sport,
+            _sources,
+        )
+
+        sport = _canonical_sport(pick.deporte)
+        for s in _sources(get_settings()):
+            if sport in s.sport_ids:
+                results_base.mark_missed(f"{s.name}|nofixture|{pick.id}")
         assert await count_pending_backfill(session) == 0
 
     async def _pick(self, session, **kwargs) -> ParsedPick:

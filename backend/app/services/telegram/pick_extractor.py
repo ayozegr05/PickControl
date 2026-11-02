@@ -872,31 +872,88 @@ def _name_fold(value: str) -> str:
 def _recover_winner_subject(pick: ExtractedPick, text: str) -> None:
     """Recupera el sujeto de una selección de ganador genérica.
 
-    Los tipsters destacan al apostado en su propia línea ("➡️ Leyre
-    Romero Gormaz", "**Mérida**") aunque el LLM etiquete la selección
-    como "Ganará el encuentro". Si solo UN lado del evento aparece como
-    línea destacada del texto (el nombre solo, o nombre + "gana..."),
-    se adopta; si aparecen ambos o ninguno, es ambiguo y se deja.
+    Dos pistas, en orden de fuerza:
+
+    1. Slip: el lado apostado lleva la cuota pegada en la misma línea
+       ("Novak Djokovic 1.50 Ganará el encuentro"); el perdedor sale
+       suelto en la cabecera del cruce. Un solo lado con cuota decide.
+    2. Texto: el tipster destaca al apostado en su propia línea
+       ("➡️ Leyre Romero Gormaz", "**Mérida**", "Bergs gana").
+
+    Si ninguna pista deja un único lado, es ambiguo y se deja.
     """
     sides = [
         s.strip() for s in _EVENTO_SIDE_SPLIT.split(pick.evento or "") if s.strip()
     ]
     if len(sides) != 2 or not text:
         return
-    folded_to_side = {_name_fold(s): s for s in sides}
+    # Alias por lado: nombre completo y apellido largo ("Moeller" por
+    # "Marvin Moeller" — los tipsters titulan con el apellido).
+    alias_to_side: dict[str, str] = {}
+    surname_sides: dict[str, str] = {}
+    surname_dupes: set[str] = set()
+    for side in sides:
+        folded = _name_fold(side)
+        alias_to_side[folded] = side
+        last = folded.split()[-1]
+        if len(last) >= 4 and last != folded:
+            if last in surname_sides:
+                surname_dupes.add(last)
+            surname_sides.setdefault(last, side)
+    for last, side in surname_sides.items():
+        if last not in surname_dupes:
+            alias_to_side[last] = side
     hits: set[str] = set()
+    strong: set[str] = set()
     for line in text.splitlines():
         norm = _name_fold(line)
         if not norm:
             continue
-        for folded in folded_to_side:
-            if norm == folded or (
-                norm.startswith(folded + " ")
-                and re.fullmatch(r"gan\w*(?:\s+\w+){0,3}", norm[len(folded) + 1 :])
-            ):
-                hits.add(folded)
-    if len(hits) == 1:
-        pick.seleccion = f"{folded_to_side[hits.pop()]} gana"
+        # Casilla del slip ("o Buvaysar Gadamauri 1.57"): el marcador
+        # queda como letra suelta delante del nombre — se prueba la
+        # línea con y sin ese prefijo de un token.
+        variants = [norm]
+        if re.match(r"^[a-z] ", norm):
+            variants.append(norm[2:])
+        for cand in variants:
+            for alias in alias_to_side:
+                if cand == alias:
+                    hits.add(alias)
+                    continue
+                # Verbo primero: "GANA SCHOOLKATE y +7,5 juegos" —
+                # el tipster titula al revés que el slip.
+                verb = re.match(r"gan\w* ", cand)
+                if verb and cand[verb.end() :].startswith(alias):
+                    strong.add(alias)
+                    continue
+                if not cand.startswith(alias + " "):
+                    continue
+                tail = cand[len(alias) + 1 :]
+                if tail.startswith("gan"):
+                    # "Daniel Rincon - Ganará el encuentro" /
+                    # "Moeller gana" / "Sporting gana y más de 2,5":
+                    # nombre pegado al mercado/verbo — pista fuerte.
+                    strong.add(alias)
+                    continue
+                price_match = re.match(r"(\d+) (\d{1,2})\b", tail)
+                if price_match is None:
+                    continue
+                # "Novak Djokovic 1.50 Ganará el encuentro": el slip
+                # pega la cuota SOLO al lado apostado — el perdedor
+                # aparece suelto en la cabecera del cruce. Pero una
+                # hora ("Milev 13:00" -> "13 00") también parece
+                # cuota: con pick.cuota solo vale el número que la
+                # iguala; sin ella, una cola que es hora pura no
+                # cuenta (los slips listan "Jugador HH:MM").
+                price = float(f"{price_match.group(1)}.{price_match.group(2)}")
+                if pick.cuota is not None:
+                    if abs(price - pick.cuota) <= 0.02:
+                        strong.add(alias)
+                elif not re.fullmatch(r"(?:[01]?\d|2[0-3]) [0-5]\d", tail):
+                    strong.add(alias)
+    winner = strong if len(strong) == 1 else hits if len(hits) == 1 else None
+    if winner is not None:
+        pick.seleccion = f"{alias_to_side[winner.pop()]} gana"
 
 
 def _normalize_pick(pick: ExtractedPick, text: str) -> ExtractedPick:
@@ -1361,15 +1418,98 @@ async def _llm_extract(
     return pick
 
 
+# Solo fechas largas inequívocas, con año explícito — el formato que
+# imprimen las casas en el boleto ("16 de septiembre de 2026, 19:00").
+_MESES_LARGO = {
+    "enero": 1,
+    "febrero": 2,
+    "marzo": 3,
+    "abril": 4,
+    "mayo": 5,
+    "junio": 6,
+    "julio": 7,
+    "agosto": 8,
+    "septiembre": 9,
+    "setiembre": 9,
+    "octubre": 10,
+    "noviembre": 11,
+    "diciembre": 12,
+}
+_SLIP_DATE_RE = re.compile(
+    r"\b(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|"
+    r"agosto|septiembre|setiembre|octubre|noviembre|diciembre)\s+de\s+"
+    r"(\d{4})\b(?:\s*[,·-]?\s*(\d{1,2}):(\d{2}))?",
+    re.IGNORECASE,
+)
+# Formato corto que también imprimen las casas ("24/8/26 19:30").
+_SLIP_DATE_SHORT_RE = re.compile(
+    r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b(?:\s*[,·-]?\s*(\d{1,2}):(\d{2}))?"
+)
+
+
+def slip_printed_date(text: Optional[str]) -> Optional[datetime]:
+    """Fecha del partido impresa en el boleto, o None.
+
+    Acepta el formato largo con año ("16 de septiembre de 2026, 19:00")
+    y el corto con barras ("24/8/26 19:30") — ambos inequívocos en slips
+    de casas españolas. Sin fecha impresa clara no se inventa nada.
+    """
+    if not text:
+        return None
+    match = _SLIP_DATE_RE.search(text)
+    if match:
+        day, month_name, year, hour, minute = match.groups()
+        try:
+            return datetime(
+                int(year),
+                _MESES_LARGO[month_name.lower()],
+                int(day),
+                int(hour or 0),
+                int(minute or 0),
+            )
+        except (ValueError, KeyError):
+            return None
+    short = _SLIP_DATE_SHORT_RE.search(text)
+    if not short:
+        return None
+    day, month, year, hour, minute = short.groups()
+    year_int = int(year)
+    if year_int < 100:
+        year_int += 2000
+    try:
+        return datetime(
+            year_int, int(month), int(day), int(hour or 0), int(minute or 0)
+        )
+    except ValueError:
+        return None
+
+
+def is_reposted_slip(text: Optional[str], received_at: Optional[datetime]) -> bool:
+    """True si la fecha del evento impresa en el slip es claramente
+    ANTERIOR a la del mensaje.
+
+    Una foto de boleto republicada días/semanas después del partido no
+    puede ser un pick abierto — es marketing de "verdes" que el dedup
+    de ±6 h no caza. Margen de >=2 días: un slip en vivo posteado pasada
+    la medianoche del partido (1 día de diferencia) sigue siendo pick.
+    """
+    if not text or received_at is None:
+        return False
+    slip_dt = slip_printed_date(text)
+    if slip_dt is None:
+        return False
+    return (received_at.date() - slip_dt.date()).days >= 2
+
+
 # Marcadores de boleto ya LIQUIDADO: el OCR de un slip liquidado lleva el
 # sello "GANADOR"/"GANADA" en mayúsculas (p. ej. fotos de "verdes" que el
 # tipster reposte a como prueba). No es una apuesta abierta aunque traiga
 # selección y cuota. Se busca sobre el texto original SIN pasar a
 # minúsculas para no confundir el sello con el mercado "ganador" de un
-# pick real.
+# pick real. "GANASTE <importe>" es el verbo de cobro que imprime bet365.
 _SETTLED_TICKET_PATTERN = re.compile(
     r"\bGANADOR\b|\bGANADA\b|\bGANAD[@OA]S\b|APUESTA\s+GANADA|\bWON\b"
-    r"|(?i:\breturned\b)"
+    r"|(?i:\breturned\b)|\bGANASTE\b"
 )
 
 # La casa solo imprime el marcador final junto a los equipos cuando el
@@ -1399,17 +1539,52 @@ _OPEN_SLIP_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Señales de slip ABIERTO que desmienten un sello alucinado por el OCR:
+# cash-out ("Cerrar apuesta"/"Cashout"), estado "En curso" o premio
+# "potenciales" solo existen en apuestas vivas (caso real raw 844).
+_OPEN_SLIP_UI = re.compile(
+    r"cerrar apuesta|cashout|en curso|ganancias\s+potenciales",
+    re.IGNORECASE,
+)
+
+# Veredicto por pata en la vista liquidada del bet-builder ("Crear
+# Apuesta"): cada selección lleva su "Gana"/"Pierde" en línea propia —
+# un slip abierto muestra ahí la cuota, nunca el resultado. >=2 marca
+# un boleto ya revisado aunque el sello se haya perdido en el OCR
+# (casos reales raws 19678/22171).
+_SETTLED_VERDICT_RE = re.compile(
+    r"^\s*(?:gana|ganada|pierde|perdida)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Pantalla "Mis apuestas" de bet365 (MYMATCH): pestañas de estado con
+# contadores ("En curso (2) Ganadas Finalizadas Ocultas (1)") — es el
+# HISTORIAL de un suscriptor republicado, no un pick abierto. Ojo:
+# "en curso" a secas es señal de slip VIVO (_OPEN_SLIP_UI); solo con
+# el contador "(N)" de pestaña es UI de historial (raw real #6498).
+_HISTORY_SCREEN_RE = re.compile(
+    r"\bmymatch\b"
+    r"|en curso\s*\(\s*\d+\s*\)"
+    r"|(?:ganadas|finalizadas|perdidas|ocultas)\s*\(\s*\d+\s*\)",
+    re.IGNORECASE,
+)
+
 
 def _is_settled_ticket(text: str) -> bool:
     """True si el texto parece un boleto YA liquidado/cobrado."""
-    # El botón "Cerrar apuesta" (cash-out) solo existe en apuestas VIVAS.
-    # Si el OCR estampa 'SELLO: GANADOR' pero el slip lo muestra, el
-    # sello es una alucinación del modelo — el texto de la UI manda.
-    if "SELLO: GANADOR" in text and re.search(r"cerrar apuesta", text, re.IGNORECASE):
+    # El cash-out, el estado "En curso" y el premio "potenciales" solo
+    # existen en apuestas VIVAS. Si el OCR estampa 'SELLO: GANADOR' pero
+    # el slip muestra cualquiera de ellas, el sello es una alucinación
+    # del modelo — el texto de la UI manda.
+    if "SELLO: GANADOR" in text and _OPEN_SLIP_UI.search(text):
         text = text.replace("SELLO: GANADOR", "", 1)
+    if _HISTORY_SCREEN_RE.search(text):
+        return True
     if _SETTLED_TICKET_PATTERN.search(text):
         return True
     if _SETTLED_SCORE_PATTERN.search(text):
+        return True
+    if len(_SETTLED_VERDICT_RE.findall(text)) >= 2:
         return True
     low = text.lower()
     # Historial de apuestas resueltas (WH "Mis apuestas" y similares):
@@ -1440,6 +1615,13 @@ def _is_settled_ticket(text: str) -> bool:
     if (
         _SETTLED_PAYOUT_PATTERN.search(text)
         and len(_SETTLED_CHECKMARKS.findall(text)) >= 2
+    ):
+        return True
+    # William Hill y similares: el slip liquidado cierra con "Retorno:
+    # € <importe>" y un identificador de apuesta. El boleto vivo muestra
+    # "Retorno potencial" o no imprime retorno (caso real raw 909).
+    if re.search(r"\bretorno\s*:", low) and re.search(
+        r"\bid\s+de\s+(?:la\s+)?apuesta\b", low
     ):
         return True
     return bool(_SETTLED_PAYOUT_PATTERN.search(text)) and not bool(
@@ -1494,6 +1676,27 @@ def _is_live_commentary(text: str) -> bool:
     return bool(_LIVE_COMMENTARY.search(text))
 
 
+# Marketing de urgencia para meter gente al premium ("perdiste la
+# ÚLTIMA PLAZA", "quedan 3 plazas", link de pago premiumpay...). No hay
+# apuesta que auditar: lo que las reglas extraen ("+ perdiste la
+# ÚLTIMA" como selección, cuota 121) es el anuncio masticado — caso
+# real: pick 10073.
+_PREMIUM_URGENCY = re.compile(
+    r"últim\w*\s+plazas?|"
+    r"quedan\s+\d+\s+plazas?|"
+    r"plazas?\s+(?:limitadas|agotadas)|"
+    r"premiumpay|"
+    r"(?:enlace|link)\s+de\s+pago|"
+    r"(?:entra|accede|únete|unete)\s+al\s+premium",
+    re.IGNORECASE,
+)
+
+
+def _is_premium_urgency(text: str) -> bool:
+    """True si el texto es marketing de urgencia del canal premium/VIP."""
+    return bool(_PREMIUM_URGENCY.search(text))
+
+
 async def extract_pick(
     text: str,
     api_key: str,
@@ -1511,6 +1714,16 @@ async def extract_pick(
             es_apuesta=False, informante=informante, metodo="rejected", confianza=0.95
         )
 
+    if is_reposted_slip(text, fecha_referencia):
+        return ExtractedPick(
+            es_apuesta=False, informante=informante, metodo="rejected", confianza=0.9
+        )
+
+    if _is_premium_urgency(text):
+        return ExtractedPick(
+            es_apuesta=False, informante=informante, metodo="rejected", confianza=0.9
+        )
+
     if _is_win_celebration(text):
         return ExtractedPick(
             es_apuesta=False, informante=informante, metodo="rejected", confianza=0.9
@@ -1522,9 +1735,10 @@ async def extract_pick(
         )
 
     # El OCR puede estampar 'SELLO: GANADOR' en slips vivos; cuando el
-    # detector lo vetó (cash-out presente en el texto), la línea tampoco
-    # debe llegar al LLM o la seguirá al pie de la letra.
-    if "SELLO: GANADOR" in text and re.search(r"cerrar apuesta", text, re.IGNORECASE):
+    # detector lo vetó (cash-out/"En curso"/premio potencial presente),
+    # la línea tampoco debe llegar al LLM o la seguirá al pie de la
+    # letra.
+    if "SELLO: GANADOR" in text and _OPEN_SLIP_UI.search(text):
         text = text.replace("SELLO: GANADOR", "", 1)
 
     if not _looks_like_bet(text):
