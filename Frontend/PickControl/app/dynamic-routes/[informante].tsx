@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { colors } from "@/src/theme";
+import { colors, metricColor } from "@/src/theme";
 import {
   View,
   Text,
@@ -30,12 +30,11 @@ import {
 import { ApiError } from "@/src/api/client";
 import { InformanteStats } from "@/src/types/informante.types";
 import { PickItem, Acierto } from "@/src/types/pick.types";
-
-function colorForYield(value: number): string {
-  if (value > 0) return "#4caf50";
-  if (value < 0) return colors.danger;
-  return "#aaa";
-}
+import {
+  gananciaApuesta,
+  iconoAnulada,
+} from "@/src/utils/picks";
+import { formatDateShort } from "@/src/utils/format";
 
 export default function InformantDetail() {
   const { informante } = useLocalSearchParams(); // Obtener el parámetro dinámico
@@ -200,24 +199,6 @@ export default function InformantDetail() {
     apuestas: apuestasData,
   } = data;
 
-  // Función para calcular las ganancias de cada apuesta (en euros)
-  const calcularGanancia = (
-    cantidadApostada: number | null,
-    cuota: number | null,
-    acierto: Acierto
-  ) => {
-    if (!apuestas || apuestas.length === 0) {
-      return 0; // Devolvemos número en lugar de string
-    }
-    if (acierto === "Pending" || cantidadApostada == null || cuota == null) {
-      return 0;
-    }
-    if (acierto === "True") {
-      return Number((cantidadApostada * (cuota - 1)).toFixed(2)); // Convertimos a número
-    }
-    return Number((-cantidadApostada).toFixed(2)); // Convertimos a número
-  };
-
   // Función para calcular las ganancias acumuladas
   const calcularGananciaAcumulada = (apuestas: PickItem[]) => {
     if (!apuestas || apuestas.length === 0) {
@@ -225,7 +206,7 @@ export default function InformantDetail() {
     }
     let acumulado = 0;
     return apuestas.map((apuesta) => {
-      const ganancia = calcularGanancia(
+      const ganancia = gananciaApuesta(
         apuesta.cantidadApostada,
         apuesta.cuota,
         apuesta.acierto
@@ -264,17 +245,6 @@ export default function InformantDetail() {
   // distingue el motivo cuando consta: ↩️ push (devuelta por línea
   // entera), 📅 aplazado/cancelado, 👤 jugador sin minutos, ⏰
   // expirada por barrido; ⊘ genérico en históricas sin motivo.
-  const iconoAnulada = (motivo?: string | null): string =>
-    motivo === "push"
-      ? "↩️"
-      : motivo === "aplazado"
-        ? "📅"
-        : motivo === "jugador_fuera"
-          ? "👤"
-          : motivo === "expired"
-            ? "⏰"
-            : "⊘";
-
   const renderPronosticoTelegram = (
     acierto: Acierto,
     anulada?: boolean,
@@ -307,7 +277,7 @@ export default function InformantDetail() {
     const total = apuestas.reduce((acc, apuesta) => {
       return (
         acc +
-        calcularGanancia(
+        gananciaApuesta(
           apuesta.cantidadApostada,
           apuesta.cuota,
           apuesta.acierto
@@ -318,7 +288,7 @@ export default function InformantDetail() {
   };
 
   const totalGananciasNum = apuestas.reduce(
-    (acc, a) => acc + calcularGanancia(a.cantidadApostada, a.cuota, a.acierto),
+    (acc, a) => acc + gananciaApuesta(a.cantidadApostada, a.cuota, a.acierto),
     0
   );
 
@@ -365,15 +335,6 @@ export default function InformantDetail() {
     }
   };
 
-  // Función para formatear la fecha según el período
-  const formatearFecha = (fecha: string | Date) => {
-    const date = new Date(fecha);
-    const dia = date.getDate().toString().padStart(2, "0");
-    const mes = (date.getMonth() + 1).toString().padStart(2, "0");
-    const año = date.getFullYear().toString().slice(-2);
-    return `${dia}/${mes}/${año}`;
-  };
-
   // Función para agrupar datos por mes si es necesario
   const agruparDatos = (apuestas: PickItem[]) => {
     if (periodoSeleccionado === "año") {
@@ -391,7 +352,7 @@ export default function InformantDetail() {
           };
         }
         datosPorMes[mes].ganancias.push(
-          calcularGanancia(
+          gananciaApuesta(
             apuesta.cantidadApostada,
             apuesta.cuota,
             apuesta.acierto
@@ -581,7 +542,7 @@ export default function InformantDetail() {
               <Text
                 style={[
                   styles.compareValue,
-                  { color: colorForYield(data.parsedYieldPct) },
+                  { color: metricColor(data.parsedYieldPct) },
                 ]}
               >
                 {data.parsedTotalApuestas > 0
@@ -591,7 +552,7 @@ export default function InformantDetail() {
               <Text
                 style={[
                   styles.compareValue,
-                  { color: colorForYield(data.yieldPct) },
+                  { color: metricColor(data.yieldPct) },
                 ]}
               >
                 {totalApuestas > 0 ? `${data.yieldPct.toFixed(2)}%` : "—"}
@@ -633,7 +594,7 @@ export default function InformantDetail() {
               <Text
                 style={[
                   styles.compareValue,
-                  { color: colorForYield(data.parsedGanancias) },
+                  { color: metricColor(data.parsedGanancias) },
                 ]}
               >
                 {data.parsedTotalApuestas > 0
@@ -643,7 +604,7 @@ export default function InformantDetail() {
               <Text
                 style={[
                   styles.compareValue,
-                  { color: colorForYield(totalGananciasNum) },
+                  { color: metricColor(totalGananciasNum) },
                 ]}
               >
                 {totalApuestas > 0 ? `${totalGananciasNum.toFixed(2)}€` : "—"}
@@ -826,7 +787,7 @@ export default function InformantDetail() {
                           <Text
                             style={[styles.cellText, { fontWeight: "bold" }]}
                           >
-                            {formatearFecha(apuesta.fecha)}
+                            {formatDateShort(apuesta.fecha)}
                           </Text>
                         </View>
                         <View style={[styles.tableCell, styles.border]}>
@@ -860,7 +821,7 @@ export default function InformantDetail() {
                           >
                             {Number(
                               apuesta.ganancia ??
-                                calcularGanancia(
+                                gananciaApuesta(
                                   apuesta.cantidadApostada,
                                   apuesta.cuota,
                                   apuesta.acierto
@@ -896,7 +857,7 @@ export default function InformantDetail() {
                         {reto.evento ? ` · ${reto.evento}` : ""}
                       </Text>
                       <Text style={styles.retoMeta}>
-                        {formatearFecha(reto.fecha)} · cuota{" "}
+                        {formatDateShort(reto.fecha)} · cuota{" "}
                         {reto.cuota != null
                           ? Number(reto.cuota).toFixed(2)
                           : "—"}{" "}
@@ -947,7 +908,7 @@ export default function InformantDetail() {
                               {comb.evento ? ` · ${comb.evento}` : ""}
                             </Text>
                             <Text style={styles.retoMeta}>
-                              {formatearFecha(comb.fecha)} · cuota{" "}
+                              {formatDateShort(comb.fecha)} · cuota{" "}
                               {Number(comb.cuotaEfectiva ?? comb.cuota).toFixed(
                                 2
                               )}
@@ -1161,7 +1122,7 @@ export default function InformantDetail() {
                           <Text
                             style={[styles.cellText, { fontWeight: "bold" }]}
                           >
-                            {formatearFecha(apuesta.fecha)}
+                            {formatDateShort(apuesta.fecha)}
                           </Text>
                           <MaterialCommunityIcons
                             name="calendar-edit"
@@ -1194,7 +1155,7 @@ export default function InformantDetail() {
                       <View style={[styles.tableCell, styles.border]}>
                         <Text style={[styles.cellText, { fontWeight: "bold" }]}>
                           {Number(
-                            calcularGanancia(
+                            gananciaApuesta(
                               apuesta.cantidadApostada,
                               apuesta.cuota,
                               apuesta.acierto
@@ -1323,7 +1284,7 @@ export default function InformantDetail() {
                       u
                     </Text>
                     <Text style={styles.detailRow}>
-                      Fecha: {formatearFecha(selectedTelegramPick.fecha)}
+                      Fecha: {formatDateShort(selectedTelegramPick.fecha)}
                     </Text>
                     {selectedTelegramPick.casa ? (
                       <Text style={styles.detailRow}>

@@ -16,12 +16,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { listInformantes } from "@/src/api/informantes.api";
 import { InformanteSummary } from "@/src/types/informante.types";
 import DonutChart from "@/src/components/donut-chart";
-
-function colorForYield(yieldPct: number): string {
-  if (yieldPct > 0) return "#4caf50";
-  if (yieldPct < 0) return "#f44336";
-  return "#aaa";
-}
+import { metricColor } from "@/src/theme";
 
 const Main = () => {
   const [tipsters, setTipsters] = useState<InformanteSummary[]>([]);
@@ -226,7 +221,7 @@ const Main = () => {
                   <Text style={styles.name}>{t.informante}</Text>
                 </View>
                 <Text
-                  style={[styles.yield, { color: colorForYield(t.yieldPct) }]}
+                  style={[styles.yield, { color: metricColor(t.yieldPct) }]}
                 >
                   {t.yieldPct.toFixed(2)}% yield
                 </Text>
@@ -261,7 +256,7 @@ const Main = () => {
                   <Text
                     style={[
                       styles.value,
-                      { color: colorForYield(t.ganancias) },
+                      { color: metricColor(t.ganancias) },
                     ]}
                   >
                     {t.ganancias.toFixed(2)}u

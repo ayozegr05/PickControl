@@ -6,6 +6,10 @@ import LottieView from "lottie-react-native";
 import TopBar from "@/src/components/top-bar";
 import { listPicks } from "@/src/api/picks.api";
 import { PickItem } from "@/src/types/pick.types";
+import {
+  gananciasPor,
+  totalGanancias as sumarGanancias,
+} from "@/src/utils/picks";
 
 const GananciasPage = () => {
   const [apuestas, setApuestas] = useState<PickItem[]>([]);
@@ -32,9 +36,9 @@ const GananciasPage = () => {
       const picks = await listPicks();
 
       // Procesar todos los datos antes de actualizar estados
-      const ganancias = calcularTotalGanancias(picks);
-      const porInformante = calcularGananciasInformante(picks);
-      const porBookmaker = calcularGananciasBookmaker(picks);
+      const ganancias = sumarGanancias(picks);
+      const porInformante = gananciasPor(picks, "informante");
+      const porBookmaker = gananciasPor(picks, "casa");
 
       // Actualizar todos los estados juntos
       setApuestas(picks);
@@ -56,35 +60,6 @@ const GananciasPage = () => {
       setIsLoading(false);
       setDataLoaded(true);
     }
-  };
-
-  const calcularGananciasInformante = (apuestas: PickItem[]) => {
-    const ganancias: Record<string, number> = {};
-    apuestas.forEach((apuesta) => {
-      if (!ganancias[apuesta.informante]) {
-        ganancias[apuesta.informante] = 0;
-      }
-      ganancias[apuesta.informante] += apuesta.ganancia ?? 0;
-    });
-    return ganancias;
-  };
-
-  const calcularGananciasBookmaker = (apuestas: PickItem[]) => {
-    const ganancias: Record<string, number> = {};
-    apuestas.forEach((apuesta) => {
-      if (!ganancias[apuesta.casa]) {
-        ganancias[apuesta.casa] = 0;
-      }
-      ganancias[apuesta.casa] += apuesta.ganancia ?? 0;
-    });
-    return ganancias;
-  };
-
-  const calcularTotalGanancias = (apuestas: PickItem[]) => {
-    return apuestas.reduce(
-      (total, apuesta) => total + (apuesta.ganancia ?? 0),
-      0
-    );
   };
 
   useEffect(() => {

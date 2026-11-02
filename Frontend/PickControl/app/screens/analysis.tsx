@@ -13,6 +13,12 @@ import TopBar from "@/src/components/top-bar";
 import { MaterialIcons } from "@expo/vector-icons";
 import LottieView from "lottie-react-native";
 import { listPicks } from "@/src/api/picks.api";
+import {
+  EstadisticaInput,
+  calcularEstadisticas as statsDeApuestas,
+  calcularProyeccion as proyeccionDe,
+  nivelRiesgo,
+} from "@/src/utils/picks";
 
 interface Apuesta {
   Fecha: string;
@@ -89,121 +95,25 @@ export default function Analysis() {
     }
   };
 
-  const calcularGanancia = (
-    cantidad: number,
-    cuota: number,
-    acierto: boolean
-  ) => {
-    return acierto ? cantidad * (cuota - 1) : -cantidad;
-  };
+  // Adaptador: la pantalla usa `Apuesta` (campos en mayúscula, solo
+  // liquidadas); los utils operan con `EstadisticaInput` (camelCase).
+  const toInput = (a: Apuesta): EstadisticaInput => ({
+    cantidad: a.CantidadApostada,
+    cuota: a.Cuota,
+    acierto: a.Acierto,
+  });
 
-  const calcularEstadisticas = (informante: string) => {
-    // Filtrar apuestas del informante y excluir las pendientes
-    const apuestasInformante = apuestas.filter(
-      (a) => a.Informante === informante
+  const calcularEstadisticas = (informante: string) =>
+    statsDeApuestas(
+      apuestas.filter((a) => a.Informante === informante).map(toInput)
     );
-    const apuestasRecientes = apuestasInformante.slice(-30); // Último mes
 
-    if (apuestasRecientes.length === 0) return null;
-
-    const totalApuestas = apuestasRecientes.length;
-    const aciertos = apuestasRecientes.filter((a) => a.Acierto).length;
-    const porcentajeAciertos = (aciertos / totalApuestas) * 100;
-
-    // Calcular ROI
-    const inversionTotal = apuestasRecientes.reduce(
-      (sum, a) => sum + a.CantidadApostada,
-      0
+  const calcularProyeccion = (informante: string) =>
+    proyeccionDe(
+      apuestas.filter((a) => a.Informante === informante).map(toInput),
+      Number(inversionDiaria) || 10,
+      Number(apuestasPorDia) || 1
     );
-    const gananciasTotal = apuestasRecientes.reduce(
-      (sum, a) =>
-        sum + calcularGanancia(a.CantidadApostada, a.Cuota, a.Acierto),
-      0
-    );
-    const roi = (gananciasTotal / inversionTotal) * 100;
-
-    // Calcular tendencia
-    const apuestas2Semanas = apuestasRecientes.slice(-14);
-    const apuestas2SemanasAnteriores = apuestasRecientes.slice(-28, -14);
-    const roi2Semanas = calcularROI(apuestas2Semanas);
-    const roiAnterior = calcularROI(apuestas2SemanasAnteriores);
-    const tendencia = roi2Semanas - roiAnterior;
-
-    return {
-      porcentajeAciertos,
-      roi,
-      tendencia,
-      apuestasDiarias: totalApuestas / 30,
-      totalApuestas,
-      aciertos,
-    };
-  };
-
-  const calcularROI = (apuestas: Apuesta[]) => {
-    const inversion = apuestas.reduce((sum, a) => sum + a.CantidadApostada, 0);
-    const ganancias = apuestas.reduce(
-      (sum, a) =>
-        sum + calcularGanancia(a.CantidadApostada, a.Cuota, a.Acierto),
-      0
-    );
-    return inversion > 0 ? (ganancias / inversion) * 100 : 0;
-  };
-
-  const calcularProyeccion = (informante: string) => {
-    // Filtrar apuestas del informante y excluir las pendientes
-    const apuestasInformante = apuestas.filter(
-      (a) => a.Informante === informante
-    );
-    const apuestasRecientes = apuestasInformante.slice(-30);
-
-    // Calcular porcentaje de aciertos
-    const totalApuestas = apuestasRecientes.length;
-    const aciertos = apuestasRecientes.filter((a) => a.Acierto).length;
-    const porcentajeAciertos =
-      totalApuestas > 0 ? (aciertos / totalApuestas) * 100 : 0;
-
-    // Calcular cuota media
-    const cuotaMedia =
-      apuestasRecientes.reduce((sum, a) => sum + a.Cuota, 0) / totalApuestas;
-
-    // Cálculos de proyección mensual
-    const numApuestasDiarias = Number(apuestasPorDia) || 1;
-    const inversionPorApuesta = Number(inversionDiaria) || 10;
-    const diasMes = 30;
-
-    // Inversión mensual total
-    const inversionMensual = inversionPorApuesta * numApuestasDiarias * diasMes;
-
-    // Ganancia proyectada considerando cuota media y % aciertos
-    const apuestasMensuales = numApuestasDiarias * diasMes;
-    const apuestasGanadoras = apuestasMensuales * (porcentajeAciertos / 100);
-    const apuestasPerdidas = apuestasMensuales - apuestasGanadoras;
-
-    const gananciaProyectada =
-      apuestasGanadoras * inversionPorApuesta * cuotaMedia -
-      apuestasMensuales * inversionPorApuesta;
-
-    return {
-      inversionMensual,
-      gananciaProyectada,
-      porcentajeAciertos,
-      cuotaMedia,
-    };
-  };
-
-  const calcularNivelRiesgo = (stats: any) => {
-    if (
-      stats.porcentajeAciertos > 65 &&
-      stats.roi > 15 &&
-      stats.tendencia >= 0
-    ) {
-      return "BAJO";
-    } else if (stats.porcentajeAciertos > 50 && stats.roi > 5) {
-      return "MEDIO";
-    } else {
-      return "ALTO";
-    }
-  };
 
   return (
     <View
@@ -372,16 +282,16 @@ export default function Analysis() {
                         styles.riskBadge,
                         {
                           backgroundColor:
-                            calcularNivelRiesgo(stats) === "BAJO"
+                            nivelRiesgo(stats) === "BAJO"
                               ? "#4CAF50"
-                              : calcularNivelRiesgo(stats) === "MEDIO"
+                              : nivelRiesgo(stats) === "MEDIO"
                                 ? "#FFC107"
                                 : "#F44336",
                         },
                       ]}
                     >
                       <Text style={styles.riskText}>
-                        Riesgo: {calcularNivelRiesgo(stats)}
+                        Riesgo: {nivelRiesgo(stats)}
                       </Text>
                     </View>
                   </View>

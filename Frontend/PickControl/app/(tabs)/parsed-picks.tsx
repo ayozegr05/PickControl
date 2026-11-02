@@ -26,41 +26,13 @@ import {
   PicksStatus,
 } from "@/src/api/system.api";
 import { useAuth } from "@/src/context/AuthContext";
+import {
+  formatDateTime as formatDate,
+  cleanChannel,
+} from "@/src/utils/format";
 
 const OVERVIEW_PER_CHANNEL = 2;
 const CHANNEL_PAGE_SIZE = 20;
-
-function formatDate(isoDate: string): string {
-  const date = new Date(isoDate);
-  if (isNaN(date.getTime())) return isoDate;
-  return date.toLocaleString("es-ES", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function cleanChannel(name: string | null): string {
-  if (!name) return "desconocido";
-  // Los canales se llaman p. ej. "Dm7 || GRATUITO || ⚡️": quedarse solo
-  // con el primer segmento haría que "Dm7 || Allsports ||" y
-  // "Dm7 || GRATUITO ||" se vieran ambos como "Dm7". Unimos todos los
-  // segmentos con texto para que cada canal tenga un nombre distinto.
-  return (
-    name
-      .split("|")
-      .map((part) =>
-        part
-          .replace(/[^\p{L}\p{N}\s]/gu, " ")
-          .replace(/\s+/g, " ")
-          .trim()
-      )
-      .filter(Boolean)
-      .join(" ") || "desconocido"
-  );
-}
 
 type ChannelGroup = {
   key: string;

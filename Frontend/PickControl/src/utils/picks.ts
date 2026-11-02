@@ -13,7 +13,7 @@ import { Acierto, PickItem } from "@/src/types/pick.types";
  * Nota: la versión original también devolvía 0 si `apuestas` de la
  * pantalla estaba vacía (closure sobre el estado del componente) —
  * condición inalcanzable en la práctica, eliminada en la extracción. */
-export function calcularGanancia(
+export function gananciaApuesta(
   cantidadApostada: number | null,
   cuota: number | null,
   acierto: Acierto

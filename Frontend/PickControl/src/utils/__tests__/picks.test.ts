@@ -3,7 +3,7 @@
 // analysis y earns antes de unificarlas (Fase A del refactor).
 import { PickItem } from "@/src/types/pick.types";
 import {
-  calcularGanancia,
+  gananciaApuesta,
   gananciaNeta,
   calcularROI,
   calcularEstadisticas,
@@ -39,29 +39,29 @@ const pick = (over: Partial<PickItem>): PickItem =>
     ...over,
   }) as PickItem;
 
-describe("calcularGanancia (variante picks, Acierto + redondeo)", () => {
+describe("gananciaApuesta (variante [informante], Acierto + redondeo)", () => {
   it("acierto → cantidad*(cuota-1)", () => {
-    expect(calcularGanancia(10, 2, "True")).toBe(10);
-    expect(calcularGanancia(5, 1.5, "True")).toBe(2.5);
+    expect(gananciaApuesta(10, 2, "True")).toBe(10);
+    expect(gananciaApuesta(5, 1.5, "True")).toBe(2.5);
   });
 
   it("fallo → -cantidad", () => {
-    expect(calcularGanancia(10, 2, "False")).toBe(-10);
+    expect(gananciaApuesta(10, 2, "False")).toBe(-10);
   });
 
   it("pendiente → 0", () => {
-    expect(calcularGanancia(10, 2, "Pending")).toBe(0);
+    expect(gananciaApuesta(10, 2, "Pending")).toBe(0);
   });
 
   it("cantidad o cuota null → 0 (picks de Telegram sin datos)", () => {
-    expect(calcularGanancia(null, 2, "True")).toBe(0);
-    expect(calcularGanancia(10, null, "True")).toBe(0);
+    expect(gananciaApuesta(null, 2, "True")).toBe(0);
+    expect(gananciaApuesta(10, null, "True")).toBe(0);
   });
 
   it("redondea a 2 decimales (como [informante])", () => {
     // 3.33 * (1.7-1) = 2.331 → 2.33; 3.33 * 1.5 = 4.995 → 5
-    expect(calcularGanancia(3.33, 1.7, "True")).toBe(2.33);
-    expect(calcularGanancia(3.33, 2.5, "True")).toBe(5);
+    expect(gananciaApuesta(3.33, 1.7, "True")).toBe(2.33);
+    expect(gananciaApuesta(3.33, 2.5, "True")).toBe(5);
     // La variante analysis NO redondea: 3.33*1.5 = 4.995 crudo
     expect(gananciaNeta(3.33, 2.5, true)).toBeCloseTo(4.995);
   });

@@ -18,27 +18,8 @@ import {
   StatsBloque,
   OddsBloque,
 } from "@/src/api/analisis.api";
-
-function yieldColor(y: number): string {
-  if (y > 0) return "#4caf50";
-  if (y < 0) return "#f44336";
-  return "#aaa";
-}
-
-function cleanChannel(name: string): string {
-  return (
-    name
-      .split("|")
-      .map((part) =>
-        part
-          .replace(/[^\p{L}\p{N}\s]/gu, " ")
-          .replace(/\s+/g, " ")
-          .trim()
-      )
-      .filter(Boolean)
-      .join(" ") || "desconocido"
-  );
-}
+import { metricColor } from "@/src/theme";
+import { cleanChannel } from "@/src/utils/format";
 
 function StatsLine({ label, stats }: { label: string; stats: StatsBloque }) {
   return (
@@ -48,7 +29,7 @@ function StatsLine({ label, stats }: { label: string; stats: StatsBloque }) {
         {stats.aciertos}/{stats.total - stats.pendientes} aciertos ·{" "}
         {stats.ganancias.toFixed(2)}u ·{" "}
         <Text
-          style={{ color: yieldColor(stats.yield_pct), fontWeight: "bold" }}
+          style={{ color: metricColor(stats.yield_pct), fontWeight: "bold" }}
         >
           yield {stats.yield_pct.toFixed(1)}%
         </Text>
@@ -68,7 +49,7 @@ function OddsLine({ odds }: { odds: OddsBloque }) {
         <>
           {" · "}
           <Text
-            style={{ color: yieldColor(odds.clv_medio), fontWeight: "bold" }}
+            style={{ color: metricColor(odds.clv_medio), fontWeight: "bold" }}
           >
             CLV {odds.clv_medio > 0 ? "+" : ""}
             {odds.clv_medio.toFixed(1)}%
