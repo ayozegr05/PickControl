@@ -12,8 +12,17 @@ export type InformantesData = {
   reload: () => Promise<void>;
 };
 
+// Igual que EMPTY_PICKS en usePicks: referencia estable mientras no
+// hay data para no buclear effects dependientes en las pantallas.
+const EMPTY_INFORMANTES: InformanteSummary[] = [];
+
 export function useInformantes(enabled = true): InformantesData {
   const fetcher = useCallback(() => listInformantes(), []);
   const { data, loading, error, reload } = useApiData(fetcher, enabled);
-  return { informantes: data ?? [], loading, error, reload };
+  return {
+    informantes: data ?? EMPTY_INFORMANTES,
+    loading,
+    error,
+    reload,
+  };
 }

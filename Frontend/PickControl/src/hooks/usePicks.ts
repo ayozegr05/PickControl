@@ -13,8 +13,13 @@ export type PicksData = {
   reload: () => Promise<void>;
 };
 
+// Referencia estable mientras data es null — `[]` inline crearía un
+// array nuevo por render y haría buclear los useEffect([apuestas])
+// de las pantallas (detectado por el smoke test de my-picks).
+const EMPTY_PICKS: PickItem[] = [];
+
 export function usePicks(enabled = true): PicksData {
   const fetcher = useCallback(() => listPicks(), []);
   const { data, loading, error, reload } = useApiData(fetcher, enabled);
-  return { apuestas: data ?? [], loading, error, reload };
+  return { apuestas: data ?? EMPTY_PICKS, loading, error, reload };
 }

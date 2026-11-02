@@ -66,6 +66,17 @@ describe("usePicks", () => {
     expect(result.current.apuestas).toHaveLength(2);
   });
 
+  it("apuestas es referencia estable mientras data es null (sin bucles de effect)", async () => {
+    // Regresión: `data ?? []` creaba un array nuevo por render y las
+    // pantallas con useEffect([apuestas]) entraban en loop infinito.
+    mockListPicks.mockReturnValue(new Promise(() => {}));
+    const { result, rerender } = await renderHook(() => usePicks());
+
+    const first = result.current.apuestas;
+    await rerender({});
+    expect(result.current.apuestas).toBe(first);
+  });
+
   it("un error posterior no borra el mensaje tras reload exitoso", async () => {
     mockListPicks.mockRejectedValueOnce(new Error("fallo"));
     const { result } = await renderHook(() => usePicks());
