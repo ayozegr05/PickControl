@@ -70,8 +70,10 @@ _PARAMS = "appTypeId=5&langId=1&timezoneName=Europe/Madrid&userCountryId=1"
 # Primera página del feed (últimos ~2 días); el histórico se alcanza
 # siguiendo `paging.previousPage` hacia atrás.
 _RESULTS = f"{_BASE}/games/results/?{_PARAMS}"
-# Deporte canónico -> sportId de 365scores (verificado en vivo).
-_SPORT_IDS = {"futbol": 1, "baloncesto": 2, "tenis": 3}
+# Deporte canónico -> sportId de 365scores (verificado en vivo:
+# 4 = hockey sobre hielo — NHL, KHL y ligas europeas en el mismo
+# feed diario paginado).
+_SPORT_IDS = {"futbol": 1, "baloncesto": 2, "tenis": 3, "hockey": 4}
 # El pick puede llevar la fecha de publicación, no la del partido.
 _DATE_TOLERANCE = timedelta(days=1)
 # Tope de páginas hacia atrás por búsqueda (~días de antigüedad).

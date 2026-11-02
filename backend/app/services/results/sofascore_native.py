@@ -92,7 +92,12 @@ from app.services.results.tennisapi1 import (
 logger = get_logger("app.results.sofascore_native")
 
 _BASE = "https://www.sofascore.com"
-_SPORT_SLUGS = {"tenis": "tennis", "futbol": "football", "baloncesto": "basketball"}
+_SPORT_SLUGS = {
+    "tenis": "tennis",
+    "futbol": "football",
+    "baloncesto": "basketball",
+    "hockey": "ice-hockey",
+}
 _DATE_TOLERANCE = timedelta(days=1)
 # Páginas de events/last (~30 eventos cada una) — igual que allsports.
 _MAX_PAGES = 2

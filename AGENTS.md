@@ -58,6 +58,11 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     respaldo: su conteo por `competitors[].status.$ref` puede
     desviarse del oficial (Baku 2025: 15 ESPN vs 19 FIA). Al final de
     la cascada,
+    Hockey (`nhl.py`): api-web.nhle.com `/v1/score/{día}` — API
+    pública oficial de nhl.com, gratis sin key; solo NHL. Detrás va
+    `Scores365Provider("hockey")` (sportId 4: NHL+KHL+ligas EU en el
+    feed diario) y los mirrors Sofascore con slug `ice-hockey`.
+    Al final de la cascada,
     `gemini_research.py` (Gemini, free tier): salto 1 = DDG Lite por
     fetch propio (cae a FlareSolverr ante challenge) + parseo de
     enlaces — `url_context` solo queda como plan B cuando la página de

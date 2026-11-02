@@ -475,3 +475,122 @@ class TestMaterialBasuraCandidato:
         await session.commit()
 
         assert 962 in await find_repair_candidates(session)
+
+
+class TestBrokenExtractionSignals:
+    async def test_pick_simple_sin_evento_ni_deporte_es_candidato(self, session):
+        """ "Menos de 12 córners ESPAÑA": la regla sacó mercado+cuota pero
+        el cruce vive en la prosa — evento/deporte a None = reparable."""
+        from app.models.parsed_pick import ParsedPick
+        from app.models.telegram_raw_message import TelegramRawMessage
+        from app.services.maintenance.repair import find_repair_candidates
+
+        raw = TelegramRawMessage(
+            id=970,
+            channel_id=-1001,
+            message_id=70,
+            channel_name="c",
+            text="Menos de 12.0 corners ESPAÑA CUOTA 1.50 STAKE 4",
+        )
+        pick = ParsedPick(
+            id=970,
+            raw_message_id=970,
+            es_apuesta=True,
+            acierto=None,
+            anulada=False,
+            deporte=None,
+            evento=None,
+            seleccion="Menos de 12.0 corners",
+        )
+        session.add_all([raw, pick])
+        await session.commit()
+
+        assert 970 in await find_repair_candidates(session)
+
+    async def test_evento_prosa_es_candidato(self, session):
+        """El extractor cortó el "evento" del párrafo narrativo."""
+        from app.models.parsed_pick import ParsedPick
+        from app.models.telegram_raw_message import TelegramRawMessage
+        from app.services.maintenance.repair import find_repair_candidates
+
+        raw = TelegramRawMessage(
+            id=971,
+            channel_id=-1001,
+            message_id=71,
+            channel_name="c",
+            text="Baloncesto Champions Nanterre Handicap -1.5 cuota 1.50",
+        )
+        pick = ParsedPick(
+            id=971,
+            raw_message_id=971,
+            es_apuesta=True,
+            acierto=None,
+            anulada=False,
+            deporte="fútbol",
+            evento=(
+                "Nanterre vs a salir a pista con una mentalidad "
+                "completamente agresiva dispuesto a imponer su superioridad"
+            ),
+            seleccion="Nanterre Handicap -1.5",
+        )
+        session.add_all([raw, pick])
+        await session.commit()
+
+        assert 971 in await find_repair_candidates(session)
+
+    async def test_emoji_deporte_contradictorio_es_candidato(self, session):
+        """Header 🎾 ATP PARIS guardado como fútbol: el emoji del texto
+        desmiente el deporte almacenado — reparable."""
+        from app.models.parsed_pick import ParsedPick
+        from app.models.telegram_raw_message import TelegramRawMessage
+        from app.services.maintenance.repair import find_repair_candidates
+
+        raw = TelegramRawMessage(
+            id=972,
+            channel_id=-1001,
+            message_id=72,
+            channel_name="c",
+            text="🎾 ATP PARIS MÁS DE 9.5 JUEGOS EN EL PRIMER SET STAKE 3",
+        )
+        pick = ParsedPick(
+            id=972,
+            raw_message_id=972,
+            es_apuesta=True,
+            acierto=None,
+            anulada=False,
+            deporte="fútbol",
+            evento="Rune - Cerundolo",
+            seleccion="Más de 9.5 juegos en el primer set",
+        )
+        session.add_all([raw, pick])
+        await session.commit()
+
+        assert 972 in await find_repair_candidates(session)
+
+    async def test_emoji_deporte_coincidente_no_es_candidato(self, session):
+        """⚽ con deporte=fútbol no contradice — el pick sano no se toca."""
+        from app.models.parsed_pick import ParsedPick
+        from app.models.telegram_raw_message import TelegramRawMessage
+        from app.services.maintenance.repair import find_repair_candidates
+
+        raw = TelegramRawMessage(
+            id=973,
+            channel_id=-1001,
+            message_id=73,
+            channel_name="c",
+            text="⚽ LALIGA Getafe gana CUOTA 1.80 STAKE 3",
+        )
+        pick = ParsedPick(
+            id=973,
+            raw_message_id=973,
+            es_apuesta=True,
+            acierto=None,
+            anulada=False,
+            deporte="fútbol",
+            evento="Getafe - Elche",
+            seleccion="Getafe gana",
+        )
+        session.add_all([raw, pick])
+        await session.commit()
+
+        assert 973 not in await find_repair_candidates(session)

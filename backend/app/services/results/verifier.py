@@ -74,6 +74,7 @@ from app.services.results.football24h import Football24hProvider
 from app.services.results.football_data import FootballDataProvider
 from app.services.results.gemini_research import GeminiResearchProvider
 from app.services.results.jolpica_f1 import JolpicaF1Provider
+from app.services.results.nhl import NhlProvider
 from app.services.results.rapidapi_tennis import RapidApiTennisProvider
 from app.services.results.scores365 import Scores365Provider
 from app.services.results.sofascore_basketball import SofascoreBasketballProvider
@@ -136,6 +137,12 @@ _SPORT_ALIASES = {
     "fórmula1": "automovilismo",
     "formula uno": "automovilismo",
     "f1": "automovilismo",
+    "hockey": "hockey",
+    "hockey hielo": "hockey",
+    "hockey sobre hielo": "hockey",
+    "ice hockey": "hockey",
+    "nhl": "hockey",
+    "khl": "hockey",
 }
 
 # Edad máxima del evento para seguir intentando la verificación
@@ -1685,6 +1692,12 @@ async def _get_providers() -> list[ResultsProvider]:
     # clasificación oficial marca 19).
     providers.append(JolpicaF1Provider())
     providers.append(EspnF1Provider())
+    # Hockey: API pública oficial de la NHL primero — gratis, sin key
+    # ni Cloudflare. Solo cubre NHL; detrás va 365scores (KHL y ligas
+    # europeas en el mismo feed diario) y al final los mirrors
+    # Sofascore con slug ice-hockey.
+    providers.append(NhlProvider())
+    providers.append(Scores365Provider("hockey"))
     # 365scores para basket: mismo feed por día, sin cuota — antes de
     # API-Basketball (cuota propia) y los mirrors.
     providers.append(Scores365Provider("baloncesto"))
@@ -1713,7 +1726,7 @@ async def _get_providers() -> list[ResultsProvider]:
     if getattr(settings, "rapidapi_sportapi7_enabled", False) and (
         settings.rapidapi_tennis_key
     ):
-        for sport in ("futbol", "tenis", "baloncesto"):
+        for sport in ("futbol", "tenis", "baloncesto", "hockey"):
             providers.append(
                 SofaScoreNativeResultsProvider(
                     rapidapi_transport(
@@ -1727,7 +1740,7 @@ async def _get_providers() -> list[ResultsProvider]:
     if getattr(settings, "rapidapi_sofascore6_enabled", False) and (
         settings.rapidapi_tennis_key
     ):
-        for sport in ("futbol", "tenis", "baloncesto"):
+        for sport in ("futbol", "tenis", "baloncesto", "hockey"):
             providers.append(
                 SofaScoreNativeResultsProvider(
                     sofascore6_transport(
@@ -1742,7 +1755,7 @@ async def _get_providers() -> list[ResultsProvider]:
     # cuanto menos volumen reciba, menor riesgo de baneo de IP. Si un
     # día no resuelve algo, se reintenta al día siguiente, no se insiste.
     if getattr(settings, "sofascore_direct_enabled", True):
-        for sport in ("futbol", "tenis", "baloncesto"):
+        for sport in ("futbol", "tenis", "baloncesto", "hockey"):
             providers.append(SofaScoreNativeResultsProvider(direct_transport(), sport))
     # Investigador de último recurso (Gemini + url_context): SOLO
     # detecta fixtures cancelados/aplazados/walkover con cita de
@@ -1750,7 +1763,7 @@ async def _get_providers() -> list[ResultsProvider]:
     # en la cascada de resultados es inofensiva y solo trabaja en el
     # camino de aplazados/anuladas cuando todo lo determinista falló.
     if getattr(settings, "google_api_key", None):
-        for sport in ("futbol", "tenis", "baloncesto"):
+        for sport in ("futbol", "tenis", "baloncesto", "hockey"):
             providers.append(GeminiResearchProvider(sport, settings.google_api_key))
     return providers
 

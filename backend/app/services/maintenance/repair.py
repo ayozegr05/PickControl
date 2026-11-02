@@ -409,6 +409,22 @@ async def repair_pick(session, pick: ParsedPick, *, apply: bool) -> RepairReport
     # picks 5429/5645 resueltos contra el mercado equivocado).
     dnb_fixed = _dnb_market_fix(source, new) if new.es_apuesta else 0
 
+    # Las columnas de texto son VARCHAR(255): una re-extracción que
+    # devuelve prosa como "evento" (caso real #10300: 700+ chars de
+    # análisis narrativo) revienta el UPDATE si se aplica tal cual.
+    for tgt in [new, *new.patas]:
+        for field_name in (
+            "evento",
+            "seleccion",
+            "mercado",
+            "deporte",
+            "casa",
+            "explicacion",
+        ):
+            value = getattr(tgt, field_name, None)
+            if value and len(value) > 255:
+                setattr(tgt, field_name, value[:255])
+
     report.new = _new_snapshot(new)
     if not new.es_apuesta:
         report.action = "rejected"
@@ -548,6 +564,60 @@ def _tournament_only(evento: Optional[str]) -> bool:
     )
 
 
+# "Evento" que no es un cruce sino un trozo de la prosa del análisis:
+# el extractor cortó el nombre del partido del párrafo narrativo
+# (caso real #10300: evento="Nanterre vs a salir a pista con una
+# mentalidad completamente agresiva, dispuesto a imponer..."). Un
+# cruce real no pasa de ~6-7 palabras ni lleva puntuación de frase.
+_EVENTO_MAX_WORDS = 8
+_EVENTO_PROSE_PUNCT = re.compile(r"[.;:!?¡¿]")
+
+
+def _evento_prose(evento: Optional[str]) -> bool:
+    if not evento:
+        return False
+    return (
+        len(evento) > 80
+        or len(evento.split()) > _EVENTO_MAX_WORDS
+        or bool(_EVENTO_PROSE_PUNCT.search(evento))
+    )
+
+
+# Pick simple sin cruce identificable: el extractor encontró mercado
+# y cuota pero el partido solo se menciona en la prosa del análisis
+# ("...en el enfrentamiento entre Atlético y Getafe") y las reglas no
+# lo minan — el LLM de la reparación sí lo saca. Casos #10963/#10644
+# ("Menos de 12.0 córners ESPAÑA", evento/deporte a None).
+_EVENTO_MISSING = {"", "none", "desconocido", "unknown", "tbd"}
+
+
+def _evento_missing(pick: ParsedPick) -> bool:
+    return (pick.evento or "").strip().lower() in _EVENTO_MISSING
+
+
+# Emoji de deporte del mensaje del tipster -> deporte canónico: cuando
+# el texto lleva 🎾/🏀/🏒/⚽ y el pick guardó otro deporte, la etiqueta
+# es fiablemente errónea (caso #10476: header "🎾 ATP PARIS" guardado
+# como fútbol). Solo cuenta como señal dentro del barrido de material
+# — consultar el raw solo para esto no compensa.
+_SPORT_EMOJI = {
+    "⚽": "futbol",
+    "🎾": "tenis",
+    "🏀": "baloncesto",
+    "🏒": "hockey",
+}
+
+
+def _emoji_sport_mismatch(pick: ParsedPick, source: str) -> bool:
+    if not pick.deporte or not source:
+        return False
+    stored = fold_name(pick.deporte.strip().lower())
+    for emoji, sport in _SPORT_EMOJI.items():
+        if emoji in source and stored != sport:
+            return True
+    return False
+
+
 def _dc_ambiguous_dnb(pick: ParsedPick, source: str) -> bool:
     """True si el pick lleva etiqueta "doble oportunidad" con selección
     sin señal explícita y la fuente dice que era Draw No Bet."""
@@ -603,6 +673,11 @@ def _pick_needs_repair(pick: ParsedPick, active_legs: list[ParsedPick]) -> bool:
             return True
     else:
         if _tournament_only(pick.evento):
+            return True
+        # Sin cruce identificable o con prosa en su lugar: el mercado
+        # y la cuota están, pero el partido no — la verificación no
+        # tiene a qué comparar y el pick queda pendiente para siempre.
+        if _evento_missing(pick) or _evento_prose(pick.evento):
             return True
         if (
             pick.mercado
@@ -771,6 +846,7 @@ async def find_repair_candidates(session, limit: int = 10) -> list[int]:
                 _is_settled_ticket(source)
                 or is_reposted_slip(source, raw.received_at)
                 or _is_premium_urgency(source)
+                or _emoji_sport_mismatch(p, source)
             ):
                 candidates.append(p.id)
     return candidates[:limit]
