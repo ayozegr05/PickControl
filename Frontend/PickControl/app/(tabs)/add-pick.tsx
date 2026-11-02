@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { colors } from "@/src/theme";
 import {
   View,
   Text,
@@ -11,7 +12,6 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import RNPickerSelect from "react-native-picker-select";
-import BottomBar from "@/src/components/bottom-bar";
 import { useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
 import { createPick } from "@/src/api/picks.api";
@@ -175,7 +175,7 @@ const AddPick = () => {
       {/* ScrollView para asegurar que todo el formulario sea accesible en dispositivos mas pequenos */}
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={{ paddingBottom: 80 + insets.bottom }}
+        contentContainerStyle={{ paddingBottom: 24 }}
       >
         <Text style={styles.text}>Anade tu apuesta</Text>
         {/* Card que contiene el formulario */}
@@ -279,7 +279,10 @@ const AddPick = () => {
             />
           ) : informantes.length === 0 ? (
             <Text
-              style={[styles.label, { color: "#f44336", marginVertical: 10 }]}
+              style={[
+                styles.label,
+                { color: colors.danger, marginVertical: 10 },
+              ]}
             >
               No hay tipsters/canales registrados todavía.
             </Text>
@@ -336,7 +339,6 @@ const AddPick = () => {
       </ScrollView>
 
       {/* Bottom Bar */}
-      <BottomBar />
     </View>
   );
 };
@@ -348,7 +350,7 @@ const styles = StyleSheet.create({
     justifyContent: "flex-start",
     alignItems: "center",
     paddingTop: 20, // Espacio adicional en la parte superior
-    backgroundColor: "black", // Fondo negro general
+    backgroundColor: colors.background, // Fondo negro general
   },
   text: {
     fontSize: 32,
@@ -368,7 +370,7 @@ const styles = StyleSheet.create({
     maxWidth: 400,
     padding: 35, // Aumentamos el padding dentro de la card
     borderRadius: 10,
-    backgroundColor: "#2F4F4F", // Color verde oscuro para la card
+    backgroundColor: colors.surface, // Color verde oscuro para la card
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 }, // Aumentamos el tamaño de la sombra
     shadowOpacity: 0.2, // Aumentamos la opacidad para que se vea más fuerte
@@ -381,25 +383,26 @@ const styles = StyleSheet.create({
     height: 50,
     width: "100%",
     fontWeight: "bold",
-    borderColor: "#ccc",
+    borderColor: colors.border,
     borderWidth: 1,
     marginVertical: 10,
     paddingLeft: 10,
     borderRadius: 5,
     fontSize: 18, // Aumentamos el tamaño de la fuente
-    backgroundColor: "white", // Fondo blanco para los inputs
+    backgroundColor: colors.input,
+    color: colors.text,
   },
   button: {
     height: 50,
     marginTop: 20,
-    backgroundColor: "#FF4500",
+    backgroundColor: colors.primary,
     justifyContent: "center",
     alignItems: "center",
     borderRadius: 5,
     marginVertical: 10,
   },
   buttonText: {
-    color: "white",
+    color: colors.onPrimary,
     fontWeight: "bold",
     fontSize: 22, // Tamaño de fuente 18
   },
@@ -410,7 +413,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     borderRadius: 5,
     marginVertical: 10,
-    backgroundColor: "white",
+    backgroundColor: colors.input,
   },
   // Estilo para el texto del prefijo (símbolo de euro)
   prefix: {
@@ -418,14 +421,15 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     paddingHorizontal: 10,
     paddingBottom: 8,
-    color: "black",
+    color: colors.text,
   },
   // Ajuste para el TextInput cuando se usa con prefijo
   inputWithPrefix: {
     flex: 1,
     height: 45,
     paddingLeft: 10,
-    borderColor: "white",
+    borderColor: colors.border,
+    color: colors.text,
   },
   label: {
     fontSize: 16,
@@ -438,21 +442,23 @@ const styles = StyleSheet.create({
 const pickerSelectStyles = StyleSheet.create({
   inputAndroid: {
     height: 55, // Aumentamos la altura para evitar corte
-    backgroundColor: "white", // Fondo blanco
+    backgroundColor: colors.input,
+    color: colors.text,
     borderRadius: 5,
     paddingLeft: 10,
     borderWidth: 1,
-    borderColor: "#ccc",
+    borderColor: colors.border,
     marginVertical: 10,
     fontSize: 18, // Aumentamos el tamaño de la fuente
   },
   inputIOS: {
     height: 55, // Aumentamos la altura para evitar corte
-    backgroundColor: "white", // Fondo blanco
+    backgroundColor: colors.input,
+    color: colors.text,
     borderRadius: 5,
     paddingLeft: 10,
     borderWidth: 1,
-    borderColor: "#ccc",
+    borderColor: colors.border,
     marginVertical: 10,
     fontSize: 16, // Aumentamos el tamaño de la fuente
   },

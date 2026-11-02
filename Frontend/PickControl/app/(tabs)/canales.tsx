@@ -14,7 +14,6 @@ import { useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import TopBar from "@/src/components/top-bar";
-import BottomBar from "@/src/components/bottom-bar";
 import { useAuth } from "@/src/context/AuthContext";
 import {
   addCanal,
@@ -123,7 +122,7 @@ const Canales = () => {
       <ScrollView
         contentContainerStyle={[
           styles.scroll,
-          { paddingTop: 80 + insets.top, paddingBottom: 80 + insets.bottom },
+          { paddingTop: 80 + insets.top, paddingBottom: 24 },
         ]}
       >
         <Text style={styles.title}>Canales</Text>
@@ -219,7 +218,6 @@ const Canales = () => {
           ))
         )}
       </ScrollView>
-      <BottomBar />
     </View>
   );
 };

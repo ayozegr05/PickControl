@@ -1,4 +1,5 @@
 import React from "react";
+import { colors } from "@/src/theme";
 import {
   View,
   Text,
@@ -11,7 +12,6 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Formik } from "formik";
 import * as Yup from "yup";
-import BottomBar from "@/src/components/bottom-bar";
 import TopBar from "@/src/components/top-bar";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/src/context/AuthContext";
@@ -70,7 +70,7 @@ const RegisterScreen = () => {
   return (
     <View style={styles.container}>
       <TopBar />
-      <ScrollView contentContainerStyle={{ paddingBottom: 80 + insets.bottom }}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 24 }}>
         <View style={[styles.formContainer, { marginTop: 80 + insets.top }]}>
           <View style={styles.headerContainer}>
             <Text style={styles.title}>Crear Cuenta</Text>
@@ -172,7 +172,6 @@ const RegisterScreen = () => {
           </Formik>
         </View>
       </ScrollView>
-      <BottomBar />
     </View>
   );
 };
@@ -239,7 +238,7 @@ const styles = StyleSheet.create({
     marginLeft: 5,
   },
   button: {
-    backgroundColor: "#2ecc71",
+    backgroundColor: colors.primary,
     padding: 15,
     borderRadius: 10,
     alignItems: "center",
@@ -254,7 +253,7 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   buttonText: {
-    color: "#fff",
+    color: colors.onPrimary,
     fontSize: 16,
     fontWeight: "600",
   },

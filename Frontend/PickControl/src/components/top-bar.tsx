@@ -159,7 +159,7 @@ const TopBar = () => {
               <TouchableOpacity>
                 <Text style={styles.menuText}>Mi Perfil</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => router.push("/screens/earns")}>
+              <TouchableOpacity onPress={() => router.push("/earns")}>
                 <Text style={styles.menuText}>Mis Ganancias</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={handleLogout}>

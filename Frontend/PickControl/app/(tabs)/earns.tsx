@@ -2,7 +2,6 @@ import React, { useEffect, useState, useRef } from "react";
 import { View, Text, StyleSheet, ScrollView, Animated } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import BottomBar from "@/src/components/bottom-bar";
 import LottieView from "lottie-react-native";
 import TopBar from "@/src/components/top-bar";
 import { listPicks } from "@/src/api/picks.api";
@@ -138,7 +137,7 @@ const GananciasPage = () => {
 
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={{ paddingBottom: 80 + insets.bottom }}
+        contentContainerStyle={{ paddingBottom: 24 }}
       >
         {isLoading ? (
           <View style={styles.loadingContainer}>
@@ -223,8 +222,6 @@ const GananciasPage = () => {
           </>
         )}
       </ScrollView>
-
-      <BottomBar />
     </View>
   );
 };

@@ -10,7 +10,6 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
-import BottomBar from "@/src/components/bottom-bar";
 import { MaterialIcons } from "@expo/vector-icons";
 import LottieView from "lottie-react-native";
 import { listPicks } from "@/src/api/picks.api";
@@ -392,7 +391,6 @@ export default function Analysis() {
           </View>
         )}
       </ScrollView>
-      <BottomBar />
     </View>
   );
 }

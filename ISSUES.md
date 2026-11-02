@@ -29,11 +29,10 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   en los cuatro; el lado tipster (parsed_picks) queda igual.
   **Resuelto en `c0d088c`** — verificado en vivo: la cuenta de auditoría
   pasó de ver "Tú: 2 picks · 5.00€" ajenas a "0 / 0.00€" propias.
-- [ ] 🔴 **Navegación por `router.push` en la BottomBar** —
-  `src/components/bottom-bar.tsx:25-58`. Cada tap apila una pantalla
-  nueva: el botón atrás se convierte en una trampa y el stack crece
-  indefinidamente. Migrar a `Tabs` de expo-router (o al menos
-  `router.navigate`/`replace`).
+- [x] ✅ **Navegación por `router.push` en la BottomBar** — resuelto:
+  `app/(tabs)/_layout.tsx` usa `Tabs` nativo de expo-router (sin
+  apilar, con estado activo + labels). `bottom-bar.tsx` eliminado de
+  las 11 pantallas. Rutas `/screens/X` → `/X`; tipos regenerados.
 - [x] ✅ **Post-registro roto** (confirmado en vivo): tras "Registro
   Exitoso" el usuario queda autenticado pero la app navega a
   `/screens/login` → ve el formulario de login estando ya logueado.
@@ -67,11 +66,13 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
 
 ## 2. UI / UX (verificado visualmente en emulador)
 
-- [ ] 🟡 **Cuatro paletas mezcladas**: naranja/dark de marca vs verde
-  brillante (CTA login/register, spinner de informante) vs tabla
-  verde+beige con texto negro (my-picks e historial de
-  `[informante].tsx` — parece otra app) vs rojo-anaranjado ("Enviar
-  Apuesta"). Unificar en un `theme.ts`.
+- [x] ✅ **Cuatro paletas mezcladas**: `src/theme.ts` creado
+  (`colors.*` + `metricColor`). Migrados los puntos visibles: CTAs
+  login/register/add-pick verde/rojo → `primary` con texto
+  `onPrimary`; tablas verde+beige de my-picks e `[informante]` →
+  dark surface; inputs blancos de add-pick → `colors.input` +
+  texto claro. Quedan literales `#ff9f1c` sueltos (~50) — migración
+  incremental al tocar cada pantalla.
 - [ ] 🟡 **Tabla de historial recortada a la derecha** (`[informante]`,
   `my-picks`): columnas cortadas dentro de scroll horizontal, fechas en
   formato US (`7/28/2026`) mientras el resto usa `17/10/2026`.
@@ -79,10 +80,10 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   oculto y hubo que cerrar el teclado para enviar). Sin
   `KeyboardAvoidingView` ni `keyboardShouldPersistTaps` en
   login/register/add-pick/modal "Yo también la jugué".
-- [ ] 🟡 **BottomBar visible en login/register** — un usuario sin sesión
-  ve la navegación de la app (7 iconos). Además: sin estado activo,
-  sin labels, tamaños inconsistentes (24–38px), color `"orange"`
-  literal en vez del naranja de marca.
+- [x] ✅ **BottomBar visible en login/register** — resuelto: sin
+  sesión la barra de tabs se oculta entera (`display: none` + tabs
+  con `href: null`). Estado activo (naranja/gris), labels y tamaños
+  uniformes ya vienen del Tabs nativo.
 - [ ] 🟡 **Controles admin/liquidación visibles para cualquier usuario**:
   botones Acertó/Falló/Anulada/Pendiente por pick en parsed-picks y
   "Corregir picks de Telegram" en el detalle. Verificar que el backend
@@ -91,8 +92,8 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   checkboxes custom, iconos-botón (papelera, corrección de patas, ojo
   de password) invisibles para TalkBack. Contraste flojo
   (`#777/#888` a 11-13px sobre `#1a1a1a` ≈ 3.5:1, bajo WCAG AA).
-- [ ] 🟡 `expo-status-bar` instalado pero **nunca usado** — sin
-  `<StatusBar style="light" />`.
+- [x] ✅ `expo-status-bar` instalado pero **nunca usado** — resuelto:
+  `<StatusBar style="light" />` en `app/_layout.tsx`.
 - [ ] 🟡 **Estados error/vacío inconsistentes**: `my-picks` traga el
   error (`catch → console.error`, sin UI); `earns` muestra `0.00€`
   como dato real si falla; `[informante]` muestra "No se encontraron
@@ -131,7 +132,9 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   `src/hooks/` están vacíos): `colorForYield`×3, `cleanChannel`×2,
   `calcularGanancia`×3, `formatearFecha`×2, iconos de estado×3.
 - [ ] 🟡 **Dead code**: `index.js` raíz (Stack sin providers),
-  `src/components/piechart.tsx` (mock, nunca importado),
+  ~~`src/components/piechart.tsx`~~ (borrado con `victory-native` —
+  su copia anidada de react-native-svg causaba el crash
+  "Tried to register two views RNSVG*"),
   `calcularGananciaAcumulada`/`agruparDatos` (`[informante]:222,374`),
   `screenWidth`/`Dimensions` sin uso, estado `apuestas` en `earns`,
   `loadingRef`, `scrollY`/`visible` en top-bar (listener de un

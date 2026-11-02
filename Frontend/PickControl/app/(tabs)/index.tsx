@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import BottomBar from "@/src/components/bottom-bar";
 import { useFocusEffect, useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
 import { useAuth } from "@/src/context/AuthContext";
@@ -34,7 +33,7 @@ const Main = () => {
   const insets = useSafeAreaInsets();
 
   const introVideoPlayer = useVideoPlayer(
-    require("../assets/video/intro.mp4"),
+    require("../../assets/video/intro.mp4"),
     (player) => {
       player.loop = true;
       player.muted = true;
@@ -174,7 +173,6 @@ const Main = () => {
         <View style={styles.center}>
           <ActivityIndicator size="large" color="#ff9f1c" />
         </View>
-        <BottomBar />
       </View>
     );
   }
@@ -186,7 +184,6 @@ const Main = () => {
         <View style={styles.center}>
           <Text style={styles.error}>Error: {error}</Text>
         </View>
-        <BottomBar />
       </View>
     );
   }
@@ -197,7 +194,7 @@ const Main = () => {
       <ScrollView
         contentContainerStyle={[
           styles.scroll,
-          { paddingTop: 80 + insets.top, paddingBottom: 80 + insets.bottom },
+          { paddingTop: 80 + insets.top, paddingBottom: 24 },
         ]}
       >
         <Text style={styles.title}>Tipsters / Canales</Text>
@@ -286,7 +283,6 @@ const Main = () => {
           ))
         )}
       </ScrollView>
-      <BottomBar />
     </View>
   );
 };

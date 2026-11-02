@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { colors } from "@/src/theme";
 import {
   Text,
   View,
@@ -9,7 +10,6 @@ import {
   Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import BottomBar from "@/src/components/bottom-bar";
 import { Redirect, useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
 import { useAuth } from "@/src/context/AuthContext";
@@ -275,7 +275,7 @@ const MyPicksScreen = () => {
           isAuthenticated
             ? {
                 paddingHorizontal: 15,
-                paddingBottom: 80 + insets.bottom, // Espacio extra para el BottomBar
+                paddingBottom: 24, // Espacio extra para el BottomBar
               }
             : null,
         ]}
@@ -482,7 +482,6 @@ const MyPicksScreen = () => {
           </View>
         )}
       </ScrollView>
-      {isAuthenticated && <BottomBar />}
       {modalVisible && selectedApuesta && (
         <Modal
           animationType="slide"
@@ -503,7 +502,10 @@ const MyPicksScreen = () => {
               </Text>
               <View style={styles.modalButtons}>
                 <TouchableOpacity
-                  style={[styles.choiceButton, { backgroundColor: "green" }]}
+                  style={[
+                    styles.choiceButton,
+                    { backgroundColor: colors.primary },
+                  ]}
                   onPress={() => actualizarApuesta("True")}
                 >
                   <Text style={styles.choiceButtonText}>✔️</Text>
@@ -565,7 +567,7 @@ const styles = StyleSheet.create({
     maxHeight: 300, // Añadido maxHeight
   },
   tableContainer: {
-    backgroundColor: "#ffdaa4",
+    backgroundColor: colors.surface,
     flexDirection: "column",
     flexGrow: 1,
     alignSelf: "center",
@@ -576,7 +578,7 @@ const styles = StyleSheet.create({
   },
   header: {
     flexDirection: "row",
-    backgroundColor: "#186720",
+    backgroundColor: colors.primary,
     height: 80,
     borderTopRightRadius: 8,
     borderTopLeftRadius: 8,
@@ -594,10 +596,10 @@ const styles = StyleSheet.create({
     padding: 8,
     fontSize: 18,
     fontWeight: "bold",
-    color: "dark",
+    color: colors.text,
   },
   dateCell: {
-    backgroundColor: "#ffdaa4",
+    backgroundColor: colors.surface,
   },
   icon: {
     fontSize: 17,
@@ -607,9 +609,9 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "bold",
     textAlign: "center",
-    backgroundColor: "#186720",
+    backgroundColor: colors.primary,
     verticalAlign: "middle",
-    color: "white",
+    color: colors.onPrimary,
     borderTopLeftRadius: 8,
   },
   cardTitle: {
@@ -629,7 +631,7 @@ const styles = StyleSheet.create({
   subtitleContainer: {
     fontSize: 18,
     textAlign: "center",
-    color: "#f3b02b",
+    color: colors.primary,
     marginBottom: 10,
   },
   pendingList: {
@@ -642,7 +644,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between", // Distribuye las columnas
     padding: 10,
     borderBottomWidth: 1,
-    borderColor: "#ccc",
+    borderColor: colors.border,
     width: "100%",
   },
 
@@ -665,7 +667,7 @@ const styles = StyleSheet.create({
   },
 
   pendingTextValue: {
-    color: "#1dbb2e",
+    color: colors.success,
     textAlign: "center",
     marginTop: 5,
     flexWrap: "wrap", // Permite saltos de línea
@@ -783,7 +785,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingVertical: 5,
     borderBottomWidth: 1,
-    borderColor: "#ccc",
+    borderColor: colors.border,
   },
   rankingText: {
     fontSize: 16,
@@ -792,7 +794,7 @@ const styles = StyleSheet.create({
   },
   rankingPercentage: {
     fontSize: 16,
-    color: "#4CAF50",
+    color: colors.success,
   },
   featuresSection: {
     marginTop: -50,
@@ -890,7 +892,7 @@ const styles = StyleSheet.create({
   informanteButton: {
     padding: 8,
     borderRadius: 8,
-    backgroundColor: "#f8f9fa",
+    backgroundColor: colors.surface,
     position: "relative",
     overflow: "hidden",
   },

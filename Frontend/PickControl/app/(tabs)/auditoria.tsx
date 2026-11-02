@@ -11,7 +11,6 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
-import BottomBar from "@/src/components/bottom-bar";
 import {
   getAnalisisGlobal,
   AnalisisGlobal,
@@ -175,7 +174,7 @@ export default function AuditoriaScreen() {
       <ScrollView
         contentContainerStyle={[
           styles.scroll,
-          { paddingTop: 80 + insets.top, paddingBottom: 80 + insets.bottom },
+          { paddingTop: 80 + insets.top, paddingBottom: 24 },
         ]}
         refreshControl={
           <RefreshControl
@@ -238,7 +237,6 @@ export default function AuditoriaScreen() {
           </>
         )}
       </ScrollView>
-      <BottomBar />
     </View>
   );
 }

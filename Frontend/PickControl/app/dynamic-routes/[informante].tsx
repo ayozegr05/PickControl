@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { colors } from "@/src/theme";
 import {
   View,
   Text,
@@ -13,7 +14,6 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams } from "expo-router"; // Obtener los parámetros de búsqueda
-import BottomBar from "@/src/components/bottom-bar"; // Importar la BottomBar
 import { Dimensions } from "react-native";
 import { useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
@@ -33,7 +33,7 @@ import { PickItem, Acierto } from "@/src/types/pick.types";
 
 function colorForYield(value: number): string {
   if (value > 0) return "#4caf50";
-  if (value < 0) return "#f44336";
+  if (value < 0) return colors.danger;
   return "#aaa";
 }
 
@@ -239,7 +239,9 @@ export default function InformantDetail() {
   const renderPronostico = (acierto: Acierto, apuesta: PickItem) => {
     if (acierto === "True") {
       return (
-        <Text style={[styles.icon, { color: "green", fontSize: 18 }]}>✅</Text>
+        <Text style={[styles.icon, { color: colors.success, fontSize: 18 }]}>
+          ✅
+        </Text>
       );
     } else if (acierto === "False") {
       return <Text style={[styles.icon, { color: "red" }]}>❌</Text>;
@@ -287,7 +289,9 @@ export default function InformantDetail() {
     }
     if (acierto === "True") {
       return (
-        <Text style={[styles.icon, { color: "green", fontSize: 18 }]}>✅</Text>
+        <Text style={[styles.icon, { color: colors.success, fontSize: 18 }]}>
+          ✅
+        </Text>
       );
     } else if (acierto === "False") {
       return <Text style={[styles.icon, { color: "red" }]}>❌</Text>;
@@ -558,10 +562,7 @@ export default function InformantDetail() {
       <TopBar />
       <View style={[styles.container, { paddingTop: 20 + insets.top }]}>
         <ScrollView
-          contentContainerStyle={[
-            styles.scrollView,
-            { paddingBottom: 80 + insets.bottom },
-          ]}
+          contentContainerStyle={[styles.scrollView, { paddingBottom: 24 }]}
         >
           <Text style={styles.title}>{informante}</Text>
 
@@ -746,7 +747,7 @@ export default function InformantDetail() {
 
             <TouchableOpacity
               style={styles.telegramButton}
-              onPress={() => router.push("/screens/parsed-picks")}
+              onPress={() => router.push("/parsed-picks")}
             >
               <Text style={styles.telegramButtonText}>
                 Corregir picks de Telegram
@@ -1210,7 +1211,7 @@ export default function InformantDetail() {
                           <MaterialCommunityIcons
                             name="trash-can"
                             size={22}
-                            color="#f44336"
+                            color={colors.danger}
                           />
                         </TouchableOpacity>
                       </View>
@@ -1540,7 +1541,6 @@ export default function InformantDetail() {
           />
         )}
       </View>
-      <BottomBar />
     </View>
   );
 }
@@ -1552,7 +1552,7 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   scrollView: {
-    paddingBottom: 80, // Espacio suficiente para que BottomBar no se superponga
+    paddingBottom: 24, // Espacio suficiente para que BottomBar no se superponga
   },
   loadingContainer: {
     flex: 1,
@@ -1668,7 +1668,7 @@ const styles = StyleSheet.create({
   },
   oddsBadgeInflada: {
     fontSize: 12,
-    color: "#f44336",
+    color: colors.danger,
     fontWeight: "bold",
   },
   detailButtons: {
@@ -1812,15 +1812,15 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#2a7032",
+    backgroundColor: colors.primary,
     borderBottomWidth: 2,
-    borderBottomColor: "#fff", // Borde inferior blanco
+    borderBottomColor: colors.background,
   },
   tableHeaderText: {
     fontSize: 16,
     fontWeight: "bold",
     textAlign: "center",
-    color: "white",
+    color: colors.onPrimary,
   },
   tableCell: {
     width: 150, // Ajusta el tamaño de cada celda
@@ -1829,13 +1829,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     textAlign: "center",
-    backgroundColor: "#ffdaa4",
+    backgroundColor: colors.surface,
   },
   cellText: {
     fontSize: 16,
     fontWeight: "bold",
     textAlign: "center",
-    color: "black",
+    color: colors.text,
   },
   icon: {
     fontSize: 17,
@@ -1846,10 +1846,10 @@ const styles = StyleSheet.create({
     borderColor: "#555",
   },
   evenRow: {
-    backgroundColor: "#f9f9f9",
+    backgroundColor: colors.surfaceAlt,
   },
   oddRow: {
-    backgroundColor: "#ffffff",
+    backgroundColor: colors.surface,
   },
   chartContainer: {
     backgroundColor: "#303030",
