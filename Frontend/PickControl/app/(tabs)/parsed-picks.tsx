@@ -18,21 +18,18 @@ import {
   anularResiduoPendiente,
   ParsedPick,
 } from "@/src/api/parsed-picks.api";
-import { listInformantes } from "@/src/api/informantes.api";
+import { useAuth } from "@/src/context/AuthContext";
 import {
   getProvidersStatus,
   getPicksStatus,
   ProvidersStatus,
   PicksStatus,
 } from "@/src/api/system.api";
-import { useAuth } from "@/src/context/AuthContext";
 import {
   formatDateTime as formatDate,
   cleanChannel,
 } from "@/src/utils/format";
-
-const OVERVIEW_PER_CHANNEL = 2;
-const CHANNEL_PAGE_SIZE = 20;
+import { useParsedPicks } from "@/src/hooks/useParsedPicks";
 
 type ChannelGroup = {
   key: string;
@@ -42,20 +39,28 @@ type ChannelGroup = {
 };
 
 export default function ParsedPicksScreen() {
-  const [overviewPicks, setOverviewPicks] = useState<ParsedPick[]>([]);
-  const [channelNames, setChannelNames] = useState<string[]>([]);
-  const [channelPicks, setChannelPicks] = useState<ParsedPick[]>([]);
-  const [selectedChannel, setSelectedChannel] = useState<{
-    id: number;
-    name: string;
-  } | null>(null);
-  const [hasMore, setHasMore] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [showAll, setShowAll] = useState(false);
-  const [soloPendientes, setSoloPendientes] = useState(false);
+  const {
+    overviewPicks,
+    channelNames,
+    channelPicks,
+    selectedChannel,
+    hasMore,
+    loading,
+    loadingMore,
+    refreshing,
+    error,
+    showAll,
+    soloPendientes,
+    reload,
+    refresh,
+    selectChannel,
+    loadMore,
+    toggleShowAll,
+    togglePendientes,
+    setOverviewPicks,
+    setChannelPicks,
+    setError,
+  } = useParsedPicks();
   const [providersStatus, setProvidersStatus] =
     useState<ProvidersStatus | null>(null);
   const [picksStatus, setPicksStatus] = useState<PicksStatus | null>(null);
@@ -65,174 +70,29 @@ export default function ParsedPicksScreen() {
   const router = useRouter();
   const { isAdmin } = useAuth();
 
-  const loadOverview = useCallback(
-    async (includeDiscarded: boolean, pending: boolean) => {
-      const [picksData, informantesData] = await Promise.all([
-        getParsedPicks({
-          perChannel: OVERVIEW_PER_CHANNEL,
-          soloApuestas: !includeDiscarded,
-          soloPendientes: pending,
-        }),
-        // Los canales reales vienen de /informantes (ya filtrado a
-        // es_canal_telegram), para que un canal sin picks en el filtro
-        // actual siga apareciendo como sección vacía.
-        listInformantes(),
-      ]);
-      setOverviewPicks(picksData);
-      setChannelNames(informantesData.map((i) => i.informante));
-    },
-    []
-  );
-
-  const loadChannel = useCallback(
-    async (
-      informanteId: number,
-      offset: number,
-      includeDiscarded: boolean,
-      pending: boolean
-    ) => {
-      const data = await getParsedPicks({
-        informanteId,
-        soloApuestas: !includeDiscarded,
-        soloPendientes: pending,
-        offset,
-        limit: CHANNEL_PAGE_SIZE,
-      });
-      if (offset === 0) {
-        setChannelPicks(data);
-      } else {
-        setChannelPicks((prev) => [...prev, ...data]);
-      }
-      setHasMore(data.length === CHANNEL_PAGE_SIZE);
-    },
-    []
-  );
-
-  const reload = useCallback(async () => {
-    try {
-      await loadOverview(showAll, soloPendientes);
-      if (selectedChannel) {
-        await loadChannel(selectedChannel.id, 0, showAll, soloPendientes);
-      }
-      // Panel de sistema: solo admin; un fallo aquí no rompe la lista.
-      if (isAdmin) {
-        getProvidersStatus()
-          .then(setProvidersStatus)
-          .catch(() => setProvidersStatus(null));
-        getPicksStatus()
-          .then(setPicksStatus)
-          .catch(() => setPicksStatus(null));
-        // Reposteos anulados por dedup: van a su card, fuera del listado.
-        getParsedPicks({ soloDuplicados: true, limit: 200 })
-          .then(setDupPicks)
-          .catch(() => setDupPicks([]));
-      }
-      setError(null);
-    } catch (err: any) {
-      setError(err.message);
-    }
-  }, [
-    loadOverview,
-    loadChannel,
-    selectedChannel,
-    showAll,
-    soloPendientes,
-    isAdmin,
-  ]);
+  // Panel de sistema: solo admin; un fallo aquí no rompe la lista.
+  const loadAdminExtras = useCallback(() => {
+    if (!isAdmin) return;
+    getProvidersStatus()
+      .then(setProvidersStatus)
+      .catch(() => setProvidersStatus(null));
+    getPicksStatus()
+      .then(setPicksStatus)
+      .catch(() => setPicksStatus(null));
+    // Reposteos anulados por dedup: van a su card, fuera del listado.
+    getParsedPicks({ soloDuplicados: true, limit: 200 })
+      .then(setDupPicks)
+      .catch(() => setDupPicks([]));
+  }, [isAdmin]);
 
   // Recarga automáticamente cada vez que entras a esta pantalla (p. ej.
   // al volver desde otra pestaña), sin tener que reabrir la app.
   useFocusEffect(
     useCallback(() => {
-      setLoading(true);
-      reload().finally(() => setLoading(false));
-    }, [reload])
+      reload();
+      loadAdminExtras();
+    }, [reload, loadAdminExtras])
   );
-
-  const handleRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await reload();
-    setRefreshing(false);
-  }, [reload]);
-
-  const handleSelectChannel = useCallback(
-    async (channel: { id: number; name: string } | null) => {
-      setSelectedChannel(channel);
-      setChannelPicks([]);
-      setHasMore(false);
-      if (channel) {
-        try {
-          await loadChannel(channel.id, 0, showAll, soloPendientes);
-          setError(null);
-        } catch (err: any) {
-          setError(err.message);
-        }
-      }
-    },
-    [loadChannel, showAll, soloPendientes]
-  );
-
-  const handleLoadMore = useCallback(async () => {
-    if (!selectedChannel || loadingMore) return;
-    setLoadingMore(true);
-    try {
-      await loadChannel(
-        selectedChannel.id,
-        channelPicks.length,
-        showAll,
-        soloPendientes
-      );
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [
-    selectedChannel,
-    loadingMore,
-    channelPicks.length,
-    loadChannel,
-    showAll,
-    soloPendientes,
-  ]);
-
-  const handleToggleShowAll = useCallback(async () => {
-    const next = !showAll;
-    setShowAll(next);
-    // El filtro es_apuesta se aplica en el backend ANTES del top-N,
-    // así que hay que refetchear para que el resumen no se quede con
-    // mensajes descartados ocupando los huecos de cada canal.
-    setLoading(true);
-    try {
-      await loadOverview(next, soloPendientes);
-      if (selectedChannel) {
-        await loadChannel(selectedChannel.id, 0, next, soloPendientes);
-      }
-      setError(null);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [showAll, loadOverview, loadChannel, selectedChannel, soloPendientes]);
-
-  const handleTogglePendientes = useCallback(async () => {
-    const next = !soloPendientes;
-    setSoloPendientes(next);
-    // Igual que showAll: el filtro va en el backend antes del top-N.
-    setLoading(true);
-    try {
-      await loadOverview(showAll, next);
-      if (selectedChannel) {
-        await loadChannel(selectedChannel.id, 0, showAll, next);
-      }
-      setError(null);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [soloPendientes, loadOverview, loadChannel, selectedChannel, showAll]);
 
   // Clasifica el bloqueo de rate_limited: timestamp con "T" cercano =
   // cooldown por ritmo (minutos); fecha desnuda (quota del día) o
@@ -653,7 +513,7 @@ export default function ParsedPicksScreen() {
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={handleRefresh}
+            onRefresh={refresh}
             tintColor="#ff9f1c"
           />
         }
@@ -662,7 +522,7 @@ export default function ParsedPicksScreen() {
 
         <TouchableOpacity
           style={styles.toggleRow}
-          onPress={handleToggleShowAll}
+          onPress={toggleShowAll}
         >
           <View style={[styles.checkbox, showAll && styles.checkboxChecked]} />
           <Text style={styles.toggleLabel}>
@@ -672,7 +532,7 @@ export default function ParsedPicksScreen() {
 
         <TouchableOpacity
           style={styles.toggleRow}
-          onPress={handleTogglePendientes}
+          onPress={togglePendientes}
         >
           <View
             style={[styles.checkbox, soloPendientes && styles.checkboxChecked]}
@@ -1140,7 +1000,7 @@ export default function ParsedPicksScreen() {
             contentContainerStyle={styles.channelList}
           >
             <TouchableOpacity
-              onPress={() => handleSelectChannel(null)}
+              onPress={() => selectChannel(null)}
               style={[
                 styles.channelChip,
                 selectedChannel === null && styles.channelChipActive,
@@ -1161,7 +1021,7 @@ export default function ParsedPicksScreen() {
                 <TouchableOpacity
                   key={group.key}
                   onPress={() =>
-                    handleSelectChannel({
+                    selectChannel({
                       id: group.informanteId as number,
                       name: group.name,
                     })
@@ -1200,7 +1060,7 @@ export default function ParsedPicksScreen() {
                   {group.informanteId !== null && (
                     <TouchableOpacity
                       onPress={() =>
-                        handleSelectChannel({
+                        selectChannel({
                           id: group.informanteId as number,
                           name: group.name,
                         })
@@ -1264,7 +1124,7 @@ export default function ParsedPicksScreen() {
             {hasMore && (
               <TouchableOpacity
                 style={styles.loadMore}
-                onPress={handleLoadMore}
+                onPress={loadMore}
                 disabled={loadingMore}
               >
                 {loadingMore ? (
