@@ -1,0 +1,1823 @@
+"""Extractor híbrido de pronósticos a partir de texto libre.
+
+Flujo:
+1. Pre-filtro: detecta si el mensaje puede ser una apuesta.
+2. Reglas: extrae de patrones muy claros sin llamar al LLM.
+3. LLM (gpt-4o-mini): fallback para mensajes estructurados de forma libre.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import unicodedata
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+from openai import AsyncOpenAI
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.logging import get_logger
+from app.services.telegram.openai_retry import call_with_retry
+
+logger = get_logger("app.telegram.extractor")
+
+
+class ExtractedPick(BaseModel):
+    """Pronóstico extraído, con metadatos del método usado."""
+
+    es_apuesta: bool = Field(
+        default=False,
+        description="True si el mensaje contiene una apuesta clara, False en caso contrario",
+    )
+    deporte: Optional[str] = None
+    evento: Optional[str] = None
+    mercado: Optional[str] = None
+    seleccion: Optional[str] = None
+    cuota: Optional[float] = None
+    stake: Optional[float] = None
+    casa: Optional[str] = None
+    informante: Optional[str] = None
+    explicacion: Optional[str] = None
+    # Fecha/hora del evento deportivo, si se pudo identificar en el texto.
+    # Necesaria para poder verificar el resultado más adelante.
+    fecha_evento: Optional[datetime] = None
+    # Valor numérico de la línea de hándicap (con signo, ej. +1.5/-1.5) u
+    # over/under (magnitud, ej. 2.5), si el mercado la tiene.
+    linea: Optional[float] = None
+    metodo: str = "unknown"  # 'rule', 'llm' o 'rejected'
+    confianza: float = 0.0
+    # Patas de una combinada ("crear apuesta"/acumulador): cada una es
+    # una selección independiente que se verifica por separado; el pick
+    # padre se liquida en conjunto y `cuota` es la cuota combinada total.
+    # Lista vacía en picks simples.
+    patas: list[ExtractedPick] = Field(default_factory=list)
+
+    @field_validator("patas", mode="before")
+    @classmethod
+    def _none_patas_a_lista(cls, v: object) -> object:
+        # El prompt pide "patas": null para picks simples — se normaliza
+        # a lista vacía para no romper el parseo del JSON del LLM.
+        return [] if v is None else v
+
+
+_MESES_ES = {
+    "ene": 1,
+    "feb": 2,
+    "mar": 3,
+    "abr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "ago": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dic": 12,
+}
+
+
+def _extract_event_date(
+    text: str, fecha_referencia: Optional[datetime] = None
+) -> Optional[datetime]:
+    """Intenta extraer la fecha/hora del evento con patrones habituales.
+
+    Cubre formatos vistos en mensajes/OCR de tipsters, p. ej.:
+    - "12.09.2026 14:00" (boletos/capturas de casas de apuestas)
+    - "Sáb 12 sep 14:00" (interfaz de casa de apuestas)
+    No inventa nada: si no encuentra un patrón claro, devuelve None.
+    Cuando el texto no trae año se usa el de `fecha_referencia` (la fecha
+    real del mensaje); sin referencia, el año actual.
+    """
+    anio = (fecha_referencia or datetime.now()).year
+    match = re.search(
+        r"(\d{1,2})[./](\d{1,2})[./](\d{4})(?:\s+(\d{1,2}):(\d{2}))?", text
+    )
+    if match:
+        day, month, year, hour, minute = match.groups()
+        try:
+            return datetime(
+                int(year), int(month), int(day), int(hour or 0), int(minute or 0)
+            )
+        except ValueError:
+            pass
+
+    # OJO: "set" no se admite como abreviatura de septiembre — en picks de
+    # tenis "en el 1 set"/"2 set" se interpretaba como fecha (1-2 de sep).
+    match = re.search(
+        r"\b(\d{1,2})\s+(ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)"
+        r"[a-zñ]*\.?(?:\s+(\d{4}))?(?:\s+(\d{1,2}):(\d{2}))?",
+        text.lower(),
+    )
+    if match:
+        day, month_abbr, year, hour, minute = match.groups()
+        try:
+            return datetime(
+                int(year) if year else anio,
+                _MESES_ES[month_abbr],
+                int(day),
+                int(hour or 0),
+                int(minute or 0),
+            )
+        except (ValueError, KeyError):
+            pass
+
+    return None
+
+
+# Margen de plausibilidad de la fecha del evento frente a la del mensaje:
+# un pick abierto no puede ser de un partido ya jugado hace días ni de
+# algo a meses vista. Si el extractor (regex o LLM) devuelve una fecha
+# fuera de margen es un error de lectura — casos reales: el LLM pone el
+# año 2023 a un "15 sep" del OCR, o un slip trae la fecha de emisión del
+# boleto y no la del partido.
+_EVENT_MAX_PAST = timedelta(days=2)
+_EVENT_MAX_FUTURE = timedelta(days=30)
+
+
+def _sanitize_event_date(
+    fecha_evento: Optional[datetime],
+    fecha_referencia: Optional[datetime],
+) -> Optional[datetime]:
+    """Descarta fechas de evento implausibles respecto al mensaje.
+
+    Normaliza datetimes tz-aware a UTC naive (las columnas de BD son
+    TIMESTAMP WITHOUT TIME ZONE) y devuelve None cuando la fecha extraída
+    se desvía demasiado de `fecha_referencia`; el procesador usará
+    entonces la fecha real del mensaje como aproximación.
+    """
+    if fecha_evento is None:
+        return None
+    if fecha_evento.tzinfo is not None:
+        fecha_evento = fecha_evento.astimezone(timezone.utc).replace(tzinfo=None)
+    if fecha_referencia is not None:
+        delta = fecha_evento - fecha_referencia
+        if delta < -_EVENT_MAX_PAST or delta > _EVENT_MAX_FUTURE:
+            logger.warning(
+                "[EXTRACTOR] fecha_evento %s descartada: fuera de margen "
+                "respecto a la fecha del mensaje %s",
+                fecha_evento,
+                fecha_referencia,
+            )
+            return None
+    return fecha_evento
+
+
+def _extract_linea(seleccion: str) -> Optional[float]:
+    """Extrae el valor numérico de la línea (hándicap u over/under).
+
+    Cubre patrones como "+1.5"/"-1.5" (hándicap asiático, con signo) y
+    "Over 2.5"/"Under 2.5"/"más de 2.5" (línea de goles/juegos, sin
+    signo). Si no encuentra un patrón claro, devuelve None.
+    """
+    if not seleccion:
+        return None
+
+    # El signo no puede ir pegado a otro dígito: "0-0" es un marcador,
+    # no el hándicap "-0" (sin el lookbehind salía linea=-0.0).
+    signed_match = re.search(r"(?<!\d)([+-])\s?(\d+(?:[.,]\d+)?)", seleccion)
+    if signed_match:
+        sign, value = signed_match.groups()
+        number = float(value.replace(",", "."))
+        return number if sign == "+" else -number
+
+    unsigned_match = re.search(
+        r"\b(?:over|under|m[aá]s(?:\s+de)?|menos(?:\s+de)?)\s+(\d+(?:[.,]\d+)?)",
+        seleccion.lower(),
+    )
+    if unsigned_match:
+        return float(unsigned_match.group(1).replace(",", "."))
+
+    # "21+ juegos" / "20 o más juegos" = over N-0.5 (N o más).
+    plus_match = re.search(r"(\d+(?:[.,]\d+)?)\s*\+", seleccion)
+    o_mas_match = re.search(r"(\d+(?:[.,]\d+)?)\s+o\s+m[aá]s", seleccion.lower())
+    for m in (plus_match, o_mas_match):
+        if m:
+            return float(m.group(1).replace(",", ".")) - 0.5
+
+    return None
+
+
+# --- Combinadas -------------------------------------------------------
+#
+# Una combinada es UNA apuesta con N selecciones (patas): bet-builders
+# de una casa ("CREA TU APUESTA 5 pronósticos") o acumuladores entre
+# partidos ("Combinada @3.40: A gana + B gana"). El padre lleva la cuota
+# combinada total; cada pata se verifica por separado.
+
+# Señales de que el mensaje es una combinada.
+_COMBINADA_PATTERN = re.compile(
+    r"\bcombinad[ao]\b|\bacumulador\b|\bacumulada\b|\bm[uú]ltiple\b|"
+    r"\bparlay\b|\bcrea(?:r)?\s+(?:tu\s+)?apuesta\b|\bbet\s*builder\b|"
+    r"\b\d+\s+pron[oó]sticos\b",
+    re.IGNORECASE,
+)
+
+# Palabras de mercado: un trozo de seleccion unido por " + " que
+# empieza en dígito solo es pata si trae alguna ("1° set - Más de
+# 7.5 juegos" sí; "263" o "+7.5" sueltos no).
+_LEG_MARKET_WORD = re.compile(
+    r"m[aá]s|menos|gol|c[oó]rner|esquina|tarjeta|juego|set|gana|victoria|"
+    r"marca|anota|asist|empate|h[aá]ndicap|descanso|remate|falta|over|under",
+    re.IGNORECASE,
+)
+
+# Viñeta que precede a cada pata en el texto/OCR del boleto.
+_LEG_BULLET_PATTERN = re.compile(r"^\s*[✔✅☑•·▪►➤‣\-–—*]\s*(?P<leg>\S.*)$")
+
+# Una línea con viñeta que NO es una pata: metadatos del boleto
+# (cuota/stake/importe), cabeceras o líneas de fecha/hora.
+_LEG_NOISE_PATTERN = re.compile(
+    r"cuota|stake|unidades|importe|ganancias|ganaste|apostad|"
+    r"pron[oó]stico|combinad|acumulador|crea(?:r)?\s|"
+    # Footer de juego responsable del boleto ("Apuesta con
+    # responsabilidad. +18") colaba como pata en slips bet365.
+    r"responsabilidad|juega\s+seguro|\+18\b|"
+    # Una línea con viñeta que es un link/CTA ("[Ya lo pegamos](t.me/…)",
+    # "🛍 premiumpay.pro/…") nunca es una selección.
+    r"https?://|t\.me/|\]\(|"
+    # Escalera de reto "1⃣PASO 30€ - 96€": dinero→dinero, no selección.
+    r"\d[\d.,]*\s*€\s*[-–—➜→]+\s*\d[\d.,]*\s*€|" r"^\d{1,2}\s*[:./-]\s*\d{1,2}",
+    re.IGNORECASE,
+)
+
+
+def _classify_leg_market(leg: str) -> Optional[str]:
+    """Mercado probable de una pata suelta, por palabras clave.
+
+    El verificador re-detecta el mercado real a partir de
+    `seleccion`/`linea`, pero necesita una pista inicial para entrar en
+    la rama correcta (p. ej. "over/under" para llegar a las stats de
+    córners o al fallback de props de jugador).
+    """
+    low = leg.lower()
+    if re.search(r"h[aá]ndicap|handicap|goles?\s+de\s+ventaja", low):
+        return "hándicap asiático"
+    if re.search(r"doble\s+oportunidad|double\s*chance|\b1x\b|\bx2\b", low):
+        return "doble oportunidad"
+    if re.search(
+        r"empate\s+no\s+v[aá]lido|resultado\s+sin\s+empate|draw\s+no\s+bet", low
+    ):
+        return "empate no válido"
+    if re.search(
+        r"ambos\s+(?:equipos?\s+)?(?:marcan|anotan)|both\s+teams|\bbtts\b", low
+    ):
+        return "ambos marcan"
+    if re.search(
+        r"resultado\s+exacto|marcador\s+(?:exacto|correcto)|correct\s+score", low
+    ):
+        return "resultado exacto"
+    if re.search(r"\+?\d+(?:[.,]\d+)?\s*(?:juegos?|games?)\b", low):
+        # "+7.5 juegos en el 1 set": el "+N" ya implica "más de N".
+        return "over/under juegos"
+    if re.search(r"\bover\b|\bunder\b|m[aá]s\s+de|menos\s+de|\d+\s*o\s+m[aá]s", low):
+        return "over/under"
+    if re.search(r"marca|asiste|tarjeta|goleador|scorer", low):
+        return "jugador"
+    if re.search(r"\bgana\b|\bganador\b|\bvence\b|vencedor|moneyline", low):
+        return "ganador"
+    return None
+
+
+# Una línea que menciona la competición no es un enfrentamiento:
+# "🎾 TENIS - Copa davis" casa con el patrón "A - B" pero es la
+# cabecera del torneo. Un cruce real nombra dos participantes, no
+# vocabulario de competición.
+_COMPETITION_WORD = re.compile(
+    r"\b(?:copa|liga|league|divisi[oó]n|challenger|chall\.?|atp|wta|itf|"
+    r"champions|euroleague|euroliga|nba|torneo|premier|bundesliga|"
+    r"eredivisie|serie\s+a|ligue|mls|europa\s+league|segunda|primera|"
+    # Ligas compuestas en una palabra: Landesliga, Superliga... el
+    # \b solo cortaba "liga" aislado y "Austria - Landesliga" pasaba
+    # como si fuera un cruce de equipos.
+    r"\w*liga)\b",
+    re.IGNORECASE,
+)
+
+# En los slips el mercado va tras el nombre separado por guion
+# ("Zizou Bergs - Ganará el encuentro"): el lado derecho no es un
+# participante. Palabras de mercado que nunca son nombre de equipo.
+_MARKET_WORD = re.compile(
+    r"\b(?:ganar[áa]?|ganador|vencedor|total|resultado|ambos|"
+    r"m[aá]s|menos|h[aá]ndicap|empate|marca|descanso|set|juegos|"
+    r"goles|c[oó]rners?|tarjetas?)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_eventos(lines: list[str]) -> list[str]:
+    """Líneas "EquipoA - EquipoB" / "A vs B" / "A v B" del mensaje, en orden.
+
+    Se ignoran las líneas con viñeta: una pata tipo "Ambos equipos
+    marcan - Sí" casa con el patrón de evento pero es una selección.
+    También las cabeceras de competición ("TENIS - Copa davis"): casan
+    con "A - B" sin ser un cruce.
+    """
+    eventos = []
+    for line in lines:
+        if _LEG_BULLET_PATTERN.match(line) or _LEG_NOISE_PATTERN.search(line):
+            continue
+        match = _TEAM_VS_TEAM_PATTERN.search(line)
+        if match:
+            # El filtro va sobre el match, no la línea: "LIGA: Alavés -
+            # Valencia" conserva el cruce, "TENIS - Copa davis" no.
+            # Y "Zizou Bergs - Ganará el encuentro" del slip tampoco:
+            # "Ganará" es mercado, no participante.
+            if not _COMPETITION_WORD.search(match.group(0)) and not _MARKET_WORD.search(
+                match.group(0)
+            ):
+                eventos.append(match.group(0))
+        elif re.search(r"\bv(?:s)?\.?\b", line, re.IGNORECASE):
+            # "A vs B" del tipster o "A v B" del boleto (OCR):
+            # "Dominko/Sesko v Cukierman/Shimanov". Aquí la línea
+            # entera es el evento, así que el filtro va sobre ella.
+            if not _COMPETITION_WORD.search(line):
+                eventos.append(line.strip())
+    return eventos
+
+
+def _extract_combinada_cuota(lowered: str) -> Optional[float]:
+    """Cuota total de la combinada: "cuota total X", "cuota X", "@X.XX"."""
+    for pattern in (
+        r"cuota\s+total\s*:?\s*([0-9]+[.,]?[0-9]*)",
+        r"cuota\s*[:=]?\s*([0-9]+[.,]?[0-9]*)",
+        r"@\s*([0-9]+[.,]?[0-9]{2,})",
+    ):
+        match = re.search(pattern, lowered)
+        if match:
+            return float(match.group(1).replace(",", "."))
+    return None
+
+
+def _rule_extract_combinada(
+    text: str,
+    informante: Optional[str] = None,
+    fecha_referencia: Optional[datetime] = None,
+) -> Optional[ExtractedPick]:
+    """Parte una combinada por reglas: >=2 patas en líneas con viñeta.
+
+    El evento se hereda a las patas cuando el mensaje trae UN solo
+    partido (bet-builder) o tantos eventos como patas (acumulador en el
+    mismo orden). Devuelve None si no se puede partir con confianza —
+    entonces lo intenta el LLM.
+    """
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+    legs: list[str] = []
+    for line in lines:
+        match = _LEG_BULLET_PATTERN.match(line)
+        if not match:
+            continue
+        leg = match.group("leg").strip()
+        if len(leg) < 3 or _LEG_NOISE_PATTERN.search(leg):
+            continue
+        if leg not in legs:
+            legs.append(leg)
+    if len(legs) < 2:
+        return None
+
+    eventos = _extract_eventos(lines)
+    shared_fecha = _extract_event_date(text, fecha_referencia)
+    patas = []
+    for idx, leg in enumerate(legs):
+        if len(eventos) == 1:
+            evento = eventos[0]
+        elif len(eventos) == len(legs):
+            evento = eventos[idx]
+        else:
+            evento = None
+        patas.append(
+            ExtractedPick(
+                es_apuesta=True,
+                seleccion=leg,
+                evento=evento,
+                mercado=_classify_leg_market(leg),
+                linea=_extract_linea(leg),
+                fecha_evento=shared_fecha,
+                metodo="rule",
+                confianza=0.8,
+            )
+        )
+
+    return ExtractedPick(
+        es_apuesta=True,
+        evento=eventos[0] if len(eventos) == 1 else (" + ".join(eventos) or None),
+        mercado="combinada",
+        seleccion=" + ".join(legs),
+        cuota=_extract_combinada_cuota(text.lower()),
+        informante=informante,
+        fecha_evento=shared_fecha,
+        metodo="rule",
+        confianza=0.8,
+        patas=patas,
+    )
+
+
+def _patas_from_joined(pick: ExtractedPick) -> list[ExtractedPick]:
+    """Reconstruye patas a partir del "A + B + C" clásico de `seleccion`.
+
+    Red de seguridad para respuestas del LLM que unen las patas con
+    " + " sin rellenar el array `patas`. Un trozo que parece una línea
+    suelta ("+7.5 juegos", "2-1") no es una pata.
+    """
+    seleccion = pick.seleccion or ""
+    if " + " not in seleccion:
+        return []
+    parts = [p.strip() for p in seleccion.split(" + ") if p.strip()]
+    eventos = [e.strip() for e in pick.evento.split(" + ")] if pick.evento else []
+    patas = []
+    for idx, part in enumerate(parts):
+        if len(part) < 3:
+            continue
+        # Trozo numérico suelto ("263", "+7.5") no es pata — pero una
+        # pata puede empezar en dígito ("1° set - Más de 7.5 juegos").
+        if re.match(r"^[+-]?\s*\d", part) and not _LEG_MARKET_WORD.search(part):
+            continue
+        patas.append(
+            ExtractedPick(
+                es_apuesta=True,
+                seleccion=part,
+                evento=(
+                    eventos[idx]
+                    if len(eventos) == len(parts)
+                    else (pick.evento if len(eventos) == 1 else None)
+                ),
+                mercado=_classify_leg_market(part),
+                linea=_extract_linea(part),
+                metodo=pick.metodo,
+                confianza=pick.confianza,
+            )
+        )
+    return patas
+
+
+# El extractor solía colar como patas las cabeceras de torneo
+# ("CHALL MOUILLERON", "WTA GUADALAJARA") y los eslóganes del pie del
+# mensaje ("Siempre con cabeza", "Apuesta con responsabilidad").
+_PATA_FOOTER_NOISE = re.compile(
+    r"siempre\s+con\s+cabeza|juega\s+con\s+cabeza|"
+    r"con\s+responsabilidad|juega\s+seguro|juego\s+responsable",
+    re.IGNORECASE,
+)
+
+
+# Un nombre propio suelto ("Juventus", "Nagal") sí puede ser una pata
+# real: "ganador" implícito en acumuladores de texto plano.
+_BARE_NAME = re.compile(
+    r"[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.'-]*" r"(?:\s+[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.'-]*)*"
+)
+
+
+def _is_noise_pata(pata: ExtractedPick) -> bool:
+    """True si la "pata" no es una selección real del boleto.
+
+    Una selección siempre trae un mercado/línea ("Neumayer gana",
+    "Más de 2 goles", "Barcelona -2") o al menos la etiqueta de mercado
+    que le asignó el LLM. Las cabeceras de torneo ("CHALL MOUILLERON"),
+    eslóganes del pie ("Siempre con cabeza") y fragmentos sueltos sin
+    señal no son patas: el extractor los colaba y el boleto quedaba
+    bloqueado en pendiente para siempre.
+    """
+    sel = (pata.seleccion or "").strip()
+    if not sel or _PATA_FOOTER_NOISE.search(sel):
+        return True
+    if _LEG_MARKET_WORD.search(sel):
+        return False
+    if pata.linea is not None or _extract_linea(sel) is not None:
+        return False
+    if _COMPETITION_WORD.search(sel):
+        return True
+    # Sin mercado ni línea: solo sobrevive un nombre propio (ganador
+    # implícito) o lo que el LLM etiquetó como selección con mercado.
+    return not pata.mercado and not _BARE_NAME.fullmatch(sel)
+
+
+# "Gana Brunold y +7,5 juegos en el 1° set": una sola línea del tipster
+# que encierra DOS selecciones del mismo boleto (miniacumulada). La y
+# solo corta si lo de detrás trae mercado/línea — "gana la 1ª parte y el
+# partido" (HT/FT) es un solo mercado y no debe partirse.
+_COMPOUND_WIN_AND = re.compile(
+    r"^(?P<win>.{0,80}?\bgana\w*\b[^+]*?)\s+y\s+(?P<rest>.+)$",
+    re.IGNORECASE,
+)
+
+
+def _patas_from_compound(pick: ExtractedPick) -> list[ExtractedPick]:
+    """Parte la selección compuesta "X gana y <mercado>" en dos patas."""
+    sel = (pick.seleccion or "").strip()
+    match = _COMPOUND_WIN_AND.match(sel)
+    if not match:
+        return []
+    win, rest = match.group("win").strip(), match.group("rest").strip()
+    if not (_LEG_MARKET_WORD.search(rest) or _extract_linea(rest) is not None):
+        return []
+    return [
+        ExtractedPick(
+            es_apuesta=True,
+            seleccion=leg,
+            evento=pick.evento,
+            deporte=pick.deporte,
+            mercado=_classify_leg_market(leg),
+            linea=_extract_linea(leg),
+            fecha_evento=pick.fecha_evento,
+            metodo=pick.metodo,
+            confianza=pick.confianza,
+        )
+        for leg in (win, rest)
+    ]
+
+
+def _ensure_combinada_shape(
+    pick: ExtractedPick, fecha_referencia: Optional[datetime] = None
+) -> ExtractedPick:
+    """Normaliza un pick combinada tras reglas o LLM.
+
+    - Rellena `patas` desde el "A + B" de `seleccion` si el LLM no las
+      devolvió.
+    - Descarta las "patas" que no son selecciones (cabeceras de torneo,
+      eslóganes del pie) antes de contar.
+    - Las patas heredan del padre lo que no tengan (deporte, evento,
+      fecha, mercado clasificado, línea).
+    - La `fecha_evento` del padre pasa a ser la de la ÚLTIMA pata: la
+      combinada no se liquida hasta que acaban todos los partidos.
+    - Si quedan menos de 2 patas degrada a pick simple (p. ej. "Brunold
+      gana +7.5 juegos" no es una combinada aunque el LLM lo etiquete).
+    """
+    if not pick.es_apuesta:
+        pick.patas = []
+        return pick
+    if pick.seleccion and pick.cuota is not None:
+        # "Inglaterra o Empate 1.66": el LLM a veces pega la cuota al
+        # final de la selección; si coincide con `cuota` se quita (ya
+        # vive en su campo).
+        match = re.search(r"\s+(\d+[.,]\d+)$", pick.seleccion.strip())
+        if match and abs(float(match.group(1).replace(",", ".")) - pick.cuota) < 1e-9:
+            pick.seleccion = pick.seleccion.strip()[: match.start()].strip()
+    if not pick.patas:
+        pick.patas = _patas_from_joined(pick)
+    if not pick.patas:
+        # "Gana Brunold y +7,5 juegos en el 1° set" no lleva " + " pero
+        # encierra dos selecciones del mismo boleto.
+        pick.patas = _patas_from_compound(pick)
+    pick.patas = [p for p in pick.patas if not _is_noise_pata(p)]
+    if len(pick.patas) < 2:
+        if pick.patas:
+            # La "combinada" era una selección simple con ruido alrededor
+            # (cabecera de torneo + selección + eslogan): la pata que
+            # sobrevive ES el pick.
+            pata = pick.patas[0]
+            pick.seleccion = pata.seleccion or pick.seleccion
+            pick.evento = pata.evento or pick.evento
+            pick.mercado = pata.mercado or pick.mercado
+            pick.deporte = pata.deporte or pick.deporte
+            pick.linea = pata.linea if pata.linea is not None else pick.linea
+        pick.patas = []
+        if pick.mercado and "combinada" in pick.mercado.lower():
+            pick.mercado = None
+        return pick
+
+    pick.mercado = "combinada"
+    if not pick.seleccion:
+        pick.seleccion = " + ".join(p.seleccion or "" for p in pick.patas)
+    for pata in pick.patas:
+        # Una pata es por definición una selección de la combinada.
+        pata.es_apuesta = True
+        pata.deporte = pata.deporte or pick.deporte
+        pata.evento = pata.evento or pick.evento
+        pata.fecha_evento = (
+            _sanitize_event_date(pata.fecha_evento, fecha_referencia)
+            or pick.fecha_evento
+        )
+        pata.mercado = pata.mercado or _classify_leg_market(pata.seleccion or "")
+        if pata.linea is None and pata.seleccion:
+            pata.linea = _extract_linea(pata.seleccion)
+        if pata.metodo == "unknown":
+            pata.metodo = pick.metodo
+        if not pata.confianza:
+            pata.confianza = pick.confianza
+    fechas = [p.fecha_evento for p in pick.patas if p.fecha_evento]
+    if fechas:
+        pick.fecha_evento = max(fechas)
+    return pick
+
+
+_POSITIVE_PATTERNS = [
+    r"\bcuota\b",
+    r"\bstake\b",
+    r"\bunidades\b",
+    r"\bhándicap\b",
+    r"\bhandicap\b",
+    r"\bover\b",
+    r"\bunder\b",
+    r"\bgana\b",
+    r"\bvs\b",
+    r"\bapuesta\b",
+    r"\bpron[oó]stico\b",
+    r"\bdoble\s*oportunidad\b",
+    r"\bempate\b",
+    r"\bresultado\b",
+    r"\bganador\b",
+    r"\bc[oó]rners?\b",
+    r"\btarjetas?\b",
+    r"\bmarcador\b",
+    r"\bambos\s*equipos\s*marcan\b",
+]
+
+# Dos nombres propios separados por un guion (p. ej. "Levante - Athletic de
+# Bilbao"), la forma más habitual de anunciar un partido sin usar "vs".
+# Los conectores en minúscula ("de", "del", "la"...) forman parte del
+# nombre: sin ellos "Celta de Vigo - Racing de Santander" se capturaba
+# truncado como "Vigo - Racing".
+_TEAM_NAME = (
+    r"[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.]*"
+    r"(?:\s+(?:(?:de|del|la|los|las|y|da|di|van|von)\s+)?"
+    r"[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.]*)*"
+)
+_TEAM_VS_TEAM_PATTERN = re.compile(rf"\b{_TEAM_NAME}\s-\s{_TEAM_NAME}")
+
+_NEGATIVE_PATTERNS = [
+    r"\bpromo\b",
+    r"\bacceso\b",
+    r"\bacc(?:ede|eso)\b",
+    r"\bplazas?\b",
+    r"\bsorteo\b",
+    r"\bmega\s*reto\b",
+    r"\bretos?\s+del\s+año\b",
+    r"\breto\s*especial\b",
+    # Anuncios de escalera de reto/afiliado: "PASO 30€ - 96€",
+    # "RETO 30€ ➜ 10.000€", "empieza a ganar", premiumpay. Una
+    # apuesta real nunca expresa una progresión dinero→dinero
+    # ni vende plazas — y si trajera cuota/stake propios, la
+    # señal fuerte seguiría ganando.
+    r"\d+[\d.,]*\s*€\s*[-–—➜→]+\s*\d+[\d.,]*\s*€",
+    r"\bempieza\s+a\s+ganar\b",
+    r"premiumpay",
+    r"\bbuenos\s*días\b",
+    r"\bgratis\b",
+    r"\benlace\b",
+    r"\blink\b",
+    r"\bseguidores\b",
+    # Anuncios de casas de apuestas (bonos/supercuotas): el OCR de la
+    # promo "EL SUVIDÓN ... REAL MADRID GANA 1.90 ... SOLO NUEVOS
+    # USUARIOS" generaba un pick fantasma. Un slip real nunca lleva
+    # letra pequeña de promo.
+    r"\bnuevos\s+usuarios\b",
+    r"t&c'?s?\b",
+    r"sujetas\s+a\s+cambios",
+    r"\breg[ií]strate\b",
+    r"cr[eé]ditos\s+de\s+apuesta",
+    r"multiplica\s+tus\s+ganancias",
+    # Celebración de aciertos pasados: "¡OTRO APUESTÓN GANADO!",
+    # "acertando otra vez", "ya lo conseguimos". Son marketing del
+    # tipster, no picks abiertos.
+    r"\bacertad[oa]\b",
+    r"\bganad[oa]\b",
+    r"\bconseguimos\b",
+    r"\bclavamos\b",
+    # Caption de celebración bajo el boleto verde reposteado ("otro
+    # verde para adentro", "seguimos sumando"). Solo rechazan si el
+    # mensaje no trae cuota/stake propios — un pick real que dijera
+    # "a por otro verde" + "CUOTA 1.50" sigue entrando.
+    r"\botro\s+verde\b",
+    r"\bseguimos\s+sumando\b",
+    r"\btotal\s+ganado\b",
+    r"\bpara\s+adentro\b",
+    r"haceros\s+ganar",
+]
+
+# Señales estructurales fuertes: "cuota"/"stake"/"unidades" seguidas de un
+# número. Una promo pura nunca las lleva, pero un pick real con publi de
+# afiliado al final ("GANA 200€ GRATIS AQUÍ", links bdeal.io...) sí — sin
+# esta precedencia, un negativo como "gratis" descartaba picks válidos.
+_STRONG_PICK_PATTERNS = [
+    r"\bcuota\s*[:•.\-@]?\s*\d",
+    r"\bstake\s*[:•.\-]?\s*\d",
+    r"\bunidades\s*[:•.\-]?\s*\d",
+]
+
+
+def _looks_like_bet(text: str) -> bool:
+    """Heurística rápida para saber si merece la pena intentar extraer."""
+    if not text:
+        return False
+
+    # Telegram envuelve en markdown ("__Cuota 1.50__"): "_" es carácter
+    # de palabra y rompe los \b de los patrones ("__cuota" no tiene
+    # borde antes de "cuota"). Se quita el formato antes de evaluar.
+    lowered = re.sub(r"[*_~`]+", "", text).lower()
+    if any(re.search(pattern, lowered) for pattern in _STRONG_PICK_PATTERNS):
+        return True
+
+    if any(re.search(pattern, lowered) for pattern in _NEGATIVE_PATTERNS):
+        return False
+
+    if any(re.search(pattern, lowered) for pattern in _POSITIVE_PATTERNS):
+        return True
+
+    # "Equipo - Equipo" (sin "vs" explícito) se busca sobre el texto
+    # original, sin pasar a minúsculas, porque depende de las mayúsculas.
+    return bool(_TEAM_VS_TEAM_PATTERN.search(text))
+
+
+# --- Higiene de campos extraídos --------------------------------------
+#
+# El texto de Telegram llega con markdown y emojis que acababan dentro
+# de `seleccion` ("**Chidek gana ****🇫🇷**"): ensucian el matching
+# con proveedores, el dedup por texto y la UI.
+_MARKDOWN_NOISE = re.compile(r"[*_~`]+")
+_EMOJI_NOISE = re.compile(
+    "["
+    "\U0001f000-\U0001faff"  # pictogramas, emoticonos, banderas
+    "\U00002600-\U000027bf"  # símbolos varios + dingbats (❗➡✅)
+    "\U00002b00-\U00002bff"  # flechas/suplementarios (⬆)
+    "\ufe0f\u200d"  # variation selector + ZWJ
+    "]+"
+)
+_LEADING_BULLETS = re.compile(r"^[•·►▶➤→\s]+")
+
+
+def _clean_text_field(value: Optional[str]) -> Optional[str]:
+    """Quita markdown/emojis/bullets de un campo de texto extraído."""
+    if not value:
+        return value
+    cleaned = _MARKDOWN_NOISE.sub("", value)
+    cleaned = _EMOJI_NOISE.sub("", cleaned)
+    cleaned = _LEADING_BULLETS.sub("", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned.rstrip(" -•·").strip() or None
+
+
+# Señales léxicas para inferir `deporte` cuando el path de reglas no lo
+# rellena: sin él, el verificador consulta primero las APIs de fútbol y
+# un pick de tenis quema llamadas a proveedores equivocados.
+_TENIS_SIGNAL = re.compile(
+    r"tenis|\bchall(?:enger)?\.?\b|\batp\b|\bwta\b|\bitf\b|"
+    r"grand\s*slam|tie[\s-]?break",
+    re.IGNORECASE,
+)
+_FUTBOL_SIGNAL = re.compile(
+    r"f[úu]tbol|la\s*liga|premier|champions|bundesliga|serie\s*a\b|"
+    r"ligue\s*1\b|eredivisie|segunda\s*divisi[oó]n|copa\s+del\s+rey|"
+    r"\bgoles?\b",
+    re.IGNORECASE,
+)
+_BALONCESTO_SIGNAL = re.compile(
+    r"baloncesto|basket|\bnba\b|euroleague|euroliga|\bncaa\b|liga\s+endesa",
+    re.IGNORECASE,
+)
+_MOTOR_SIGNAL = re.compile(
+    r"automovilismo|f[óo]rmula\s*1|\bf1\b|grand\s*prix|gran\s+premio|"
+    r"\bmotogp\b|\bnascar\b|\bcoches\b|\bgp\b",
+    re.IGNORECASE,
+)
+# Deportes sin proveedor de resultados configurado: el pick se guarda
+# como rejected (auditable en la pantalla de debug) en lugar de quedar
+# pendiente para siempre; un reproceso del raw lo recupera cuando haya
+# soporte. El LLM puede devolver variantes — se comparan normalizadas.
+_UNSUPPORTED_SPORTS = {
+    "automovilismo",
+    "f1",
+    "formula 1",
+    "fórmula 1",
+    "motorsport",
+    "motogp",
+    "nascar",
+    "motor",
+}
+
+
+def _detect_deporte(text: Optional[str]) -> Optional[str]:
+    """Deporte inferido de las señales del mensaje completo."""
+    if not text:
+        return None
+    if _TENIS_SIGNAL.search(text):
+        return "tenis"
+    if _FUTBOL_SIGNAL.search(text):
+        return "fútbol"
+    if _BALONCESTO_SIGNAL.search(text):
+        return "baloncesto"
+    if _MOTOR_SIGNAL.search(text):
+        return "automovilismo"
+    return None
+
+
+# Cola de cabecera en mayúsculas pegada a la selección ("Menos de 3,5
+# goles ESPAÑA"): el tipster pone "pick + competición" en la misma
+# línea. Solo se recorta si queda texto en minúscula — una selección
+# íntegra en mayúsculas ("MALLORCA RESULTADO SIN EMPATE") se conserva.
+_TRAILING_CAPS = re.compile(r"(?:\s+[A-ZÁÉÍÓÚÑ]+)+\s*$")
+
+
+def _strip_trailing_competition(seleccion: Optional[str]) -> Optional[str]:
+    if not seleccion:
+        return seleccion
+    trimmed = _TRAILING_CAPS.sub("", seleccion)
+    if trimmed and re.search(r"[a-záéíóúñ]", trimmed):
+        return trimmed.strip()
+    return seleccion
+
+
+# Bordes donde cortar una `seleccion` que llegó con prosa: la etiqueta
+# del pick suele ir primero y el análisis detrás ("Isak marca. Lleva
+# 12 goles en..."). Solo finales de frase fuertes — ":" y " - " no son
+# bordes: aparecen dentro de etiquetas legítimas ("Isak: Marca gol",
+# "Madrid - Barcelona").
+_PROSE_BOUNDARY = re.compile(r"[.;!?\n\r]|—")
+
+
+def _trim_prose_seleccion(seleccion: Optional[str]) -> Optional[str]:
+    """Recorta una `seleccion` que supera la longitud de etiqueta: el
+    LLM volcó la frase del análisis en vez de solo el pick. Se corta en
+    el primer borde de frase; si no hay, en la última palabra completa
+    dentro del límite. Las combinadas ("A + B + C") son largas a
+    propósito y nunca pasan por aquí (no llegan a este punto con patas).
+    """
+    if not seleccion or len(seleccion) <= _SELECCION_MAX_LEN:
+        return seleccion
+    boundary = _PROSE_BOUNDARY.search(seleccion)
+    if boundary and boundary.start() >= 10:
+        return seleccion[: boundary.start()].strip()
+    cut = seleccion[:_SELECCION_MAX_LEN]
+    last_space = cut.rfind(" ")
+    return (cut[:last_space] if last_space > 40 else cut).strip()
+
+
+# Selección de ganador sin sujeto ("Ganará el encuentro", "Gana el
+# partido"): el verbo abre la etiqueta — un "Bergs gana" legítimo
+# empieza por el nombre. Cuando el sujeto falta, el pick es
+# inverificable: no se sabe qué lado del evento se apostó.
+_GENERIC_WINNER_SEL = re.compile(
+    r"^(?:gana|ganan|ganará|ganara|ganar|ganador|ganadora|vencedor)\b",
+    re.IGNORECASE,
+)
+# Lados del evento ("A - B", "A vs B", "A v B"): sirven para buscar el
+# sujeto apostado en el cuerpo del mensaje.
+_EVENTO_SIDE_SPLIT = re.compile(r"\s+vs\.?\s+|\s+-\s+|\s+v\s+", re.IGNORECASE)
+# "Crear apuesta"/"Bet Builder" como selección es la etiqueta del botón
+# del boleto, no un pick: sin patas extraídas no hay nada auditable.
+_BUILDER_SEL = re.compile(
+    r"^(?:crear?\s+(?:tu\s+)?apuesta|crea\s+tu\s+apuesta|bet\s*builder)\b",
+    re.IGNORECASE,
+)
+
+
+def _name_fold(value: str) -> str:
+    """Nombre normalizado para comparar: minúsculas, sin acentos ni
+    símbolos (markdown, emojis, banderas) y espacios colapsados."""
+    folded = unicodedata.normalize("NFD", value.lower())
+    plain = "".join(c for c in folded if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", plain)).strip()
+
+
+def _recover_winner_subject(pick: ExtractedPick, text: str) -> None:
+    """Recupera el sujeto de una selección de ganador genérica.
+
+    Dos pistas, en orden de fuerza:
+
+    1. Slip: el lado apostado lleva la cuota pegada en la misma línea
+       ("Novak Djokovic 1.50 Ganará el encuentro"); el perdedor sale
+       suelto en la cabecera del cruce. Un solo lado con cuota decide.
+    2. Texto: el tipster destaca al apostado en su propia línea
+       ("➡️ Leyre Romero Gormaz", "**Mérida**", "Bergs gana").
+
+    Si ninguna pista deja un único lado, es ambiguo y se deja.
+    """
+    sides = [
+        s.strip() for s in _EVENTO_SIDE_SPLIT.split(pick.evento or "") if s.strip()
+    ]
+    if len(sides) != 2 or not text:
+        return
+    # Alias por lado: nombre completo y apellido largo ("Moeller" por
+    # "Marvin Moeller" — los tipsters titulan con el apellido).
+    alias_to_side: dict[str, str] = {}
+    surname_sides: dict[str, str] = {}
+    surname_dupes: set[str] = set()
+    for side in sides:
+        folded = _name_fold(side)
+        alias_to_side[folded] = side
+        last = folded.split()[-1]
+        if len(last) >= 4 and last != folded:
+            if last in surname_sides:
+                surname_dupes.add(last)
+            surname_sides.setdefault(last, side)
+    for last, side in surname_sides.items():
+        if last not in surname_dupes:
+            alias_to_side[last] = side
+    hits: set[str] = set()
+    strong: set[str] = set()
+    for line in text.splitlines():
+        norm = _name_fold(line)
+        if not norm:
+            continue
+        # Casilla del slip ("o Buvaysar Gadamauri 1.57"): el marcador
+        # queda como letra suelta delante del nombre — se prueba la
+        # línea con y sin ese prefijo de un token.
+        variants = [norm]
+        if re.match(r"^[a-z] ", norm):
+            variants.append(norm[2:])
+        for cand in variants:
+            for alias in alias_to_side:
+                if cand == alias:
+                    hits.add(alias)
+                    continue
+                # Verbo primero: "GANA SCHOOLKATE y +7,5 juegos" —
+                # el tipster titula al revés que el slip.
+                verb = re.match(r"gan\w* ", cand)
+                if verb and cand[verb.end() :].startswith(alias):
+                    strong.add(alias)
+                    continue
+                if not cand.startswith(alias + " "):
+                    continue
+                tail = cand[len(alias) + 1 :]
+                if tail.startswith("gan"):
+                    # "Daniel Rincon - Ganará el encuentro" /
+                    # "Moeller gana" / "Sporting gana y más de 2,5":
+                    # nombre pegado al mercado/verbo — pista fuerte.
+                    strong.add(alias)
+                    continue
+                price_match = re.match(r"(\d+) (\d{1,2})\b", tail)
+                if price_match is None:
+                    continue
+                # "Novak Djokovic 1.50 Ganará el encuentro": el slip
+                # pega la cuota SOLO al lado apostado — el perdedor
+                # aparece suelto en la cabecera del cruce. Pero una
+                # hora ("Milev 13:00" -> "13 00") también parece
+                # cuota: con pick.cuota solo vale el número que la
+                # iguala; sin ella, una cola que es hora pura no
+                # cuenta (los slips listan "Jugador HH:MM").
+                price = float(f"{price_match.group(1)}.{price_match.group(2)}")
+                if pick.cuota is not None:
+                    if abs(price - pick.cuota) <= 0.02:
+                        strong.add(alias)
+                elif not re.fullmatch(r"(?:[01]?\d|2[0-3]) [0-5]\d", tail):
+                    strong.add(alias)
+    winner = strong if len(strong) == 1 else hits if len(hits) == 1 else None
+    if winner is not None:
+        pick.seleccion = f"{alias_to_side[winner.pop()]} gana"
+
+
+def _normalize_pick(pick: ExtractedPick, text: str) -> ExtractedPick:
+    """Limpieza final común a reglas y LLM: quita markdown/emojis de los
+    campos de texto e infiere `deporte` de las señales del mensaje si el
+    extractor no lo rellenó (las pistas deportivas suelen estar en la
+    cabecera — "CHALL RENNES 🎾" — no en la selección). Si el LLM volcó
+    prosa del análisis en `seleccion` se recorta a la etiqueta del pick
+    (los padres de combinada llevan el join de patas, largo legítimo)."""
+    # El recorte de prosa va ANTES de la limpieza: `_clean_text_field`
+    # colapsa los saltos de línea y con ellos se perderían los bordes
+    # de frase que separan la etiqueta del pick del análisis.
+    if not pick.patas:
+        pick.seleccion = _trim_prose_seleccion(pick.seleccion)
+    pick.seleccion = _strip_trailing_competition(_clean_text_field(pick.seleccion))
+    pick.evento = _clean_text_field(pick.evento)
+    if pick.evento and _is_junk_evento(pick.evento):
+        # Placeholder/fecha/cabecera de liga grabado como evento:
+        # NULL honesto antes que un cruce inventado que el
+        # verificador casaría contra el partido equivocado.
+        pick.evento = None
+    if not pick.evento:
+        # El cruce del boleto suele estar en el propio texto/OCR
+        # aunque ni reglas ni LLM lo extrajeran.
+        pick.evento = _fixture_from_slip_ocr(text)
+    if pick.es_apuesta and not pick.deporte:
+        pick.deporte = _detect_deporte(text)
+    if pick.es_apuesta and (pick.deporte or "").strip().lower() in _UNSUPPORTED_SPORTS:
+        pick.es_apuesta = False
+        pick.metodo = "rejected"
+    if pick.es_apuesta:
+        if _GENERIC_WINNER_SEL.match(pick.seleccion or ""):
+            _recover_winner_subject(pick, text)
+        if _BUILDER_SEL.match((pick.seleccion or "").strip()) and not pick.patas:
+            # Boleto "crear apuesta" sin patas extraídas: la selección es
+            # el botón de la casa, no hay nada verificable.
+            pick.es_apuesta = False
+            pick.metodo = "rejected"
+    for pata in pick.patas:
+        _normalize_pick(pata, text)
+    return pick
+
+
+# Palabras que delatan la línea del pick. Con límites de palabra (\b) —
+# el matching por substring confundía "mover" con "over" y "ganar" con
+# "gana" — y en español, porque los tipsters escriben "Menos de 3,5
+# goles" o "Más de 11 córners", no "under"/"over". "ganar" se excluye a
+# propósito: aparece en la prosa del análisis ("necesita ganar"), no en
+# la etiqueta del pick.
+_SELECCION_KEYWORD = re.compile(
+    r"\b(?:gana(?:r[aá])?|h[aá]ndicap|handicap|over|under|"
+    r"menos\s+de|m[aá]s\s+de|ambos\s+marcan|ambas\s+marcan|empate|"
+    r"doble\s+oportunidad|c[oó]rners?|corners?|tarjetas?|"
+    r"resultado\s+sin\s+empate|draw\s+no\s+bet)\b|"
+    r"(?<!\d)[+-]\s*\d+(?:[.,]\d+)?",
+    re.IGNORECASE,
+)
+
+# Una selección es una etiqueta corta ("Menos de 3,5 goles", "Bergs
+# gana"); por encima de esto es prosa del análisis.
+_SELECCION_MAX_LEN = 120
+
+
+def _rule_extract(
+    text: str,
+    informante: Optional[str] = None,
+    fecha_referencia: Optional[datetime] = None,
+) -> Optional[ExtractedPick]:
+    """Extrae por regex de alta confianza. None si no es lo suficientemente claro."""
+
+    lowered = text.lower()
+
+    # Buscar cuota y stake con formato "Cuota X.XX" o "@ X.XX"
+    cuota_match = re.search(r"cuota\s*[:=]?\s*([0-9]+[.,]?[0-9]*)", lowered)
+    if not cuota_match:
+        cuota_match = re.search(r"@\s*([0-9]+[.,]?[0-9]{2,})", lowered)
+
+    stake_match = re.search(r"stake\s*[:=]?\s*([0-9]+[.,]?[0-9]*)", lowered)
+    if not stake_match:
+        stake_match = re.search(r"unidades\s*[:=]?\s*([0-9]+[.,]?[0-9]*)", lowered)
+
+    if not cuota_match or not stake_match:
+        return None
+
+    # Buscar selección: primera línea con palabras clave, saltando las
+    # líneas de publi/afiliación (llevan enlaces o "gratis"). Sin este
+    # filtro, un footer tipo "GANA 200€ GRATIS AQUÍ bdeal.io/..." se
+    # confundía con la selección porque contiene "gana".
+    promo_line = re.compile(r"https?://|www\.|t\.me/|\]\(|gratis", re.IGNORECASE)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    seleccion = None
+    for line in lines:
+        low = line.lower()
+        if promo_line.search(low):
+            continue
+        # Una selección es una etiqueta corta ("Menos de 3,5 goles");
+        # un párrafo de análisis nunca lo es. Sin la guarda, la prosa
+        # colaba por keywords sueltas ("un Celta que necesita ganar")
+        # y se guardaba entera como `seleccion`.
+        if len(line) > _SELECCION_MAX_LEN:
+            continue
+        if _SELECCION_KEYWORD.search(low) and not low.startswith(
+            ("cuota", "stake", "unidades")
+        ):
+            seleccion = line
+            break
+
+    if not seleccion:
+        return None
+
+    # Enfrentamiento explícito ("A - B" / "A vs B" en alguna línea del
+    # mensaje): se rellena `evento` gratis por reglas. Cuando el rival
+    # solo aparece en la prosa del análisis (formato Bet Fran), evento
+    # queda a None y el caller decide si gasta una pasada LLM extra.
+    evento = next(iter(_extract_eventos(lines)), None)
+
+    return ExtractedPick(
+        es_apuesta=True,
+        evento=evento,
+        mercado=_classify_leg_market(seleccion),
+        seleccion=seleccion,
+        cuota=float(cuota_match.group(1).replace(",", ".")),
+        stake=float(stake_match.group(1).replace(",", ".")),
+        informante=informante,
+        fecha_evento=_extract_event_date(text, fecha_referencia),
+        linea=_extract_linea(seleccion),
+        metodo="rule",
+        confianza=0.85,
+    )
+
+
+_SYSTEM_PROMPT = """Eres un extractor de pronósticos deportivos.
+
+Recibirás texto de canales de Telegram de tipsters. Devuelve ÚNICAMENTE un JSON con esta estructura:
+
+{
+  "es_apuesta": boolean,
+  "deporte": string | null,
+  "evento": string | null,
+  "mercado": string | null,
+  "seleccion": string | null,
+  "cuota": number | null,
+  "stake": number | null,
+  "casa": string | null,
+  "informante": string | null,
+  "explicacion": string | null,
+  "fecha_evento": string | null,
+  "linea": number | null,
+  "patas": array | null
+}
+
+Reglas:
+- Si no es una apuesta, devuelve es_apuesta = false y el resto null.
+- Una transcripción OCR de captura de boleto (bet365 "Crear apuesta"/"Bet Builder", líneas sueltas sin prosa) ES una apuesta detallada: cada selección viene como par de líneas — titular de la selección ("Stefanos Sakellaridis - Ganará el encuentro") y debajo el nombre del mercado ("Ganará el encuentro") —, seguida de los dos participantes sueltos y la fecha. El boleto publicado por el tipster ES la recomendación; extráelo como apuesta (combinada si hay varias selecciones).
+- NO son apuestas (es_apuesta = false) aunque mencionen selecciones o cuotas:
+  * Mensajes que celebran aciertos pasados ("acertamos", "ganado", "✅ apuesta acertada", "llevamos X aciertos", "ya lo conseguimos", "ver como ganáis dinero"): son marketing del tipster, no picks abiertos.
+  * Anuncios o promociones de casas de apuestas: bonos de bienvenida, supercuotas ("Suvidón", "supercuota", "multiplica tus ganancias"), "solo nuevos usuarios", "T&C", "créditos de apuesta", "regístrate".
+  * Boletos ya liquidados reposteados como prueba: sello "GANADOR"/"GANADA"/"GANAD@S"/"GANADOS", selecciones marcadas una a una con "✓" o "✔", marcadores finales impresos junto a los equipos ("Marcador 0-2"), o un pie de cobro con el importe ANTES de la palabra ("54000€ Ganancias", "Ganancias cobradas/pagadas"). Suelen venir acompañados de celebración ("no me lo creo", "vamosss", "eres un grande") y la fecha del partido impresa es ANTERIOR a la del mensaje. OJO al contrario: los slips ABIERTOS de bet365 muestran "Imp: <x>" + "Ganancias <y>" (la etiqueta primero) y el botón "Cerrar apuesta" (cash-out) — eso es una apuesta VIVA y un pick válido, nunca lo interpretes como liquidado aunque veas "Ganancias" o "Cerrar apuesta".
+  * Anuncios/teasers de combinada o "crear apuesta" que solo dan la cuota total y los partidos ("DOBLE CREAR APUESTA 2X1", "CREAR APUESTA CUOTA 91 BARCELONA - PSG") SIN detallar cada selección del boleto: no hay nada verificable — la apuesta real está detrás del premium del tipster. OJO: en el OCR de un boleto bet365 cada selección viene como titular + línea de mercado debajo ("Stefanos Sakellaridis - Ganará el encuentro / Ganará el encuentro", "Más de 2 tarjetas / Total de tarjetas") — un slip que lista esos pares SÍ está detallado; solo es teaser cuando hay cuota y partidos pero ninguna línea de mercado.
+  Una apuesta abierta real es una recomendación de algo que AÚN no se ha jugado.
+- "seleccion" es SOLO la etiqueta corta del pick (máx ~10 palabras, ej. "Titouan Droguet gana", "Real Sociedad B Hándicap Asiático +1.5", "Menos de 3,5 goles"): nunca la frase del análisis ni la justificación — eso va en "explicacion". En mercados de ganador la selección DEBE nombrar al equipo/jugador apostado ("Leyre Romero gana"): nunca frases genéricas sin sujeto como "ganará el encuentro" o "gana el partido" — el nombre apostado suele estar destacado en el texto (negritas, línea propia, ➡️). Si es una combinada/"crear apuesta" (varias selecciones en un mismo boleto), únelas con " + " (ej. "Más de 1 gol + Más de 2 tarjetas").
+- "patas": SOLO si es una combinada/"crear apuesta"/acumulador (varias selecciones en un mismo boleto): un array con UN objeto por selección del boleto, cada uno con la misma estructura {"seleccion", "evento", "mercado", "linea", "deporte", "fecha_evento", "cuota"} y las mismas reglas de formato ("cuota" por pata solo si aparece explícita; si no, null). En una combinada cada pata puede ser de un partido distinto (rellena su "evento" propio) o del mismo partido (bet-builder: repite el mismo "evento" en todas). Si NO es combinada, "patas" = null. Si solo puedes identificar UNA selección, NO es combinada: "patas" = null y trátala como pick simple.
+- Cada pata debe ser una selección REAL con su mercado. NUNCA son patas: cabeceras de torneo o competición ("CHALL MOUILLERON", "WTA GUADALAJARA", "LA LIGA"), eslóganes del mensaje ("Siempre con cabeza", "Apuesta con responsabilidad", "Juega seguro") ni texto de interfaz del boleto ("Cerrar apuesta", "Imp:", "Ganancias", "Sencillas").
+- Si una selección une varias apuestas con "y" o "+" ("Gana Brunold y +7,5 juegos en el 1° set"), sepáralas en patas distintas de una combinada.
+- En hándicap la selección DEBE incluir el equipo/jugador al que aplica la línea ("Barcelona -2"), nunca "Hándicap Asiático -2" a secas: el equipo suele estar en el titular del mercado o entre los participantes del boleto.
+- "evento" es el enfrentamiento concreto (ej. "Sevilla - Barcelona", "Zizou Bergs vs Jurij Rodionov"). Si el texto muestra "EquipoA - EquipoB" o "EquipoA vs EquipoB", usa ese formato completo con ambos — nunca solo uno. Si los dos participantes aparecen sueltos en el texto sin "vs" (p. ej. el rival solo se menciona en el análisis), forma el evento con ambos nombres ("Bergs vs Rodionov"). Si SOLO aparece la competición ("Copa Davis", "LaLiga") sin los dos participantes, usa la competición tal cual (sirve de pista al verificador en tenis). OJO con el OCR de boletos EN VIVO (bet365): el cruce aparece en su propia línea como "EquipoA v EquipoB" o "EquipoA 0 0 EquipoB" (el "0 0" es el marcador en directo, no parte del nombre) — usa ese cruce como "evento", NUNCA la cabecera de liga de arriba ("Italia - Serie A" no es un partido).
+- "mercado" es el tipo de apuesta: usa siempre una de estas etiquetas si aplica: "ganador", "hándicap asiático", "over/under" (o "over/under goles", "over/under juegos" según el deporte), "doble oportunidad". OJO: "1X"/"X2"/"12" son doble oportunidad, NO hándicap. Si es una combinada/"crear apuesta" con varias selecciones, usa "combinada". Si no encaja en ninguna, describe brevemente el mercado.
+- "deporte" debe ser una palabra normalizada y simple: "fútbol", "tenis", "baloncesto", etc.
+- "linea" es el valor numérico de la línea cuando el mercado es hándicap asiático u over/under (ej. 1.5, -1.5, 2.5). Con signo si es hándicap (+1.5 a favor del equipo de "seleccion", -1.5 en contra). Sin signo si es over/under. Si el mercado no tiene línea (p. ej. "ganador"), déjalo null.
+- Extrae "cuota" solo si aparece un número claramente asociado a la cuota/odds de la selección.
+- Extrae "stake" ÚNICAMENTE si el texto menciona explícitamente la palabra "stake" o "unidades" seguida de un número (normalmente entre 1 y 10).
+- NUNCA uses como "stake" importes en euros/dólares que aparezcan en capturas de pantalla del boleto de una casa de apuestas (p. ej. "Importe", "Imp:", "Ganancias", "Cerrar apuesta", saldo, importe apostado, importe a pagar). Esos son cantidades de dinero del boleto del tipster, no el sistema de unidades de stake. Si no hay mención explícita de "stake" o "unidades", deja "stake" = null.
+- "fecha_evento" es la fecha (y hora si aparece) del partido/evento, en formato ISO 8601 (ej. "2026-09-12T14:00:00"). Solo si aparece explícitamente en el texto. Si el texto da día y mes pero NO año (p. ej. "15 sep 21:00"), usa EXACTAMENTE el año de la fecha del mensaje indicada en la cabecera — nunca otro año. Si la fecha que aparece es ANTERIOR a la fecha del mensaje, devuelve null: seguramente es la fecha de emisión del boleto u otra cosa, no la del partido. OJO: en tenis, "1 set"/"2 set" NO son fechas, son sets del partido. Si no hay fecha, null.
+- No inventes ni deduzcas valores (cuota, stake, casa, fecha, línea, etc.) que no estén explícitamente en el texto. Ante la duda, usa null.
+- No añadas markdown, solo el JSON.
+"""
+
+
+_FIXTURE_V_LINE = re.compile(r"^(.{2,50}?)\s+v\s+(.{2,50}?)$", re.IGNORECASE)
+# "A 0-0 B" o "A 0 0 B": sin guion los dos dígitos van separados por
+# espacio — si no, "Mar 13 oct" casaba como marcador "1-3" partido.
+_FIXTURE_SCORE_LINE = re.compile(
+    r"^(.{2,40}?)\s+\d+(?:\s*[-–—]\s*\d+|\s+\d+)\s+(.{2,40}?)$"
+)
+
+# Participante suelto del boleto: el slip lista los equipos en líneas
+# propias ("Galatasaray SK" y debajo "Barcelona"), no como "A v B".
+# Una línea bare-name = solo nombre propio(s), sin dígitos ni mercado.
+_SLIP_BARE_NAME = re.compile(rf"^{_TEAM_NAME}(?:\s+{_TEAM_NAME})*$")
+
+# Palabras de interfaz/UI del boleto que tienen forma de nombre propio
+# en una línea suelta ("Compartir", "Ganancias", "Pendientes").
+_SLIP_UI_WORD = re.compile(
+    r"^(?:compartir|ganancias?|imp(?:orte)?|pendientes?|cerrar|"
+    r"reutilizar|selecciones?|a[ñn]adir|sencillas?|combinadas?|"
+    r"apuestas?|cash|total|simples?|doble|triples?|crear?)\b",
+    re.IGNORECASE,
+)
+
+
+def _slip_participant_lines(ocr_text: str) -> list[str]:
+    """Líneas del slip que son SOLO un nombre de equipo/jugador.
+
+    Filtra mercado, competición, UI y líneas con dígitos/fechas —
+    en el OCR del boleto los participantes son el único texto que
+    queda así de limpio.
+    """
+    names: list[str] = []
+    for line in ocr_text.splitlines():
+        line = line.strip()
+        if not line or not _SLIP_BARE_NAME.match(line):
+            continue
+        if (
+            _COMPETITION_WORD.search(line)
+            or _MARKET_WORD.search(line)
+            or _SLIP_UI_WORD.search(line)
+        ):
+            continue
+        names.append(line)
+    return names
+
+
+def _fixtures_from_slip_ocr(ocr_text: str | None) -> list[str]:
+    """Cruces del boleto, en orden de aparición.
+
+    Dos formatos vistos en el OCR de slips:
+    1. Línea directa "A v B" o "A 0-0 B" (slip en vivo).
+    2. Participantes en líneas separadas ("Galatasaray SK" + debajo
+       "Barcelona") — se emparejan de dos en dos por orden.
+    """
+    if not ocr_text:
+        return []
+    fixtures: list[str] = []
+    for line in ocr_text.splitlines():
+        line = line.strip()
+        m = _FIXTURE_SCORE_LINE.match(line)
+        if m:
+            fixtures.append(f"{m.group(1)} - {m.group(2)}")
+            continue
+        m = _FIXTURE_V_LINE.match(line)
+        if m:
+            fixtures.append(f"{m.group(1)} - {m.group(2)}")
+    # El mismo cruce puede aparecer dos veces en el slip (línea de
+    # marcador en vivo "A 0-0 B" y línea "A v B"): dedup por orden.
+    fixtures = list(dict.fromkeys(fixtures))
+    if fixtures:
+        return fixtures
+    # El emparejado de nombres sueltos solo se permite en texto con
+    # pinta de boleto (horas/cuotas/UI del slip): en prosa normal dos
+    # nombres propios seguidos podrían fabricar un cruce falso.
+    if not _SLIP_LIKE_TEXT.search(ocr_text):
+        return []
+    names = _slip_participant_lines(ocr_text)
+    return [f"{names[i]} - {names[i + 1]}" for i in range(0, len(names) - 1, 2)]
+
+
+# Señal de que el texto es OCR de un boleto (no prosa del tipster):
+# horas "21:00", cuotas sueltas "1.61" o la UI del slip.
+_SLIP_LIKE_TEXT = re.compile(
+    r"\b\d{1,2}:\d{2}\b|\bimp(?:orte)?\b|ganancias|selecciones|"
+    r"cerrar\s+apuesta|cuota",
+    re.IGNORECASE,
+)
+
+
+def _fixture_from_slip_ocr(ocr_text: str | None) -> str | None:
+    """Compat: primer cruce del boleto."""
+    fixtures = _fixtures_from_slip_ocr(ocr_text)
+    return fixtures[0] if fixtures else None
+
+
+# "Evento" que no es un cruce real: placeholder del LLM ("[Rival no
+# especificado]"), fragmento de fecha del boleto ("Dom - sep",
+# "Mar 13 oct") o cabecera de competición con un lado que es liga
+# ("Austria - Landesliga"). NULL mejor que basura: un evento inventado
+# gasta llamadas del verificador y puede liquidar contra el fixture
+# equivocado.
+_EVENTO_PLACEHOLDER = re.compile(
+    r"[\[\]{}<>]|no\s+especificad|desconocid|sin\s+definir|por\s+definir",
+    re.IGNORECASE,
+)
+_EVENTO_DATE_FRAGMENT = re.compile(
+    r"^\s*"
+    r"(?:lun|mar|mi[eé]|jue|vie|s[aá]b|dom|"
+    r"ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)[a-z]*"
+    r"(?:\s+|\s*[-–]\s*)"
+    r"(?:\d{1,2}\s+)?"
+    r"(?:lun|mar|mi[eé]|jue|vie|s[aá]b|dom|"
+    r"ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)[a-z]*"
+    r"\s*\d{0,4}\s*$",
+    re.IGNORECASE,
+)
+
+# Fecha larga del slip como "evento": "miércoles, 16 de septiembre de
+# 2026, 18:45" (el OCR del historial la pone bajo cada partido) o cualquier
+# string con "de <mes> de <año>".
+_EVENTO_DATE_LONG = re.compile(
+    r"^\s*(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"
+    r"|de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|"
+    r"septiembre|octubre|noviembre|diciembre)\s+de\s+\d{4}",
+    re.IGNORECASE,
+)
+
+# Palabras vacías que rodean a la competición en una cabecera ("España
+# Segunda División" -> "españa"). Si tras quitar competición + ruido no
+# queda nombre real, el evento era solo la cabecera de liga ("LA LIGA",
+# "Ligue 2", "Nations League"). La convención de tenis sobrevive: "ATP
+# PEKÍN" deja "pekín" como residuo, igual que "WTA ANKARA"->"ankara".
+_EVENTO_FILLER = re.compile(
+    r"(?i)\b(?:de|la|el|del|los|las|dobles?|singles?|femenino|masculino|"
+    r"nations|apertura|clausura|clasificaci[oó]n|f|m|u\d+)\b|[^a-záéíóúñü]+"
+)
+
+
+def _is_competition_only_evento(text: str) -> bool:
+    """True si el evento es solo el nombre de una competición."""
+    if not _COMPETITION_WORD.search(text):
+        return False
+    resto = _COMPETITION_WORD.sub("", text)
+    resto = _EVENTO_FILLER.sub("", resto)
+    return len(resto.strip()) < 3
+
+
+def _is_junk_evento(value: Optional[str]) -> bool:
+    """True si `evento` no nombra un enfrentamiento real."""
+    text = (value or "").strip()
+    if not text:
+        return False
+    if _EVENTO_PLACEHOLDER.search(text) or _EVENTO_DATE_FRAGMENT.match(text):
+        return True
+    if _EVENTO_DATE_LONG.search(text):
+        return True
+    if _is_competition_only_evento(text):
+        return True
+    sides = [s.strip() for s in _EVENTO_SIDE_SPLIT.split(text) if s.strip()]
+    return len(sides) >= 2 and any(_COMPETITION_WORD.search(s) for s in sides)
+
+
+# Líneas de "chrome" del boleto (Imp:/Ganancias/Cerrar apuesta/Compartir,
+# importes sueltos) que no aportan a la extracción y confunden al LLM:
+# las lee como boleto liquidado o como teaser sin selecciones. Solo se
+# quitan del texto que va al LLM — los detectores de liquidado corren
+# antes sobre el texto completo.
+_SLIP_CHROME_LINE = re.compile(
+    r"(?i)^\s*(?:"
+    r"sello:\s*ganador\b.*"
+    r"|imp(?:orte)?:?\s*[\d.,]*\s*[€$]?"
+    r"|ganancias\s*:?\s*[\d.,]*\s*[€$]?"
+    r"|cerrar apuesta\b.*"
+    r"|compartir\b.*"
+    r"|reutilizar selecciones\b.*"
+    r"|a[ñn]adir selecci[oó]n\b.*"
+    r"|[sS]/\s*[\d.,]+"
+    r"|[\d.,]+\s*€"
+    r")\s*$"
+)
+
+
+def _strip_slip_chrome(text: str) -> str:
+    """Quita el chrome UI del boleto antes de mandar el texto al LLM."""
+    cleaned = "\n".join(
+        ln for ln in text.splitlines() if not _SLIP_CHROME_LINE.match(ln)
+    )
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+_JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+
+async def _llm_extract(
+    text: str,
+    api_key: Optional[str],
+    informante: Optional[str] = None,
+    fecha_referencia: Optional[datetime] = None,
+) -> Optional[ExtractedPick]:
+    """Extracción por LLM: OpenAI si hay key y responde; si falla (o no
+    hay key) cae a la cascada gratuita Groq→Cerebras→OpenRouter. El pick
+    lleva `metodo="llm"` con OpenAI y `llm-{motor}` con la cascada, así
+    se puede comparar quién extrajo qué en BD.
+    """
+    text = _strip_slip_chrome(text)
+    fecha_str = (
+        fecha_referencia.strftime("%Y-%m-%d %H:%M")
+        if fecha_referencia
+        else "desconocida"
+    )
+    user_content = (
+        f"Canal: {informante or 'desconocido'}\n"
+        f"Fecha del mensaje: {fecha_str}\n\n"
+        f"Mensaje:\n{text}"
+    )
+    content: Optional[str] = None
+    engine: Optional[str] = None
+
+    if api_key:
+        try:
+            client = AsyncOpenAI(api_key=api_key)
+            response = await call_with_retry(
+                lambda: client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "user", "content": user_content},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.0,
+                ),
+                f"extracción LLM ({informante or 'desconocido'})",
+            )
+            content = response.choices[0].message.content
+        except Exception as exc:  # noqa: BLE001
+            # Cuota agotada, red caída... la cascada gratuita cubre la
+            # ingesta; la alerta operativa la da el benchmark/logs.
+            logger.warning("[LLM] OpenAI falló (%s) — probando cascada gratuita", exc)
+            content = None
+
+    if content is None:
+        from app.services.results import compat_llm
+
+        compat = await compat_llm.extract_text(
+            f"{_SYSTEM_PROMPT}\n\n{user_content}", purpose="ingesta"
+        )
+        if compat:
+            content, engine = compat
+
+    if not content:
+        return None
+
+    try:
+        data = json.loads(_JSON_FENCE.sub("", content.strip()))
+    except json.JSONDecodeError as exc:
+        logger.warning("[LLM] JSON ilegible (%s): %s", engine or "openai", exc)
+        return None
+    pick = ExtractedPick(**data)
+    pick.metodo = f"llm-{engine}" if engine else "llm"
+    pick.confianza = 0.75 if pick.es_apuesta else 0.0
+    pick.informante = pick.informante or informante
+    if pick.fecha_evento is None:
+        pick.fecha_evento = _extract_event_date(text, fecha_referencia)
+    if pick.linea is None and pick.seleccion:
+        pick.linea = _extract_linea(pick.seleccion)
+    if pick.evento and _is_junk_evento(pick.evento):
+        # El LLM devolvió un placeholder, un fragmento de fecha del
+        # boleto ("Dom - sep") o la cabecera de liga ("Austria -
+        # Landesliga"): se descarta y se intenta el fallback del
+        # slip — NULL honesto si tampoco hay cruce recuperable.
+        pick.evento = None
+    if not _extract_eventos([pick.evento or ""]):
+        # El LLM a veces devuelve la cabecera de liga ("Italia - Serie
+        # A") o null aunque el OCR del boleto tenga el cruce ("Como v
+        # Parma" en línea propia, o los participantes separados como
+        # "Galatasaray SK" / "Barcelona").
+        fixtures = _fixtures_from_slip_ocr(text)
+        if fixtures:
+            pick.evento = fixtures[0]
+        if len(fixtures) > 1 and len(fixtures) == len(pick.patas):
+            # Acumulador con un cruce por pata, en el mismo orden.
+            for pata, fixture in zip(pick.patas, fixtures):
+                if not pata.evento or _is_junk_evento(pata.evento):
+                    pata.evento = fixture
+    return pick
+
+
+# Solo fechas largas inequívocas, con año explícito — el formato que
+# imprimen las casas en el boleto ("16 de septiembre de 2026, 19:00").
+_MESES_LARGO = {
+    "enero": 1,
+    "febrero": 2,
+    "marzo": 3,
+    "abril": 4,
+    "mayo": 5,
+    "junio": 6,
+    "julio": 7,
+    "agosto": 8,
+    "septiembre": 9,
+    "setiembre": 9,
+    "octubre": 10,
+    "noviembre": 11,
+    "diciembre": 12,
+}
+_SLIP_DATE_RE = re.compile(
+    r"\b(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|"
+    r"agosto|septiembre|setiembre|octubre|noviembre|diciembre)\s+de\s+"
+    r"(\d{4})\b(?:\s*[,·-]?\s*(\d{1,2}):(\d{2}))?",
+    re.IGNORECASE,
+)
+# Formato corto que también imprimen las casas ("24/8/26 19:30").
+_SLIP_DATE_SHORT_RE = re.compile(
+    r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b(?:\s*[,·-]?\s*(\d{1,2}):(\d{2}))?"
+)
+
+
+def slip_printed_date(text: Optional[str]) -> Optional[datetime]:
+    """Fecha del partido impresa en el boleto, o None.
+
+    Acepta el formato largo con año ("16 de septiembre de 2026, 19:00")
+    y el corto con barras ("24/8/26 19:30") — ambos inequívocos en slips
+    de casas españolas. Sin fecha impresa clara no se inventa nada.
+    """
+    if not text:
+        return None
+    match = _SLIP_DATE_RE.search(text)
+    if match:
+        day, month_name, year, hour, minute = match.groups()
+        try:
+            return datetime(
+                int(year),
+                _MESES_LARGO[month_name.lower()],
+                int(day),
+                int(hour or 0),
+                int(minute or 0),
+            )
+        except (ValueError, KeyError):
+            return None
+    short = _SLIP_DATE_SHORT_RE.search(text)
+    if not short:
+        return None
+    day, month, year, hour, minute = short.groups()
+    year_int = int(year)
+    if year_int < 100:
+        year_int += 2000
+    try:
+        return datetime(
+            year_int, int(month), int(day), int(hour or 0), int(minute or 0)
+        )
+    except ValueError:
+        return None
+
+
+def is_reposted_slip(text: Optional[str], received_at: Optional[datetime]) -> bool:
+    """True si la fecha del evento impresa en el slip es claramente
+    ANTERIOR a la del mensaje.
+
+    Una foto de boleto republicada días/semanas después del partido no
+    puede ser un pick abierto — es marketing de "verdes" que el dedup
+    de ±6 h no caza. Margen de >=2 días: un slip en vivo posteado pasada
+    la medianoche del partido (1 día de diferencia) sigue siendo pick.
+    """
+    if not text or received_at is None:
+        return False
+    slip_dt = slip_printed_date(text)
+    if slip_dt is None:
+        return False
+    return (received_at.date() - slip_dt.date()).days >= 2
+
+
+# Marcadores de boleto ya LIQUIDADO: el OCR de un slip liquidado lleva el
+# sello "GANADOR"/"GANADA" en mayúsculas (p. ej. fotos de "verdes" que el
+# tipster reposte a como prueba). No es una apuesta abierta aunque traiga
+# selección y cuota. Se busca sobre el texto original SIN pasar a
+# minúsculas para no confundir el sello con el mercado "ganador" de un
+# pick real. "GANASTE <importe>" es el verbo de cobro que imprime bet365.
+_SETTLED_TICKET_PATTERN = re.compile(
+    r"\bGANADOR\b|\bGANADA\b|\bGANAD[@OA]S\b|APUESTA\s+GANADA|\bWON\b"
+    r"|(?i:\breturned\b)|\bGANASTE\b"
+)
+
+# La casa solo imprime el marcador final junto a los equipos cuando el
+# boleto YA está revisado ("Marcador 0-2" al lado de FC Porto/Man City).
+# Un slip abierto nunca lleva resultado. Detecta reposts de "verdes"
+# aunque el sello y los ✓ se pierdan en el OCR.
+_SETTLED_SCORE_PATTERN = re.compile(r"\bmarcador\s+\d+\s*[-–:]\s*\d+\b", re.IGNORECASE)
+
+# En un slip liquidado cada selección aparece marcada con ✓/✔ (la vista
+# "verde" de bet365 que el tipster repostea); un slip abierto nunca las
+# lleva. Dos o más marcas con el premio pagado ("<importe>€ Ganancias")
+# confirman el boleto cobrado aunque el texto diga "Crear apuesta".
+_SETTLED_CHECKMARKS = re.compile(r"[✓✔]")
+
+# Boleto cobrado SIN el sello (el OCR a veces lo pierde): la línea de
+# premio pagado es "<importe>€ Ganancias" — importe DELANTE de la
+# palabra. En un slip abierto es al revés ("Ganancias 3.570,00€" o
+# "Ganancias potenciales") y además lleva "Cerrar apuesta"/"Añadir
+# selección"/"hoja de apuestas", así que esos marcadores descartan el
+# caso abierto (p. ej. "Imp: 100,00€ Ganancias ... Cerrar apuesta").
+# El "$" multilínea evita falsos positivos con "Imp: 100€ Ganancias 180€"
+# (importe seguido del premio): solo casa cuando "Ganancias" cierra la
+# línea, p. ej. el payout final "23333,33€ Ganancias" del slip cobrado.
+_SETTLED_PAYOUT_PATTERN = re.compile(r"\d[\d.,]*\s*€\s*Ganancias\s*$", re.MULTILINE)
+_OPEN_SLIP_PATTERN = re.compile(
+    r"Cerrar apuesta|Añadir selecci[oó]n|potencial|" r"Reutilizar|hoja de apuestas",
+    re.IGNORECASE,
+)
+
+# Señales de slip ABIERTO que desmienten un sello alucinado por el OCR:
+# cash-out ("Cerrar apuesta"/"Cashout"), estado "En curso" o premio
+# "potenciales" solo existen en apuestas vivas (caso real raw 844).
+_OPEN_SLIP_UI = re.compile(
+    r"cerrar apuesta|cashout|en curso|ganancias\s+potenciales",
+    re.IGNORECASE,
+)
+
+# Veredicto por pata en la vista liquidada del bet-builder ("Crear
+# Apuesta"): cada selección lleva su "Gana"/"Pierde" en línea propia —
+# un slip abierto muestra ahí la cuota, nunca el resultado. >=2 marca
+# un boleto ya revisado aunque el sello se haya perdido en el OCR
+# (casos reales raws 19678/22171).
+_SETTLED_VERDICT_RE = re.compile(
+    r"^\s*(?:gana|ganada|pierde|perdida)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Pantalla "Mis apuestas" de bet365 (MYMATCH): pestañas de estado con
+# contadores ("En curso (2) Ganadas Finalizadas Ocultas (1)") — es el
+# HISTORIAL de un suscriptor republicado, no un pick abierto. Ojo:
+# "en curso" a secas es señal de slip VIVO (_OPEN_SLIP_UI); solo con
+# el contador "(N)" de pestaña es UI de historial (raw real #6498).
+_HISTORY_SCREEN_RE = re.compile(
+    r"\bmymatch\b"
+    r"|en curso\s*\(\s*\d+\s*\)"
+    r"|(?:ganadas|finalizadas|perdidas|ocultas)\s*\(\s*\d+\s*\)",
+    re.IGNORECASE,
+)
+
+
+def _is_settled_ticket(text: str) -> bool:
+    """True si el texto parece un boleto YA liquidado/cobrado."""
+    # El cash-out, el estado "En curso" y el premio "potenciales" solo
+    # existen en apuestas VIVAS. Si el OCR estampa 'SELLO: GANADOR' pero
+    # el slip muestra cualquiera de ellas, el sello es una alucinación
+    # del modelo — el texto de la UI manda.
+    if "SELLO: GANADOR" in text and _OPEN_SLIP_UI.search(text):
+        text = text.replace("SELLO: GANADOR", "", 1)
+    if _HISTORY_SCREEN_RE.search(text):
+        return True
+    if _SETTLED_TICKET_PATTERN.search(text):
+        return True
+    if _SETTLED_SCORE_PATTERN.search(text):
+        return True
+    if len(_SETTLED_VERDICT_RE.findall(text)) >= 2:
+        return True
+    low = text.lower()
+    # Historial de apuestas resueltas (WH "Mis apuestas" y similares):
+    # cada selección lleva su veredicto pegado a la cuota ("Resultado
+    # del partido @ 5,50 Gana", "Más/Menos @ 1,80 Gana") o el estado
+    # "Resultado: Ganada". Un slip abierto nunca imprime el resultado
+    # por selección. \bgana\b no casa "ganador"/"ganará" (boleto vivo).
+    hist_wins = len(re.findall(r"@\s*[\d.,]+\s+gana\b", text, re.IGNORECASE))
+    if hist_wins >= 2:
+        return True
+    if re.search(r"resultado\s*:\s*ganada\b", low):
+        return True
+    if hist_wins >= 1 and re.search(r"ganancias\s*:", low):
+        return True
+    # Premio pagado sin "potencial": en slips ABIERTOS de bet365 el premio
+    # siempre es "Ganancias potenciales"; la pareja "Imp:/Importe: <x>€" +
+    # "Ganancias <y>€" a secas es la vista de un boleto ya cobrado que el
+    # tipster repostea como prueba ("verdes"). "Crear apuesta" no vale
+    # como marcador de abierto aquí porque también es el nombre del
+    # mercado bet-builder en slips liquidados.
+    if (
+        re.search(r"\bimp(?:orte)?:", low)
+        and re.search(r"\bganancias\s*:?\s*€?\s*\d", low)
+        and "potencial" not in low
+        and not re.search(r"cerrar apuesta|añadir selecci[oó]n", low)
+    ):
+        return True
+    if (
+        _SETTLED_PAYOUT_PATTERN.search(text)
+        and len(_SETTLED_CHECKMARKS.findall(text)) >= 2
+    ):
+        return True
+    # William Hill y similares: el slip liquidado cierra con "Retorno:
+    # € <importe>" y un identificador de apuesta. El boleto vivo muestra
+    # "Retorno potencial" o no imprime retorno (caso real raw 909).
+    if re.search(r"\bretorno\s*:", low) and re.search(
+        r"\bid\s+de\s+(?:la\s+)?apuesta\b", low
+    ):
+        return True
+    return bool(_SETTLED_PAYOUT_PATTERN.search(text)) and not bool(
+        _OPEN_SLIP_PATTERN.search(text)
+    )
+
+
+# Celebración en TEXTO (no OCR) de un pick ya acertado: el tipster marca
+# cada selección con ✅ y presume del resultado ("acertando otra vez",
+# "clavamos", "beneficio de +60.000€"). La marca ✅ sobre la línea de
+# mercado por sí sola no basta (decoración habitual), y la palabra de
+# celebración sola tampoco (un análisis puede decir "ganamos si..."):
+# solo juntas delatan un boleto ya jugado reposteado como prueba. Se
+# evalúa ANTES que _STRONG_PICK_PATTERNS porque estos mensajes suelen
+# citar la cuota del boleto ganado ("Combinada cuota 5").
+_WIN_CELEBRATION = re.compile(
+    r"acertando|acertamos|acertad|clavamos|clavada|ganamos\s+dinero|"
+    r"hemos\s+ganado|beneficio\s+de\s*\+|haceros\s+ganar|"
+    r"la\s+informaci[oó]n\s+es\s+poder",
+    re.IGNORECASE,
+)
+_CHECKMARKED_LINE = re.compile(
+    r"^[\s ]*[✅✔☑]+.{0,60}"
+    r"(?:gol|tarjeta|combinada|cuota|gana|juegos|c[oó]rner|set)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _is_win_celebration(text: str) -> bool:
+    """True si el texto celebra un pick ya acertado (✅ + celebración)."""
+    return bool(_WIN_CELEBRATION.search(text) and _CHECKMARKED_LINE.search(text))
+
+
+# Comentario EN VIVO sobre una apuesta ya publicada: el tipster narra
+# cómo va el partido ("la tenemos en el bolsillo", "vamos a por la 2ª
+# parte", "no llevamos nada mal"). Cita la cuota del pick original —
+# "a cuota @5" — y sin este veto _STRONG_PICK_PATTERNS la toma como
+# señal de apuesta nueva. Un anuncio de pick siempre mira hacia
+# adelante; estas frases solo describen el estado del partido en curso.
+# Se evalúa ANTES que _STRONG_PICK_PATTERNS, como los otros vetos.
+_LIVE_COMMENTARY = re.compile(
+    r"en\s+el\s+bolsillo|"
+    r"vamos\s+a\s+por\s+la\s+(?:segunda|2[ªº]?|siguiente)\s+parte|"
+    r"no\s+llevamos\s+nada\s+mal|"
+    r"de\s+momento\s+(?:va|van|ganamos)",
+    re.IGNORECASE,
+)
+
+
+def _is_live_commentary(text: str) -> bool:
+    """True si el texto narra en vivo una apuesta ya publicada."""
+    return bool(_LIVE_COMMENTARY.search(text))
+
+
+# Marketing de urgencia para meter gente al premium ("perdiste la
+# ÚLTIMA PLAZA", "quedan 3 plazas", link de pago premiumpay...). No hay
+# apuesta que auditar: lo que las reglas extraen ("+ perdiste la
+# ÚLTIMA" como selección, cuota 121) es el anuncio masticado — caso
+# real: pick 10073.
+_PREMIUM_URGENCY = re.compile(
+    r"últim\w*\s+plazas?|"
+    r"quedan\s+\d+\s+plazas?|"
+    r"plazas?\s+(?:limitadas|agotadas)|"
+    r"premiumpay|"
+    r"(?:enlace|link)\s+de\s+pago|"
+    r"(?:entra|accede|únete|unete)\s+al\s+premium",
+    re.IGNORECASE,
+)
+
+
+def _is_premium_urgency(text: str) -> bool:
+    """True si el texto es marketing de urgencia del canal premium/VIP."""
+    return bool(_PREMIUM_URGENCY.search(text))
+
+
+async def extract_pick(
+    text: str,
+    api_key: str,
+    informante: Optional[str] = None,
+    fecha_referencia: Optional[datetime] = None,
+) -> Optional[ExtractedPick]:
+    """Extractor híbrido.
+
+    `fecha_referencia` es la fecha real del mensaje de Telegram: sirve de
+    ancla para resolver fechas sin año ("15 sep 21:00") tanto en reglas
+    como en el LLM.
+    """
+    if _is_settled_ticket(text):
+        return ExtractedPick(
+            es_apuesta=False, informante=informante, metodo="rejected", confianza=0.95
+        )
+
+    if is_reposted_slip(text, fecha_referencia):
+        return ExtractedPick(
+            es_apuesta=False, informante=informante, metodo="rejected", confianza=0.9
+        )
+
+    if _is_premium_urgency(text):
+        return ExtractedPick(
+            es_apuesta=False, informante=informante, metodo="rejected", confianza=0.9
+        )
+
+    if _is_win_celebration(text):
+        return ExtractedPick(
+            es_apuesta=False, informante=informante, metodo="rejected", confianza=0.9
+        )
+
+    if _is_live_commentary(text):
+        return ExtractedPick(
+            es_apuesta=False, informante=informante, metodo="rejected", confianza=0.9
+        )
+
+    # El OCR puede estampar 'SELLO: GANADOR' en slips vivos; cuando el
+    # detector lo vetó (cash-out/"En curso"/premio potencial presente),
+    # la línea tampoco debe llegar al LLM o la seguirá al pie de la
+    # letra.
+    if "SELLO: GANADOR" in text and _OPEN_SLIP_UI.search(text):
+        text = text.replace("SELLO: GANADOR", "", 1)
+
+    if not _looks_like_bet(text):
+        return ExtractedPick(
+            es_apuesta=False, informante=informante, metodo="rejected", confianza=0.95
+        )
+
+    # Combinadas: si hay señal de combinada se intenta partir por
+    # reglas y, si no se puede, se va directo al LLM. `_rule_extract`
+    # NO se ejecuta aquí: cogería la primera pata como si fuera un pick
+    # simple y perderíamos el resto del boleto.
+    if _COMBINADA_PATTERN.search(text):
+        rule_comb = _rule_extract_combinada(
+            text, informante=informante, fecha_referencia=fecha_referencia
+        )
+        if rule_comb is not None:
+            rule_comb.fecha_evento = _sanitize_event_date(
+                rule_comb.fecha_evento, fecha_referencia
+            )
+            return _normalize_pick(
+                _ensure_combinada_shape(rule_comb, fecha_referencia), text
+            )
+        llm_comb = await _llm_extract(
+            text, api_key, informante=informante, fecha_referencia=fecha_referencia
+        )
+        if llm_comb is None:
+            return None
+        llm_comb.fecha_evento = _sanitize_event_date(
+            llm_comb.fecha_evento, fecha_referencia
+        )
+        return _normalize_pick(
+            _ensure_combinada_shape(llm_comb, fecha_referencia), text
+        )
+
+    rule_result = _rule_extract(
+        text, informante=informante, fecha_referencia=fecha_referencia
+    )
+    if rule_result:
+        if rule_result.es_apuesta and not rule_result.evento:
+            # Las reglas no ven el enfrentamiento cuando solo aparece en
+            # la prosa del análisis ("el H2H favorece a Mayot" en Bet
+            # Fran): una segunda pasada LLM intenta rellenarlo. Solo se
+            # gasta la llamada en este caso — los picks ya completos por
+            # reglas siguen ahorrando el LLM como antes.
+            llm_result = await _llm_extract(
+                text,
+                api_key,
+                informante=informante,
+                fecha_referencia=fecha_referencia,
+            )
+            if llm_result is not None and llm_result.es_apuesta:
+                # Merge conservador: el pick de reglas es la base (su
+                # seleccion/cuota/stake son fiables) y el LLM solo
+                # aporta los campos que las reglas no rellenan.
+                for field in ("evento", "deporte", "mercado", "casa", "explicacion"):
+                    if not getattr(rule_result, field):
+                        setattr(rule_result, field, getattr(llm_result, field))
+                if llm_result.evento:
+                    # "rule+llm" con OpenAI, "rule+llm-groq" con la
+                    # cascada — se ve quién aportó el campo extra.
+                    rule_result.metodo = f"rule+{llm_result.metodo}"[:20]
+        rule_result.fecha_evento = _sanitize_event_date(
+            rule_result.fecha_evento, fecha_referencia
+        )
+        # El path de reglas también puede traer una selección compuesta
+        # ("Sakkari gana y +7.5 juegos en el 1 set"): mismo shape que el
+        # LLM — si son dos selecciones se convierte en combinada.
+        rule_result = _ensure_combinada_shape(rule_result, fecha_referencia)
+        return _normalize_pick(rule_result, text)
+
+    llm_result = await _llm_extract(
+        text, api_key, informante=informante, fecha_referencia=fecha_referencia
+    )
+    if llm_result is not None:
+        llm_result.fecha_evento = _sanitize_event_date(
+            llm_result.fecha_evento, fecha_referencia
+        )
+        # El LLM puede devolver patas aunque el mensaje no tuviera la
+        # señal léxica de combinada (p. ej. un slip solo con viñetas).
+        llm_result = _ensure_combinada_shape(llm_result, fecha_referencia)
+        return _normalize_pick(llm_result, text)
+    return llm_result

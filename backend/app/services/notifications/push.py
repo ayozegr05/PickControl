@@ -1,0 +1,463 @@
+"""Envío de notificaciones push vía Expo Push API.
+
+Dos disparadores, ambos fire-and-forget seguros (una notificación
+NUNCA debe tumbar la ingesta de Telegram ni la verificación):
+
+- `notify_new_pick`: un `ParsedPick` nuevo con `es_apuesta` (las
+  combinadas notifican solo el padre — las patas no pasan por aquí).
+- `notify_settled_picks`: picks que acaban de liquidarse — solo se
+  avisa al usuario que marcó "Yo también la jugué" (existe una fila
+  `picks.parsed_pick_id` enlazada), no por cada pick del tipster.
+
+Los recibos de Expo vienen alineados con los mensajes enviados; un
+`DeviceNotRegistered` desactiva el token (`enabled=False`) para no
+reintentar envíos imposibles.
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+import httpx
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from app.core.config import get_settings
+from app.core.dates import utc_now
+from app.core.logging import get_logger
+from app.db.postgres import AsyncSessionLocal
+from app.models.device_token import DeviceToken
+from app.models.parsed_pick import ParsedPick
+from app.models.pick import Pick
+from app.models.user import User, UserRole
+
+logger = get_logger("app.notifications.push")
+
+_EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
+# Expo recomienda lotes de <=100 mensajes por petición.
+_CHUNK = 100
+
+
+def _enabled(settings) -> bool:
+    """Push activado y configurado (sin kill-switch accidental)."""
+    return bool(settings.push_notifications_enabled)
+
+
+async def _send_chunk(messages: list[dict], access_token: Optional[str]) -> list[dict]:
+    """Un lote a la Expo Push API; devuelve los recibos por mensaje."""
+    headers = {"Content-Type": "application/json"}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(_EXPO_PUSH_URL, json=messages, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+    receipts = data.get("data") or []
+    return receipts if isinstance(receipts, list) else []
+
+
+async def _send(session: AsyncSession, rows: list[DeviceToken], build_message) -> int:
+    """Envía `build_message(token)` a cada fila; desactiva tokens muertos.
+
+    Devuelve cuántos mensajes se intentaron. Los recibos se emparejan
+    por posición con el envío (la API responde en el mismo orden).
+    """
+    if not rows:
+        return 0
+    settings = get_settings()
+    sent = 0
+    for start in range(0, len(rows), _CHUNK):
+        chunk = rows[start : start + _CHUNK]
+        messages = [build_message(row.token) for row in chunk]
+        try:
+            receipts = await _send_chunk(messages, settings.expo_access_token)
+        except httpx.HTTPError as exc:
+            logger.warning("[PUSH] Error enviando lote a Expo: %s", exc)
+            continue
+        sent += len(messages)
+        for row, receipt in zip(chunk, receipts):
+            if (
+                isinstance(receipt, dict)
+                and receipt.get("status") == "error"
+                and (receipt.get("details") or {}).get("error") == "DeviceNotRegistered"
+            ):
+                row.enabled = False
+                row.updated_at = utc_now()
+                session.add(row)
+    # Los tokens muertos quedan desactivados en la misma transacción de
+    # la notificación (sesión propia del servicio — sin commit se
+    # perdería el disable y se reintentaría el envío imposible).
+    await session.commit()
+    return sent
+
+
+async def _tokens_of(session: AsyncSession, user_ids: set[int]) -> list[DeviceToken]:
+    return list(
+        (
+            await session.exec(
+                select(DeviceToken)
+                .where(DeviceToken.enabled == True)  # noqa: E712
+                .where(DeviceToken.user_id.in_(user_ids))
+            )
+        ).all()
+    )
+
+
+def _pick_summary(pick: ParsedPick) -> str:
+    """Texto corto del pick para el cuerpo de la notificación."""
+    cuota = f" @ {pick.cuota:g}" if pick.cuota else ""
+    return f"{pick.seleccion or pick.apuesta or 'Nuevo pick'}{cuota}"
+
+
+async def notify_new_pick(pick_id: int) -> None:
+    """Push "pick nuevo" a TODOS los dispositivos activos.
+
+    Las combinadas llegan como el padre (las patas no disparan), y los
+    duplicados/enriquecidos no pasan por aquí (ya notificaron al crearse).
+    """
+    try:
+        if not _enabled(get_settings()):
+            return
+        async with AsyncSessionLocal() as session:
+            pick = await session.get(ParsedPick, pick_id)
+            if pick is None or not pick.es_apuesta:
+                return
+            rows = list(
+                (
+                    await session.exec(
+                        select(DeviceToken).where(
+                            DeviceToken.enabled == True  # noqa: E712
+                        )
+                    )
+                ).all()
+            )
+            if pick.es_combinada:
+                patas = (
+                    await session.exec(
+                        select(ParsedPick).where(ParsedPick.combinada_id == pick.id)
+                    )
+                ).all()
+                summary = (
+                    f"Combinada x{len(patas) or '?'} @ {pick.cuota:g}"
+                    if pick.cuota
+                    else "Combinada nueva"
+                )
+            else:
+                summary = _pick_summary(pick)
+
+            def message(token: str) -> dict:
+                return {
+                    "to": token,
+                    "title": f"Nuevo pick — {pick.informante or 'tipster'}",
+                    "body": summary,
+                    "data": {"type": "new_pick", "pick_id": pick.id},
+                }
+
+            sent = await _send(session, rows, message)
+            if sent:
+                logger.info(
+                    "[PUSH] Pick nuevo id=%s notificado a %d dispositivos.",
+                    pick_id,
+                    sent,
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[PUSH] notify_new_pick(%s) falló: %s", pick_id, exc)
+
+
+async def notify_settled_picks(pick_ids: list[int]) -> None:
+    """Push "apuesta liquidada" solo a usuarios que la jugaron.
+
+    `picks.parsed_pick_id` enlaza la apuesta del usuario con el pick del
+    tipster — sin esa fila no hay notificación (el tipster liquida
+    cientos de picks; solo importan las tuyas).
+    """
+    try:
+        if not pick_ids or not _enabled(get_settings()):
+            return
+        async with AsyncSessionLocal() as session:
+            for pick_id in pick_ids:
+                pick = await session.get(ParsedPick, pick_id)
+                if pick is None:
+                    continue
+                user_bets = list(
+                    (
+                        await session.exec(
+                            select(Pick).where(Pick.parsed_pick_id == pick_id)
+                        )
+                    ).all()
+                )
+                user_ids = {bet.usuario_id for bet in user_bets}
+                if not user_ids:
+                    continue
+                rows = await _tokens_of(session, user_ids)
+                estado = (
+                    "anulada"
+                    if pick.anulada
+                    else ("acertada" if pick.acierto else "fallada")
+                )
+
+                def message(token: str) -> dict:
+                    return {
+                        "to": token,
+                        "title": f"Apuesta {estado}",
+                        "body": _pick_summary(pick),
+                        "data": {
+                            "type": "settled",
+                            "pick_id": pick.id,
+                            "acierto": pick.acierto,
+                            "anulada": pick.anulada,
+                        },
+                    }
+
+                sent = await _send(session, rows, message)
+                if sent:
+                    logger.info(
+                        "[PUSH] Pick id=%s liquidado (%s): notificado a %d.",
+                        pick_id,
+                        estado,
+                        sent,
+                    )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[PUSH] notify_settled_picks(%s) falló: %s", pick_ids, exc)
+
+
+async def notify_provider_rate_limited(provider_name: str) -> None:
+    """Push "cuota agotada" SOLO a dispositivos de usuarios admin.
+
+    Disparada por `results.base.mark_rate_limited` la primera vez del día
+    que un provider responde 403/429 — es información de operación, no
+    para usuarios normales.
+    """
+    try:
+        if not _enabled(get_settings()):
+            return
+        async with AsyncSessionLocal() as session:
+            rows = list(
+                (
+                    await session.exec(
+                        select(DeviceToken)
+                        .join(User, User.id == DeviceToken.user_id)
+                        .where(User.role == UserRole.ADMIN)
+                        .where(DeviceToken.enabled == True)  # noqa: E712
+                    )
+                ).all()
+            )
+
+            def message(token: str) -> dict:
+                return {
+                    "to": token,
+                    "title": "Proveedor sin cuota",
+                    "body": f"{provider_name} agotó su cuota de hoy — los picks que dependan de él quedan pendientes hasta mañana.",
+                    "data": {
+                        "type": "provider_rate_limited",
+                        "provider": provider_name,
+                    },
+                }
+
+            sent = await _send(session, rows, message)
+            if sent:
+                logger.info(
+                    "[PUSH] Cuota agotada de %s notificada a %d dispositivos admin.",
+                    provider_name,
+                    sent,
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "[PUSH] notify_provider_rate_limited(%s) falló: %s", provider_name, exc
+        )
+
+
+async def notify_odds_audit_mismatch(report) -> int:
+    """Push "filas de cuotas mal mapeadas" SOLO a admins.
+
+    Disparada por la auditoría semanal de `odds/audit.py`: el mapeador
+    re-ejecutado sobre las filas guardadas casó una opción distinta a
+    la almacenada — firma de regresión en parser/extractor/mapeo que
+    hay que revisar. `report` es un AuditReport (import perezoso para
+    no acoplar push -> odds)."""
+    try:
+        if not _enabled(get_settings()):
+            return 0
+        async with AsyncSessionLocal() as session:
+            rows = list(
+                (
+                    await session.exec(
+                        select(DeviceToken)
+                        .join(User, User.id == DeviceToken.user_id)
+                        .where(User.role == UserRole.ADMIN)
+                        .where(DeviceToken.enabled == True)  # noqa: E712
+                    )
+                ).all()
+            )
+
+            def message(token: str) -> dict:
+                return {
+                    "to": token,
+                    "title": "Auditoría de cuotas: filas mal mapeadas",
+                    "body": (
+                        f"{report.mal} de {report.picks} picks con fila "
+                        f"no casan con el mapeador actual "
+                        f"({report.ok} ok, {report.sin_map} sin mapa). "
+                        "Revisar ejemplos en /system/providers."
+                    ),
+                    "data": {
+                        "type": "odds_audit_mismatch",
+                        "mal": report.mal,
+                    },
+                }
+
+            sent = await _send(session, rows, message)
+            if sent:
+                logger.info(
+                    "[PUSH] Auditoría de cuotas (%s mal) notificada a %d admins.",
+                    report.mal,
+                    sent,
+                )
+            return sent
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[PUSH] notify_odds_audit_mismatch falló: %s", exc)
+        return 0
+
+
+async def notify_scraper_broken(source_name: str, detail: str) -> None:
+    """Push "listado de cuotas roto" SOLO a admins.
+
+    Disparada por el canario de `odds/static_pages.py`: la página se
+    descarga bien pero ya no tiene filas parseables — firma de que
+    cambiaron el layout y el parser hay que retocarlo. Información de
+    operación, no para usuarios normales."""
+    try:
+        if not _enabled(get_settings()):
+            return
+        async with AsyncSessionLocal() as session:
+            rows = list(
+                (
+                    await session.exec(
+                        select(DeviceToken)
+                        .join(User, User.id == DeviceToken.user_id)
+                        .where(User.role == UserRole.ADMIN)
+                        .where(DeviceToken.enabled == True)  # noqa: E712
+                    )
+                ).all()
+            )
+
+            def message(token: str) -> dict:
+                return {
+                    "to": token,
+                    "title": "Fuente de cuotas rota",
+                    "body": (
+                        f"{source_name} devuelve páginas sin partidos "
+                        f"parseables — {detail}. Revisar el parser."
+                    ),
+                    "data": {
+                        "type": "scraper_broken",
+                        "provider": source_name,
+                    },
+                }
+
+            sent = await _send(session, rows, message)
+            if sent:
+                logger.info(
+                    "[PUSH] Scraper %s roto notificado a %d dispositivos admin.",
+                    source_name,
+                    sent,
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[PUSH] notify_scraper_broken(%s) falló: %s", source_name, exc)
+
+
+async def notify_ingest_down(detail: str, raws_ventana: int) -> None:
+    """Push "ingesta posiblemente caída" SOLO a admins.
+
+    Disparada por `maintenance/ingest_health.py`: mensajes entrando pero
+    fotos sin OCR o raws sin procesar — firma de que la cadena de
+    extracción está rota (p. ej. OpenAI sin crédito). Información de
+    operación, no para usuarios normales."""
+    # Email como canal de emergencia independiente del push: si el
+    # admin no tiene la app instalada, el push muere con el token y
+    # nadie se entera (caso real oct-2026: 10 días de ingesta caída
+    # sin aviso recibido). Sin ALERT_EMAIL_TO configurado es no-op.
+    from app.services.notifications.email_alert import send_alert
+
+    await send_alert(
+        "[ControlPick] Ingesta posiblemente caída",
+        f"{detail} ({raws_ventana} raws en las últimas 3h).\n\n"
+        "El listener de Telegram o la cadena de extracción pueden "
+        "estar rotos. Revisar el backend de producción.",
+    )
+    try:
+        if not _enabled(get_settings()):
+            return
+        async with AsyncSessionLocal() as session:
+            rows = list(
+                (
+                    await session.exec(
+                        select(DeviceToken)
+                        .join(User, User.id == DeviceToken.user_id)
+                        .where(User.role == UserRole.ADMIN)
+                        .where(DeviceToken.enabled == True)  # noqa: E712
+                    )
+                ).all()
+            )
+
+            def message(token: str) -> dict:
+                return {
+                    "to": token,
+                    "title": "Ingesta posiblemente caída",
+                    "body": (
+                        f"{detail} ({raws_ventana} raws en las últimas "
+                        f"3h). Revisar OCR/extracción."
+                    ),
+                    "data": {"type": "ingest_down", "detail": detail},
+                }
+
+            sent = await _send(session, rows, message)
+            if sent:
+                logger.info(
+                    "[PUSH] Ingesta caída notificada a %d dispositivos admin.",
+                    sent,
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[PUSH] notify_ingest_down falló: %s", exc)
+
+
+async def notify_rejects_recovered(count: int, detail: str) -> None:
+    """Push "falsos rechazos recuperados" SOLO a admins.
+
+    Disparada por `maintenance/reject_audit.py`: la auditoría diaria
+    re-extrajo rechazos recientes y alguno resultó ser apuesta real —
+    el pipeline se habría perdido ese pick. Información de operación,
+    no para usuarios normales."""
+    try:
+        if not _enabled(get_settings()):
+            return
+        async with AsyncSessionLocal() as session:
+            rows = list(
+                (
+                    await session.exec(
+                        select(DeviceToken)
+                        .join(User, User.id == DeviceToken.user_id)
+                        .where(User.role == UserRole.ADMIN)
+                        .where(DeviceToken.enabled == True)  # noqa: E712
+                    )
+                ).all()
+            )
+
+            def message(token: str) -> dict:
+                return {
+                    "to": token,
+                    "title": "Picks recuperados de rechazos",
+                    "body": (
+                        f"La auditoría recuperó {count} apuesta(s) que "
+                        f"habían sido rechazadas: {detail}."
+                    ),
+                    "data": {"type": "rejects_recovered"},
+                }
+
+            sent = await _send(session, rows, message)
+            if sent:
+                logger.info(
+                    "[PUSH] Rechazos recuperados notificados a %d admins.", sent
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[PUSH] notify_rejects_recovered falló: %s", exc)

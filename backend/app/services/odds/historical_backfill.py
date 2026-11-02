@@ -1,0 +1,2896 @@
+"""Backfill de cuotas históricas de mercado en cascada de fuentes.
+
+Descarga la curva de cuotas histórica de cada fixture y la guarda en
+`odds_snapshots` con `provider` = fuente que la aportó y `captured_at`
+real — así el comparador trata el histórico igual que los snapshots
+en vivo.
+
+Fuentes en cascada (orden = prioridad, no volumen):
+
+0. `footballdata` (football-data.co.uk): CSVs GRATIS por liga y
+   temporada (22 ligas principales + 16 "extra") con cierre y apertura
+   de 1X2, O/U 2.5 y hándicap asiático. Sin key ni cuota. Además su
+   listado de temporada entera hace de sondeo de fecha: casa picks
+   cuya `fecha_evento` guardada es la del repost, y el backfill les
+   escribe la fecha real del fixture — el resto de fuentes busca ya
+   en el día correcto.
+1. `tennisdata` (tennis-data.co.uk): XLSX anuales GRATIS de cuotas de
+   ganador ATP/WTA (Pinnacle/B365). Sin key ni cuota — drena los picks
+   de tenis `mercado="ganador"` sin gastar una sola llamada de las
+   APIs de pago. No cubre Challengers/ITF ni mercados de juegos.
+2. `oddspapi` (bet36528): el rico — 33k mercados (córners, tarjetas,
+   props...) pero BASIC son solo 200 req/mes.
+3. `oddsfeed` (odds-feed): solo mercados principales (1X2, O/U,
+   hándicap, BTTS) pero 500 req/mes y histórico real validado.
+4. `llm-odds`: último recurso por pick — búsqueda web + extracción
+   LLM (cascada Groq→Cerebras→OpenRouter, Gemini de respaldo)
+   lee la página del partido en un comparador (oddspedia, oddsportal,
+   betexplorer) y extrae la cuota de cierre del mercado del pick.
+   Doble validación: la cuota tiene que aparecer literal en el HTML y
+   la tripleta mercado/opción/línea que propone el modelo tiene que
+   casar con el pick vía `map_pick_choices` — lo determinista decide.
+
+Reglas de negocio:
+- Idempotente: un evento que ya tiene filas de CUALQUIER fuente de
+  backfill se salta entero (una auditoría por evento basta).
+- Fixtures sin historial quedan marcados como miss definitivo POR
+  FUENTE ("<prov>|hist|<id>"), los picks sin fixture casado como
+  miss "<prov>|nofixture|<pick>", y los picks cuyo fixture existe
+  pero sin opción comparable como "<prov>|nomarket|<pick>" — una
+  fuente puede cubrir eventos o mercados que la otra no, así que
+  los misses no se comparten. Sin la marca `nomarket`, cada pasada
+  re-descargaría las odds del fixture solo para no mapear de nuevo
+  (props y líneas alternas que la fuente jamás publicará).
+- No se inventan valores: un pick sin opción casada solo informa.
+- `pick.odds_event_id` vacío se rellena con el id de la fuente que
+  casó y se registra en `odds_events` — igual que el snapshotter.
+- odds-feed lleva presupuesto de llamadas por ejecución
+  (`_FEED_MAX_CALLS_PER_RUN`): 500/mes no da para vaciar el backlog
+  histórico de golpe; cada pasada diaria muerde un trozo.
+
+El CLI `scripts/backfill_historical_odds.py` es solo un wrapper de
+`run()`; el loop diario de `lifecycle.py` llama a la misma función.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import json
+import re
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
+from difflib import SequenceMatcher
+from pathlib import Path
+from typing import Any, Optional, Protocol, Union
+
+import httpx
+from sqlalchemy import distinct, func
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import select
+
+from app.core.config import get_settings
+from app.core.dates import utc_now
+from app.db.postgres import AsyncSessionLocal
+from app.models.informante import Informante  # noqa: F401  (FK de ParsedPick)
+from app.models.odds_snapshot import OddsEvent, OddsSnapshot
+from app.models.parsed_pick import ParsedPick
+from app.models.telegram_raw_message import TelegramRawMessage  # noqa: F401
+from app.models.user import User  # noqa: F401  (FKs de TelegramRawMessage)
+from app.services.odds import (
+    betsapi,
+    fivedollar,
+    football_csv,
+    harvest,
+    oddsfeed,
+    oddspapi,
+    static_pages,
+    tennisdata,
+)
+from app.services.odds.base import MarketChoice
+from app.services.odds.compare import _PROP_PICK, map_pick_choices
+from app.services.odds.event_rescue import looks_like_match_hint, rescue_evento
+from app.services.odds.oddsfeed import (
+    FeedFixture,
+    OddsFeedClient,
+    points_from_history,
+    translate_market_books,
+)
+from app.services.odds.oddspapi import (
+    HistoricalChoice,
+    OddsPapiClient,
+    OddsPapiFixture,
+    PricePoint,
+    downsample,
+)
+from app.services.odds.oddspapi import (
+    event_ext_id as oddspapi_ext_id,
+)
+from app.services.odds.oddspapi import (
+    match_fixture as oddspapi_match,
+)
+from app.services.odds.snapshotter import _canonical_sport, _lookup_hint
+from app.services.odds.sofascore import SofaScoreOddsProvider
+from app.services.results import compat_llm
+from app.services.results.base import (
+    _CLUB_TOKENS,
+    _HINT_SEPARATORS,
+    clear_missed,
+    clear_missed_for_pick,
+    count_missed_prefix,
+    count_odds_rows_written,
+    count_provider_call,
+    fold_name,
+    is_missed,
+    is_rate_limited,
+    loop_history,
+    loop_summary,
+    mark_missed,
+    match_score,
+    rate_limited_until,
+    record_loop_summary,
+)
+from app.services.results.espn import _translate_countries
+from app.services.results.gemini_research import GeminiResearchProvider
+from app.services.results.sofascore_native import (
+    SofaScoreNativeOddsProvider,
+    direct_transport,
+    rapidapi_transport,
+    sofascore6_transport,
+)
+
+# La histórico del pick solo existe si el evento ya pasó (con margen
+# para no pillar partidos en vivo a mitad de curva).
+_EVENT_MARGIN = timedelta(hours=3)
+# Pequeña pausa entre fixtures: cada respuesta pesa 1-3 MB — cortesía
+# y margen de rate-limit.
+_FETCH_DELAY = 0.2
+# Tope de llamadas de odds-feed por ejecución: 500 req/mes exigen
+# dosificar el backlog — ~15 eventos con 2-3 llamadas cada uno.
+_FEED_MAX_CALLS_PER_RUN = 40
+# Tope de llamadas de oddspapi por ejecución: 200 req/MES. Una pasada
+# sin tope se bebe la cuota del mes de una sentada (~140 llamadas de
+# backlog inicial + lo que crezca); con techo, el drenaje se reparte
+# y queda margen para los picks nuevos del mes.
+_PAPI_MAX_CALLS_PER_RUN = 150
+# Tope de llamadas de BetsAPI por ejecución: el trial permite
+# 1.800/hora — techo prudente que deja margen y hace que las pasadas
+# horarias reanuden donde se quedó la anterior (los listados de día
+# quedan cacheados a disco).
+_BETS_MAX_CALLS_PER_RUN = 1400
+# Días a cada lado que cubre UNA llamada /fixtures de oddspapi: el
+# rango es gratis por ancho (una petición sirve 9 días) y rescata los
+# picks cuya `fecha_evento` era la del repost — el grueso del bucket
+# "sin fixture" del primer drenaje.
+_PAPI_FIXTURE_DAYS = 4
+# Gemini-odds: provider/fuente de las filas que aporta el investigador
+# y prefijo de su marca de procesado en el miss-store. Cada pick
+# intentado cuesta 2-4 llamadas al modelo; el presupuesto por pasada
+# comparte el free tier con la investigación de resultados.
+_GEMINI_ODDS_PROVIDER = "gemini-odds"
+
+# Marca NEUTRA del pipeline web+LLM: las marcas `llm-odds|done|{pick}`
+# las comparten todos los extractores — un intento fallido con Groq no
+# debe repetirse gastando cuota de Gemini (ni viceversa).
+_LLM_ODDS_MARK = "llm-odds"
+# Provider de cada fila = el motor que la extrajo de verdad:
+# groq-odds, gemini-odds, cerebras-odds, openrouter-odds. `llm-odds`
+# también es provider válido: etiqueta de las filas históricas
+# escritas antes de la atribución por motor (extractor desconocido).
+_LLM_EXTRACTOR_PROVIDERS = tuple(
+    f"{e}-odds" for e in ("groq", "cerebras", "openrouter", "gemini", "llm")
+)
+
+
+def _llm_odds_configured(settings) -> bool:
+    """Extractor de cuotas configurado: Gemini o la cascada compat
+    (Groq/Cerebras/OpenRouter — los endpoints gratis dan más cuota
+    que el free tier de Google)."""
+    return bool(settings.google_api_key) or compat_llm.configured(settings)
+
+
+def _llm_odds_ready(settings) -> bool:
+    """Camino de extracción vivo AHORA: endpoint compat libre o
+    Gemini fuera de cooldown. Sin él, correr la pasada solo quema
+    rescates para picks que nadie va a extraer."""
+    if compat_llm.has_live_endpoint(settings):
+        return True
+    return bool(settings.google_api_key) and not is_rate_limited(_GEMINI_ODDS_PROVIDER)
+
+
+# Presupuesto por pasada en EVENTOS (no picks): varias patas del mismo
+# partido comparten una sola búsqueda web — el grupo entero se resuelve
+# con una extracción por página. Es un techo de seguridad: el cooldown
+# del free tier corta antes la pasada, así que el ritmo real se
+# auto-regula solo.
+_GEMINI_MAX_EVENTS_PER_RUN = 32
+# La pasada diaria y el loop de goteo comparten el pass de Gemini:
+# el candado evita que se pisen (mismo proceso, mismo candidatos).
+_gemini_pass_lock = asyncio.Lock()
+# Una fuente aparcada por quota más allá de este horizonte (~1 día,
+# p. ej. el reset mensual de una suscripción) no bloquea el drenaje
+# del backlog ni se le llama: no es un cooldown de ritmo, no hay nada
+# que reintentar hasta que renueve (caso oddspapi, cuota mensual).
+_LONG_QUOTA_HORIZON = timedelta(hours=24)
+
+
+def _source_quota_parked(source: _HistorySource) -> bool:
+    """True si la fuente está aparcada por quota más allá de ~24 h."""
+    until = rate_limited_until(source.name)
+    return until is not None and until > utc_now() + _LONG_QUOTA_HORIZON
+
+
+@dataclass
+class BackfillReport:
+    picks: int = 0
+    con_fixture: int = 0
+    sin_fixture: int = 0
+    sin_historial: int = 0
+    mapeados: int = 0
+    sin_opcion: int = 0
+    filas: int = 0
+    # Picks a los que no se llegó: la fuente se quedó sin presupuesto
+    # de llamadas o la API falló — quedan pendientes para mañana, sin
+    # marca (no son "nadie los tenía").
+    sin_revisar: int = 0
+    # `fecha_evento` corregidas con la fecha real del fixture (la
+    # guardada era la del repost — sondeo de fecha del CSV).
+    fechas_corregidas: int = 0
+    # Filas escritas por fuente — el resumen de pasada muestra quién
+    # aportó qué ("tennisdata 87 · oddsfeed 3").
+    filas_por_fuente: dict[str, int] = field(default_factory=dict)
+    detalles: list[str] = field(default_factory=list)
+
+
+def _sofascore_id(pick: ParsedPick) -> int | None:
+    if pick.odds_event_id and pick.odds_event_id.startswith("sofascore:"):
+        try:
+            return int(pick.odds_event_id.split(":", 1)[1])
+        except ValueError:
+            return None
+    return None
+
+
+def _nearest_price(points, when) -> float | None:
+    if not points or when is None:
+        return None
+    return min(points, key=lambda p: abs((p.captured_at - when).total_seconds())).cuota
+
+
+class _HistorySource(Protocol):
+    """Una fuente de cuotas históricas para el backfill."""
+
+    name: str  # provider en odds_snapshots / prefijo de claves de miss
+    # True si puede ofrecer datos NUEVOS sobre un evento ya procesado
+    # (los listados estáticos descargan el detalle de partido lazy
+    # por mercado: un pick re-etiquetado DNB en un evento "done" aún
+    # puede recibir su fila "Draw no bet"). Las APIs traen todo el
+    # mercado en una llamada — un evento hecho no tiene nada nuevo.
+    revisit_done: bool = False
+
+    @property
+    def sport_ids(self) -> dict[str, int]: ...
+
+    async def fixtures(
+        self, http: httpx.AsyncClient, sport_id: int, day: date
+    ) -> Optional[list]: ...
+
+    def match(self, fixtures: list, hint: str, dt, sofascore_id: Optional[int]): ...
+
+    def ext_id(self, fixture) -> str: ...
+
+    def fixture_key(self, fixture) -> str: ...
+
+    async def choices(
+        self, http: httpx.AsyncClient, fixture, sport: str, picks: list[ParsedPick]
+    ) -> tuple[str, list]:
+        """("ok", choices) | ("miss", []) definitivo | ("error", []) reintentar
+        | ("budget", []) presupuesto de llamadas agotado para esta pasada."""
+        ...
+
+
+# Selecciones en español -> nombre del catálogo (inglés). Solo
+# selecciones: para clubes los nombres suelen coincidir.
+_TEAM_ALIASES = {
+    "espana": "spain",
+    "belgica": "belgium",
+    "noruega": "norway",
+    "ucrania": "ukraine",
+    "turquia": "turkiye",
+    "estados unidos": "united states",
+    "suecia": "sweden",
+    "polonia": "poland",
+    "moldavia": "moldova",
+    "francia": "france",
+    "suiza": "switzerland",
+    "inglaterra": "england",
+    "chequia": "czechia",
+    "dinamarca": "denmark",
+    "holanda": "netherlands",
+    "paises bajos": "netherlands",
+    "alemania": "germany",
+    "croacia": "croatia",
+    "escocia": "scotland",
+    "gales": "wales",
+    "irlanda": "ireland",
+    "republica de irlanda": "republic of ireland",
+    "islas feroe": "faroe islands",
+    "macedonia del norte": "north macedonia",
+    "corea del sur": "south korea",
+    "japon": "japan",
+    "mexico": "mexico",
+    "nueva zelanda": "new zealand",
+    "arabia saudi": "saudi arabia",
+    "costa de marfil": "ivory coast",
+    "estados unidos femenino": "united states w",
+}
+
+# Entidades que nunca son el equipo real del pick: ligas simuladas
+# (SRL), filiales y juveniles — el catálogo los mezcla con los
+# seniors y el substring boost los empataba ("elche" -> Elche
+# Ilicitano, "malaga" -> Malaga CF Srl).
+# Entidades que nunca son el equipo real del pick: ligas simuladas
+# (SRL), filiales y juveniles — el catálogo los mezcla con los
+# seniors y el substring boost los empataba ("elche" -> Elche
+# Ilicitano, "malaga" -> Malaga CF Srl).
+_NOT_REAL_TEAM = re.compile(
+    r"\bsrl\b|simulated|\bilicitano\b|\bii\b|\b(b|u1[789]|u2[013])\b"
+)
+# Variante femenina del catálogo ("(W)", "Women") — solo se penaliza
+# cuando el pick no va de un equipo femenino ("lyon femenino",
+# "fc koln (f)").
+_WOMEN_TEAM = re.compile(r"\bwomen\b|\bfemenin|\bw$|\(w\)")
+_WOMEN_HINT = re.compile(r"\bfemenin|\(f\)$|\sf$|\sw$")
+# Fichas máximas que se piden por equipo: el catálogo duplica clubes
+# por competición ("Liverpool" = solo Champions, "Liverpool FC" =
+# doméstica) — 3 fichas cubren los duplicados reales sin inflar la
+# factura (cada ficha = 1 llamada billable, cacheada para siempre).
+_PARTICIPANT_MAX_IDS = 3
+
+# Sufijos de club genéricos: no discriminan en la contención por
+# tokens ("Al Nassr FC" ≡ "al-nassr riyadh" comparten {al, nassr}).
+# Compartido con `results.base._part_score` ("real" queda fuera a
+# propósito: discrimina Real Madrid vs Atlético Madrid).
+_CLUB_SUFFIXES = _CLUB_TOKENS
+
+
+def _participant_score(name: str, candidate: str, women: bool = False) -> float:
+    """Similitud nombre del tipster vs. nombre del catálogo (0-1).
+
+    Tenis: el catálogo guarda "Apellido, Nombre" — se prueba también
+    la variante reordenada ("nombre apellido").
+    """
+    a, b = fold_name(name), fold_name(candidate)
+    if not a or not b:
+        return 0.0
+    variants = [b]
+    if "," in b:
+        last, _, first = b.partition(",")
+        variants.append(f"{first.strip()} {last.strip()}")
+    best = 0.0
+    for v in variants:
+        if v == a:
+            return 1.0
+        score = SequenceMatcher(None, a, v).ratio()
+        if len(a) >= 5 and len(v) >= 5 and (a in v or v in a):
+            score = max(score, 0.85)
+        # Contención por tokens: "al-nassr riyadh" vs "Al Nassr FC" —
+        # el ratio de cadena queda en ~0.69 por el sufijo del club,
+        # pero todos los tokens identificativos están. Los genéricos
+        # (fc/cf/ud/...) no aportan y se ignoran en ambos lados.
+        a_toks = set(re.split(r"[\s\-]+", a)) - _CLUB_SUFFIXES
+        v_toks = set(re.split(r"[\s\-]+", v)) - _CLUB_SUFFIXES
+        if a_toks and v_toks and (a_toks <= v_toks or v_toks <= a_toks):
+            score = max(score, 0.85)
+        best = max(best, score)
+    if _NOT_REAL_TEAM.search(b) or (_WOMEN_TEAM.search(b) and not women):
+        # Filial/SRL/femenino: solo casa si no hay candidato senior —
+        # el multiplicador lo baja del umbral cuando compite.
+        best *= 0.5
+    return best
+
+
+def _participant_ids_for_hint(catalog: dict[int, str], hint: str) -> set[int]:
+    """participantIds que casan con los equipos del hint ("A vs B")."""
+    parts = [
+        p.strip()
+        for p in re.split(r"\s+(?:vs?\.?|[-–—]|@)\s+", hint, maxsplit=2)
+        if len(p.strip()) >= 3
+    ]
+    if not parts:
+        parts = [hint.strip()] if len(hint.strip()) >= 3 else []
+    ids: set[int] = set()
+    for part in parts:
+        folded = fold_name(part)
+        is_w = bool(_WOMEN_HINT.search(folded))
+        # Limpia el marcador de género para comparar nombres ("fc
+        # koln (f)" -> "fc koln") y aplica alias de selección.
+        if is_w:
+            folded = re.sub(r"\s*\(f\)$|\s+f$|\s+w$|\s*femenin\w*$", "", folded).strip()
+        search = _TEAM_ALIASES.get(folded, folded)
+        scored: list[tuple[float, int]] = []
+        for pid, name in catalog.items():
+            # Pick femenino: solo candidatas (W); masculino: las (W)
+            # compiten penalizadas dentro de _participant_score.
+            if is_w and not _WOMEN_TEAM.search(fold_name(name)):
+                continue
+            score = _participant_score(search, name, women=is_w)
+            if score >= 0.75:
+                scored.append((score, pid))
+        # Mejor score primero; a igualdad gana el pid más BAJO — las
+        # fichas canónicas del proveedor se crearon antes (Ipswich
+        # Town=32) que los duplicados regionales/SRL (Ipswich FC de
+        # Australia=1098127). Se llevan hasta _PARTICIPANT_MAX_IDS.
+        scored.sort(key=lambda t: (-t[0], t[1]))
+        ids.update(pid for _score, pid in scored[:_PARTICIPANT_MAX_IDS])
+    return ids
+
+
+class _OddsPapiSource:
+    """bet36528: catálogo /markets + /historical-odds por fixture.
+
+    Dos ventajas propias frente a las demás fuentes:
+    - `revisit_done=True`: el payload de cada fixture se guarda en
+      disco, así que un evento ya auditado puede aportar filas NUEVAS
+      cuando el mapa de traducción mejora — sin repetir la llamada.
+    - `search_deltas` ±4: la llamada /fixtures pide un RANGO de fechas
+      al mismo precio; pidiendo el rango ancho de una vez cada cubo
+      cuesta una llamada y cubre 9 días (los picks con fecha de repost
+      dejan de caer en `sin fixture`).
+    """
+
+    name = oddspapi.NAME
+    revisit_done = True
+    # El primer delta (0) ancla la descarga del rango completo; los
+    # demás salen de `_covered_days` sin llamada extra.
+    search_deltas = (0, -1, 1, -2, 2, -3, 3, -4, 4)
+
+    def __init__(
+        self,
+        api_key: str,
+        api_host: str = oddspapi._DEFAULT_HOST,
+        direct: bool = False,
+        data_dir: Optional[Path] = None,
+    ) -> None:
+        self._client = OddsPapiClient(api_key=api_key, api_host=api_host, direct=direct)
+        # Días ya servidos por alguna llamada de rango: pedir el día D
+        # tras descargar D±4 no vuelve a pagar cuota.
+        self._covered_days: dict[int, dict[date, list[OddsPapiFixture]]] = {}
+        self._data_dir = data_dir
+        self._participant_catalogs: dict[int, dict[int, str]] = {}
+
+    def _over_budget(self) -> bool:
+        return self._client.calls >= _PAPI_MAX_CALLS_PER_RUN
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return oddspapi.SPORT_IDS
+
+    # Los props de jugador YA son soportados: `translate_history` lee
+    # `players["<playerId>"]` y resuelve el nombre con el diccionario
+    # de /v4/players (players_<sport>.json en disco).
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        if self._over_budget():
+            return None
+        days = self._covered_days.setdefault(sport_id, {})
+        if day in days:
+            return days[day]
+        today = utc_now().date()
+        # El listado de un día pasado es inmutable y billable: a disco
+        # — la próxima pasada no vuelve a pagar el mismo rango.
+        if day < today:
+            cached = oddspapi.load_fixture_day(sport_id, day, self._data_dir)
+            if cached is not None:
+                days[day] = cached
+                return cached
+        first = day - timedelta(days=_PAPI_FIXTURE_DAYS)
+        last = day + timedelta(days=_PAPI_FIXTURE_DAYS)
+        events = await self._client.fixtures(http, sport_id, first, last)
+        if events is None:
+            return None
+        by_day: dict[date, list[OddsPapiFixture]] = {}
+        for fixture in events:
+            d = fixture.start.date() if fixture.start else day
+            by_day.setdefault(d, []).append(fixture)
+        for offset in range(-_PAPI_FIXTURE_DAYS, _PAPI_FIXTURE_DAYS + 1):
+            d = day + timedelta(days=offset)
+            days[d] = by_day.get(d, [])
+            if d < today:
+                oddspapi.save_fixture_day(sport_id, d, days[d], self._data_dir)
+        return days[day]
+
+    async def fixtures_for_picks(self, http, sport_id, day, picks):
+        """Descubrimiento dirigido por participante (canal directo).
+
+        ("ok", fixtures) — los equipos de TODOS los picks del cubo
+        resolvieron a participantId: se unen los fixtures de cada
+        equipo (~1 billable por equipo nuevo, cacheado a disco) en
+        lugar de barrer días calendario.
+        ("fallback", None) — algún pick no resuelve equipo en el
+        catálogo: el barrido por día sigue siendo la red de seguridad.
+        ("error", None) — API caída/sin cuota: reintento luego.
+        """
+        if not self._client._direct:
+            return "fallback", None
+        catalog = await self._participants(http, sport_id)
+        if catalog is None:
+            return "error", None
+        pids: set[int] = set()
+        for pick in picks:
+            sport = _canonical_sport(pick.deporte)
+            hint = _lookup_hint(pick, sport) or ""
+            ids = _participant_ids_for_hint(catalog, hint)
+            if not ids:
+                return "fallback", None
+            pids |= ids
+        pool: dict[str, OddsPapiFixture] = {}
+        for pid in sorted(pids):
+            cached = oddspapi.load_participant_fixtures(sport_id, pid, self._data_dir)
+            if cached is not None:
+                events = cached
+            else:
+                if self._over_budget():
+                    return "error", None
+                events = await self._client.fixtures_by_participant(http, pid, sport_id)
+                if events is None:
+                    return "error", None
+                oddspapi.save_participant_fixtures(
+                    sport_id, pid, events, self._data_dir
+                )
+            for fixture in events:
+                pool[fixture.fixture_id] = fixture
+        # Recorta a la ventana del cubo: la lista de un equipo trae
+        # años de fixtures y `match` solo necesita los cercanos a la
+        # fecha del pick (su tolerancia propia hace el resto).
+        window = _PAPI_FIXTURE_DAYS + 1
+        in_range = [
+            f
+            for f in pool.values()
+            if f.start is not None and abs((f.start.date() - day).days) <= window
+        ]
+        return "ok", in_range
+
+    async def _participants(
+        self, http: httpx.AsyncClient, sport_id: int
+    ) -> Optional[dict[int, str]]:
+        """Catálogo equipo -> participantId: memoria -> disco -> API."""
+        cached_mem = self._participant_catalogs.get(sport_id)
+        if cached_mem is not None:
+            return cached_mem
+        cached_disk = oddspapi.load_participants(sport_id, self._data_dir)
+        if cached_disk is not None:
+            self._participant_catalogs[sport_id] = cached_disk
+            return cached_disk
+        if self._over_budget():
+            return None
+        catalog = await self._client.participants(http, sport_id)
+        if catalog is None:
+            return None
+        oddspapi.save_participants(sport_id, catalog, self._data_dir)
+        self._participant_catalogs[sport_id] = catalog
+        return catalog
+
+    def match(self, fixtures, hint, dt, sofascore_id):
+        return oddspapi_match(fixtures, hint, dt, sofascore_id)
+
+    def ext_id(self, fixture: OddsPapiFixture) -> str:
+        return oddspapi_ext_id(fixture)
+
+    def fixture_key(self, fixture: OddsPapiFixture) -> str:
+        return fixture.fixture_id
+
+    async def choices(self, http, fixture: OddsPapiFixture, sport, picks):
+        ext_id = self.ext_id(fixture)
+        cached = oddspapi.load_payload(ext_id, self._data_dir)
+        markets = None
+        if cached is not None:
+            # Re-traducción 100% offline cuando el catálogo también está
+            # guardado: ni siquiera se paga la llamada de /markets.
+            markets = oddspapi.load_markets(self._data_dir)
+        if markets is None:
+            markets = await self._client.markets(http)
+            if markets is not None:
+                oddspapi.save_markets(markets, self._data_dir)
+            else:
+                # API caída/sin cuota: el catálogo en disco basta para
+                # traducir (los marketId no mueren).
+                markets = oddspapi.load_markets(self._data_dir)
+        if markets is None:
+            return "error", []
+        # Diccionario playerId->nombre para traducir props: disco o
+        # nada (si no existe, los props se omiten igual que antes).
+        players = oddspapi.load_players(self.sport_ids.get(sport) or 0, self._data_dir)
+        if cached is not None:
+            return "ok", oddspapi.translate_history(
+                cached["payload"],
+                markets,
+                fixture.home_name,
+                fixture.away_name,
+                players,
+            )
+        if self._over_budget():
+            return "budget", []
+        await asyncio.sleep(_FETCH_DELAY)
+        status, payload = await self._client.historical_odds(http, fixture.fixture_id)
+        if status == 404:
+            return "miss", []
+        if payload is None:
+            return "error", []
+        oddspapi.save_payload(fixture, ext_id, payload, self._data_dir)
+        return "ok", oddspapi.translate_history(
+            payload, markets, fixture.home_name, fixture.away_name, players
+        )
+
+
+class _OddsFeedSource:
+    """odds-feed: /events + /events/markets + /markets/history.
+
+    La curva se descarga SOLO de los market_books que casan con algún
+    pick del evento (una llamada por mercado necesario, no por todos).
+    """
+
+    name = oddsfeed.NAME
+
+    def __init__(self, api_key: str, api_host: str) -> None:
+        self._client = OddsFeedClient(api_key=api_key, api_host=api_host)
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return oddsfeed.SPORT_IDS
+
+    def _over_budget(self) -> bool:
+        return self._client.calls >= _FEED_MAX_CALLS_PER_RUN
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        if self._over_budget():
+            return None
+        return await self._client.events(http, sport_id, day)
+
+    def match(self, fixtures, hint, dt, sofascore_id):
+        return oddsfeed.match_fixture(fixtures, hint, dt)
+
+    def ext_id(self, fixture: FeedFixture) -> str:
+        return oddsfeed.event_ext_id(fixture)
+
+    def fixture_key(self, fixture: FeedFixture) -> str:
+        return str(fixture.event_id)
+
+    async def choices(self, http, fixture: FeedFixture, sport, picks):
+        if self._over_budget():
+            return "budget", []
+        markets = await self._client.event_markets(http, fixture.event_id)
+        if markets is None:
+            return "error", []
+        books = translate_market_books(
+            markets, sport, fixture.home_name, fixture.away_name
+        )
+        if not books:
+            return "miss", []
+
+        # Filas virtuales con el precio ACTUAL de cada opción: sirven
+        # para casar el pick con su (mercado, casa) sin gastar aún la
+        # llamada de histórico, y como punto de cierre de la curva.
+        event_stub = OddsEvent(
+            event_ext_id=oddsfeed.event_ext_id(fixture),
+            sport=sport,
+            home_team=fixture.home_name,
+            away_team=fixture.away_name,
+            start=fixture.start,
+        )
+        virtual: list[OddsSnapshot] = []
+        for book, defs in books:
+            for idx, choice_name, choice_group in defs:
+                virtual.append(
+                    OddsSnapshot(
+                        provider=self.name,
+                        event_ext_id=event_stub.event_ext_id,
+                        market_name=book.translated,
+                        choice_name=choice_name,
+                        choice_group=choice_group,
+                        cuota=book.current.get(idx) or 0.0,
+                        captured_at=fixture.start or utc_now(),
+                    )
+                )
+
+        # Qué market_books hacen falta: los de las opciones casadas.
+        needed_books: dict[int, dict] = {}
+        for pick in picks:
+            matched = map_pick_choices(pick, event_stub, virtual)
+            if matched is None:
+                continue
+            for book, defs in books:
+                if book.translated != matched.market_name:
+                    continue
+                if any(
+                    cname == matched.choice_name and cgroup == matched.choice_group
+                    for _, cname, cgroup in defs
+                ):
+                    needed_books[book.market_book_id] = book
+                    break
+
+        if not needed_books:
+            return "ok", []
+
+        # Una llamada de histórico por market_book necesario (cubre
+        # todas sus opciones de golpe). Si viene vacía, queda el precio
+        # actual como único punto de la curva.
+        histories: dict[int, list] = {}
+        for mb_id in needed_books:
+            if self._over_budget():
+                break
+            await asyncio.sleep(_FETCH_DELAY)
+            history = await self._client.market_history(http, mb_id)
+            if history is None:
+                return "error", []  # cuota/red: reintenta la pasada
+            histories[mb_id] = history
+
+        choices: list = []
+        for book in needed_books.values():
+            history = histories.get(book.market_book_id) or []
+            for idx, choice_name, choice_group in _book_defs(books, book):
+                points = points_from_history(history, idx)
+                current = book.current.get(idx)
+                if current and (not points or points[-1].cuota != current):
+                    points.append(
+                        PricePoint(
+                            captured_at=fixture.start or utc_now(),
+                            cuota=float(current),
+                            suspended=False,
+                        )
+                    )
+                if not points:
+                    continue
+                choices.append(
+                    HistoricalChoice(
+                        market_name=book.translated,
+                        choice_name=choice_name,
+                        choice_group=choice_group,
+                        points=points,
+                    )
+                )
+        return "ok", choices
+
+
+class _BetsApiSource:
+    """BetsAPI (api.b365api.com): el feed bet365 real — listado por
+    día + prematch completo congelado al entrar en vivo.
+
+    Cubre lo que oddspapi nunca tuvo (Champions, ligas grandes,
+    Challenger/ITF de tenis, basket global) y mercados que ninguna
+    otra fuente ofrece: juegos del 1er set, totales por equipo,
+    goleadores, tarjetas. Listados de días pasados se cachean a
+    disco (`betsapi_data/days/`): un día histórico no cambia y las
+    pasadas horarias del trial no repagan sus ~30 páginas.
+    """
+
+    name = betsapi.NAME
+    revisit_done = True
+    # ±4 como oddspapi: los picks con fecha de repost siguen existiendo.
+    # El coste por delta es un listado de día (~10-30 páginas), que la
+    # caché de disco amortiza entre pasadas.
+    search_deltas = (0, -1, 1, -2, 2, -3, 3, -4, 4)
+
+    def __init__(self, token: str, data_dir: Optional[Path] = None) -> None:
+        self._client = betsapi.BetsApiClient(token)
+        self._data_dir = data_dir
+
+    def _over_budget(self) -> bool:
+        return self._client.calls >= _BETS_MAX_CALLS_PER_RUN
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return betsapi.SPORT_IDS
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        if self._over_budget():
+            return None
+        # Caché de disco solo para días ya cerrados: el listado de
+        # hoy/mañana sigue cambiando, el de anteayer no.
+        if day < utc_now().date():
+            cached = self._load_day(sport_id, day)
+            if cached is not None:
+                return cached
+        fixtures = await self._client.upcoming(http, sport_id, day)
+        if fixtures is None:
+            return None
+        if day < utc_now().date():
+            self._save_day(sport_id, day, fixtures)
+        return fixtures
+
+    def _day_path(self, sport_id: int, day: date) -> Path:
+        base = self._data_dir or betsapi._DATA_DIR
+        return base / "days" / f"{sport_id}_{day.isoformat()}.json"
+
+    def _load_day(
+        self, sport_id: int, day: date
+    ) -> Optional[list[betsapi.BetsFixture]]:
+        path = self._day_path(sport_id, day)
+        if not path.exists():
+            return None
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            return [
+                betsapi.BetsFixture(
+                    fixture_id=f["fixture_id"],
+                    home_name=f["home_name"],
+                    away_name=f["away_name"],
+                    start=(
+                        datetime.fromisoformat(f["start"]) if f.get("start") else None
+                    ),
+                    sport_id=sport_id,
+                    league_name=f.get("league_name") or "",
+                )
+                for f in raw
+            ]
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def _save_day(
+        self, sport_id: int, day: date, fixtures: list[betsapi.BetsFixture]
+    ) -> None:
+        path = self._day_path(sport_id, day)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "fixture_id": f.fixture_id,
+                            "home_name": f.home_name,
+                            "away_name": f.away_name,
+                            "start": f.start.isoformat() if f.start else None,
+                            "league_name": f.league_name,
+                        }
+                        for f in fixtures
+                    ]
+                ),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass  # la caché es cortesía — un fallo de disco no frena la pasada
+
+    def match(self, fixtures, hint, dt, sofascore_id):
+        return betsapi.match_fixture(fixtures, hint, dt)
+
+    def ext_id(self, fixture: betsapi.BetsFixture) -> str:
+        return betsapi.event_ext_id(fixture)
+
+    def fixture_key(self, fixture: betsapi.BetsFixture) -> str:
+        return betsapi.fixture_key(fixture)
+
+    async def choices(self, http, fixture: betsapi.BetsFixture, sport, picks):
+        ext_id = self.ext_id(fixture)
+        cached = betsapi.load_payload(ext_id, self._data_dir)
+        if cached is not None:
+            return "ok", betsapi.translate_prematch(
+                cached["payload"],
+                sport,
+                fixture.home_name,
+                fixture.away_name,
+                when=fixture.start,
+            )
+        if self._over_budget():
+            return "budget", []
+        await asyncio.sleep(_FETCH_DELAY)
+        status, payload = await self._client.prematch(http, fixture.fixture_id)
+        if status == 404:
+            return "miss", []
+        if payload is None:
+            return "error", []
+        betsapi.save_payload(fixture, ext_id, payload, self._data_dir)
+        return "ok", betsapi.translate_prematch(
+            payload, sport, fixture.home_name, fixture.away_name, when=fixture.start
+        )
+
+
+class _FiveDollarSource:
+    """5DollarFootballAPI: apertura + cierre REALES de bet365 en las
+    5 grandes ligas (Free: 60 req/h, ~3 meses de histórico, una
+    llamada por fixture tras el listado de día).
+
+    Su valor frente a las demás fuentes: es la única que trae el
+    precio de APERTURA además del cierre, y documenta qué línea
+    existió de verdad (la línea de córners bet365 9-10.5 vs las
+    enteras del tipster) — el payload queda en disco para
+    re-traducir sin nueva llamada (`revisit_done`)."""
+
+    name = fivedollar.NAME
+    revisit_done = True
+    # ±2: cada delta es un listado de día (1 llamada, cacheada); el
+    # sondeo de football_csv ya corrige las fechas de repost antes.
+    search_deltas = (0, -1, 1, -2, 2)
+    # Ventana del plan Free (~3 meses) con margen: fuera de ella el
+    # fixture no existe en la API — miss seguro sin gastar llamada.
+    _HISTORY_DAYS = 100
+
+    def __init__(self, api_key: str, data_dir: Optional[Path] = None) -> None:
+        self._client = fivedollar.FiveDollarClient(api_key)
+        self._data_dir = data_dir
+        self._days: dict[date, list[fivedollar.FiveFixture]] = {}
+
+    def _over_budget(self) -> bool:
+        return self._client.calls >= fivedollar.MAX_CALLS_PER_RUN
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return {"futbol": 0}
+
+    def pick_supported(self, pick: ParsedPick) -> bool:
+        """False si el pick está fuera de la ventana del plan Free
+        (~3 meses) o es prop de jugador (mercados que la API no
+        publica): ambos son miss garantizado — marcarlos sin llamada
+        evita re-pagar 5 listados de día por pick inalcanzable."""
+        if pick.fecha_evento is not None and (
+            utc_now() - pick.fecha_evento
+        ) > timedelta(days=self._HISTORY_DAYS):
+            return False
+        text = f"{pick.mercado or ''} {pick.seleccion or ''}"
+        return not _PROP_PICK.search(text)
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        if self._over_budget():
+            return None
+        if day in self._days:
+            return self._days[day]
+        # El listado de un día pasado es inmutable: a disco — una
+        # pasada nueva no vuelve a pagar lo que otra ya descargó.
+        if day < utc_now().date():
+            cached = fivedollar.load_day(day, self._data_dir)
+            if cached is not None:
+                self._days[day] = cached
+                return cached
+        fixtures = await self._client.fixtures(http, day)
+        if fixtures is None:
+            return None
+        self._days[day] = fixtures
+        if day < utc_now().date():
+            fivedollar.save_day(day, fixtures, self._data_dir)
+        return fixtures
+
+    def match(self, fixtures, hint, dt, sofascore_id):
+        return fivedollar.match_fixture(fixtures, hint, dt)
+
+    def ext_id(self, fixture: fivedollar.FiveFixture) -> str:
+        return fivedollar.event_ext_id(fixture)
+
+    def fixture_key(self, fixture: fivedollar.FiveFixture) -> str:
+        return str(fixture.fixture_id)
+
+    async def choices(self, http, fixture: fivedollar.FiveFixture, sport, picks):
+        ext_id = self.ext_id(fixture)
+        cached = fivedollar.load_payload(ext_id, self._data_dir)
+        if cached is not None:
+            return "ok", fivedollar.translate_odds(cached["payload"], fixture)
+        if self._over_budget():
+            return "budget", []
+        await asyncio.sleep(_FETCH_DELAY)
+        payload = await self._client.odds(http, fixture.fixture_id)
+        if payload is None:
+            return "error", []
+        fivedollar.save_payload(fixture, ext_id, payload, self._data_dir)
+        return "ok", fivedollar.translate_odds(payload, fixture)
+
+
+class _TennisDataSource:
+    """tennis-data.co.uk: un XLSX anual por circuito, sin key ni cuota.
+
+    El "listado de eventos del día" es la fila del archivo con esa
+    fecha; el "histórico" son las cuotas de ganador que ya trae la
+    misma fila — cero llamadas extra por partido. El archivo se
+    descarga una vez por año y pasada (caché en memoria: puede
+    actualizarse durante la temporada)."""
+
+    name = tennisdata.NAME
+
+    def __init__(self) -> None:
+        self._years: dict[int, Optional[list[tennisdata.TennisMatch]]] = {}
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return {"tenis": 0}
+
+    async def _year_rows(self, http, year: int):
+        if year not in self._years:
+            self._years[year] = await tennisdata.fetch_year(http, year)
+            if self._years[year] is not None:
+                count_provider_call(self.name)
+        return self._years[year]
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        rows = await self._year_rows(http, day.year)
+        if rows is None:
+            return None
+        return [row for row in rows if row.day == day]
+
+    def match(self, fixtures, hint, dt, sofascore_id):
+        return tennisdata.match_row(fixtures, hint)
+
+    def ext_id(self, fixture: tennisdata.TennisMatch) -> str:
+        return tennisdata.event_ext_id(fixture)
+
+    def fixture_key(self, fixture: tennisdata.TennisMatch) -> str:
+        return self.ext_id(fixture)
+
+    async def choices(self, http, fixture: tennisdata.TennisMatch, sport, picks):
+        choices = tennisdata.row_choices(fixture)
+        return ("ok", choices) if choices else ("miss", [])
+
+
+class _FootballCsvSource:
+    """football-data.co.uk: un CSV por liga y temporada, sin key ni
+    cuota — el gemelo de tenis de `tennisdata`.
+
+    `fixtures()` devuelve TODA la temporada del día pedido (más las
+    adyacentes) en vez de solo ese día: el listado completo hace de
+    sondeo de fecha — `match()` casa por nombres en una ventana de
+    ±60 días, así un pick cuya fecha guardada es la del repost
+    encuentra su fixture real, y `_run_source` corrige su
+    `fecha_evento` antes de que las APIs de pago busquen en el día
+    equivocado. Las descargas se cachean por temporada y pasada."""
+
+    name = football_csv.NAME
+
+    def __init__(self) -> None:
+        self._seasons: dict[str, Optional[list[football_csv.FootballFixture]]] = {}
+        self._extra: Optional[list[football_csv.FootballFixture]] = None
+        self._extra_fetched = False
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return {"futbol": 0}
+
+    async def _season_rows(self, http, code: str):
+        if code not in self._seasons:
+            self._seasons[code] = await football_csv.fetch_season(http, code)
+            if self._seasons[code] is not None:
+                count_provider_call(self.name)
+        return self._seasons[code]
+
+    async def _extra_rows(self, http):
+        if not self._extra_fetched:
+            self._extra = await football_csv.fetch_extra(http)
+            self._extra_fetched = True
+            if self._extra is not None:
+                count_provider_call(self.name)
+        return self._extra
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        rows: list = []
+        for code in football_csv.season_codes(day):
+            season = await self._season_rows(http, code)
+            if season is None:
+                return None
+            rows += season
+        extra = await self._extra_rows(http)
+        if extra is None:
+            return None
+        return rows + extra
+
+    def match(self, fixtures, hint, dt, sofascore_id):
+        return football_csv.match_row(fixtures, hint, dt)
+
+    def ext_id(self, fixture: football_csv.FootballFixture) -> str:
+        return football_csv.event_ext_id(fixture)
+
+    def fixture_key(self, fixture: football_csv.FootballFixture) -> str:
+        return self.ext_id(fixture)
+
+    async def choices(self, http, fixture: football_csv.FootballFixture, sport, picks):
+        choices = football_csv.row_choices(fixture)
+        return ("ok", choices) if choices else ("miss", [])
+
+
+class _StaticListingSource:
+    """Adapter común para los listados estáticos (`static_pages`).
+
+    El "listado de eventos del día" ES la página del día — una
+    descarga trae todos los partidos con su cuota de cierre inline,
+    así `choices` no hace ninguna llamada extra. Las descargas se
+    cachean por día dentro de la pasada (la fuente se instancia por
+    `run()`).
+
+    `fixtures()` devuelve None no solo ante error de red sino ante la
+    página "sospechosa de vacía" (descargada grande, cero filas —
+    layout roto): el pick se reintenta en la próxima pasada en vez
+    de comerse un `nofixture` falso, y el canario (`scraper_health`)
+    alarma si la rotura persiste."""
+
+    fetcher: Any = None
+    matcher: Any = None
+    choicer: Any = None
+    # Detalle lazy por mercado: un evento "done" puede seguir sirviendo
+    # mercados que no se pidieron antes (reparación DC->DNB, picks que
+    # llegan tarde a un partido ya auditado en 1X2).
+    revisit_done = True
+
+    def __init__(self) -> None:
+        self._days: dict[date, Optional[list[static_pages.StaticMatch]]] = {}
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        if day not in self._days:
+            try:
+                rows, suspicious = await type(self).fetcher(http, day)
+                self._days[day] = None if suspicious else rows
+            except Exception:
+                self._days[day] = None
+        return self._days[day]
+
+    def match(self, fixtures, hint, dt, sofascore_id):
+        return type(self).matcher(fixtures, hint)
+
+    def ext_id(self, fixture: static_pages.StaticMatch) -> str:
+        return fixture.ext_id
+
+    def fixture_key(self, fixture: static_pages.StaticMatch) -> str:
+        return fixture.ext_id
+
+    async def choices(self, http, fixture: static_pages.StaticMatch, sport, picks):
+        choices = type(self).choicer(fixture)
+        return ("ok", choices) if choices else ("miss", [])
+
+
+class _TennisExplorerSource(_StaticListingSource):
+    """tennisexplorer.com: listado diario estático con cuotas de
+    ganador — cubre ATP/WTA/**ITF** (el hueco que ninguna API ni
+    bet365 toca). Fetch directo, sin key ni cuota.
+
+    El detalle de partido (/match-detail/?id= — el `ext_id` ya lo
+    guarda el listado) es también estático y trae TODOS los mercados
+    en una página: O/U de sets/juegos, hándicap de juegos/sets y
+    marcador exacto de sets ("gana 2-0"). Se descarga lazy, solo si
+    algún pick del partido pide algo más que el ganador — una llamada
+    compartida por todos sus picks."""
+
+    name = static_pages.NAME_TE
+    fetcher = staticmethod(static_pages.fetch_tennisexplorer_day)
+    matcher = staticmethod(static_pages.te_match)
+    choicer = staticmethod(static_pages.te_choices)
+
+    def __init__(self) -> None:
+        super().__init__()
+        # ext_id -> opciones del detalle. None = fetch falló
+        # (transitorio: status "error", reintento próxima pasada).
+        self._details: dict[str, Optional[list[HistoricalChoice]]] = {}
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return {"tenis": 0}
+
+    async def _detail(
+        self, http, fixture: static_pages.StaticMatch
+    ) -> Optional[list[HistoricalChoice]]:
+        if fixture.ext_id not in self._details:
+            code = fixture.ext_id.split(":", 1)[-1]
+            html = await static_pages.fetch_tennisexplorer_detail(http, code)
+            self._details[fixture.ext_id] = (
+                None
+                if html is None
+                else static_pages.te_market_choices(
+                    html, fixture.home_name, fixture.away_name, fixture.start
+                )
+            )
+        return self._details[fixture.ext_id]
+
+    async def choices(self, http, fixture: static_pages.StaticMatch, sport, picks):
+        choices = static_pages.te_choices(fixture)
+        need = any(
+            static_pages.te_pick_needs_detail(pick.mercado, pick.seleccion)
+            for pick in picks
+        )
+        if need or not choices:
+            detail = await self._detail(http, fixture)
+            if detail is None:
+                # Transitorio: si no hay nada del listado no quemamos
+                # el fixture con un miss permanente.
+                return ("error", []) if not choices else ("ok", choices)
+            # El "Full time" de la pestaña duplica el del listado:
+            # se descarta si ya venía (mismo key).
+            have = {(c.market_name, c.choice_name, c.choice_group) for c in choices}
+            choices += [
+                c
+                for c in detail
+                if (c.market_name, c.choice_name, c.choice_group) not in have
+            ]
+        return ("ok", choices) if choices else ("miss", [])
+
+
+class _BetExplorerSource(_StaticListingSource):
+    """betexplorer.com: cierres 1X2 de casi todas las ligas del
+    mundo en `data-odd`, HTML estático. Dos vistas del mismo dato:
+
+    - `/football/results/` del día: todo el fútbol mundial, pero
+      solo embebe cuotas para fechas muy recientes (~ayer).
+    - `/football/{pais}/{liga}/results/`: temporada entera con
+      cuota por fila — la vía histórica.
+
+    Cobertura en dos niveles: las ligas semilla `_BE_LEAGUES` se
+    descargan una vez por pasada (sus filas corrigen `fecha_evento`
+    malas y resuelven días viejos directo), y cuando un partido
+    casado del listado diario no trae cuota se descarga SU liga bajo
+    demanda vía `league_path` — auto-descubrimiento de las ~360
+    competiciones del índice (selecciones, femenino, menores) sin
+    mantener el mapa a mano.
+    """
+
+    name = static_pages.NAME_BE
+    matcher = staticmethod(static_pages.be_match)
+    choicer = staticmethod(static_pages.be_choices)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._leagues: Optional[dict[str, list[static_pages.StaticMatch]]] = None
+        # Detalle de partido: (ext_id, bettype) -> opciones. None =
+        # fetch falló (transitorio: no marcar miss, reintenta luego).
+        self._markets: dict[tuple[str, str], Optional[list[HistoricalChoice]]] = {}
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return {"futbol": 0}
+
+    async def _league(self, http, path: str) -> list[static_pages.StaticMatch]:
+        """Filas de una página de liga, cacheadas por ruta en la
+        pasada (un 404/slug malo cachea lista vacía, no rompe)."""
+        if self._leagues is None:
+            self._leagues = {}
+        if path not in self._leagues:
+            self._leagues[path] = await static_pages.fetch_betexplorer_league(
+                http, path
+            )
+        return self._leagues[path]
+
+    async def _base_leagues(self, http) -> list[static_pages.StaticMatch]:
+        """Las ligas semilla `_BE_LEAGUES`, descargadas una vez por
+        pasada (lazy — solo cuando un día viejo lo pide)."""
+        if self._leagues is None:
+            for path in static_pages._BE_LEAGUES:
+                await self._league(http, path)
+        assert self._leagues is not None
+        return [r for rows in self._leagues.values() for r in rows]
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        if day in self._days:
+            return self._days[day]
+        try:
+            day_rows, suspicious = await static_pages.fetch_betexplorer_day(http, day)
+            league_rows: list[static_pages.StaticMatch] = []
+            if utc_now().date() - day > static_pages._BE_DAY_ODDS_MAX_AGE:
+                base = await self._base_leagues(http)
+                league_rows = [r for r in base if r.start.date() == day]
+            # Mismo partido en las dos vistas (mismo ext_id): la fila
+            # de liga gana porque es la que trae la cuota de cierre.
+            by_id = {r.ext_id: r for r in day_rows}
+            for row in league_rows:
+                by_id[row.ext_id] = row
+            rows = list(by_id.values())
+            self._days[day] = None if (not rows and suspicious) else rows
+        except Exception:
+            self._days[day] = None
+        return self._days[day]
+
+    async def _market(
+        self, http, fixture: static_pages.StaticMatch, bettype: str
+    ) -> Optional[list[HistoricalChoice]]:
+        """Opciones de un mercado del detalle del partido, cacheadas
+        por (partido, bettype) en la pasada: varios picks del mismo
+        partido comparten una sola descarga."""
+        key = (fixture.ext_id, bettype)
+        if key not in self._markets:
+            code = fixture.ext_id.split(":", 1)[-1]
+            html = await static_pages.fetch_betexplorer_market(http, code, bettype)
+            self._markets[key] = (
+                None
+                if html is None
+                else static_pages.be_market_choices(
+                    html,
+                    bettype,
+                    fixture.home_name,
+                    fixture.away_name,
+                    fixture.start,
+                )
+            )
+        return self._markets[key]
+
+    async def choices(self, http, fixture: static_pages.StaticMatch, sport, picks):
+        choices = static_pages.be_choices(fixture)
+        if not choices and fixture.league_path:
+            # La fila del día no embebe data-odd: su página de liga sí.
+            path = fixture.league_path.strip("/").removeprefix("football/")
+            rows = await self._league(http, path)
+            row = next((r for r in rows if r.ext_id == fixture.ext_id), None)
+            if row is not None:
+                fixture.odds1, fixture.oddsX, fixture.odds2 = (
+                    row.odds1,
+                    row.oddsX,
+                    row.odds2,
+                )
+                choices = static_pages.be_choices(fixture)
+        # Detalle del partido (/match-odds/): solo los bettypes que
+        # piden los picks — O/U con escalera exacta, doble oportunidad,
+        # BTTS, AH, DNB. Sin 1X2 del listado se pide también el "1x2"
+        # del detalle: el endpoint histórico lo sirve aunque el
+        # listado del día ya no embeba data-odd.
+        needed = {
+            bt
+            for pick in picks
+            if (bt := static_pages.be_pick_bettype(pick.mercado, pick.seleccion))
+        }
+        if not choices:
+            needed.add("1x2")
+        detail_failed = False
+        for bettype in sorted(needed):
+            rows = await self._market(http, fixture, bettype)
+            if rows is None:
+                detail_failed = True
+            else:
+                choices += rows
+        if not choices:
+            # Fallo transitorio del endpoint -> "error" (reintento), no
+            # "miss" — no se quema la marca hist del fixture.
+            return ("error", []) if detail_failed else ("miss", [])
+        return ("ok", choices)
+
+
+@dataclass
+class _SofaFixture:
+    """Fixture Sofascore mínimo para el contrato de fuente."""
+
+    event_id: int
+    home_name: str
+    away_name: str
+    start: Optional[datetime]
+
+    @property
+    def ext_id(self) -> str:
+        return f"sofascore:{self.event_id}"
+
+
+@dataclass
+class _SofaSearchSpace:
+    """Marcador de "modo búsqueda": los listados `scheduled-events`
+    no están disponibles (directo vetado por Cloudflare a nivel IP,
+    espejos sin cuota o sin ruta de calendario) y los picks del cubo
+    se resuelven por búsqueda dual de evento contra los mirrors
+    RapidAPI — las peticiones salen de sus servidores, no de la VM.
+    No es un listado: `match()` lo detecta y resuelve pick a pick."""
+
+    sport: str
+    providers: list
+    http: httpx.AsyncClient
+
+
+# Retorno de `match()` en modo búsqueda cuando la API falla (cuota o
+# red): el loop lo cuenta "sin revisar" como un error de fixtures —
+# NO marca `nofixture`, porque no sabemos si el evento existe.
+_SEARCH_FAILED = object()
+
+# Tolerancia del modo búsqueda: la búsqueda dual devuelve TODAS las
+# ediciones históricas del enfrentamiento (Suecia-Polonia se repite
+# cada año); la fecha del pick desambigúa — mismo margen que el
+# listado del loop (±1 día).
+_SEARCH_DATE_TOLERANCE = timedelta(days=1)
+
+
+def _split_event_hint(hint: str) -> tuple[str, str]:
+    """ "Suecia - Polonia" / "A vs B" -> ("Suecia", "Polonia")."""
+    parts = re.split(r"[/+&]|\s+-\s+|\s+vs?\.?\s+", hint, maxsplit=1)
+    home = parts[0].strip() if parts else ""
+    away = parts[1].strip() if len(parts) > 1 else ""
+    return home, away
+
+
+def _search_query(hint: str) -> str:
+    """Consulta para `/api/search/{q}`: "Suecia - Polonia" ->
+    "Sweden Poland" (los eventos se buscan con ambos nombres)."""
+    home, away = _split_event_hint(_translate_countries(hint))
+    return f"{home} {away}".strip()
+
+
+class _SofaScoreHistSource:
+    """Sofascore: listado del día (`scheduled-events`) + odds completas
+    por evento (`/api/v1/event/{id}/odds/1/all`).
+
+    Cubre lo que las fuentes anteriores no tenían: selecciones
+    nacionales, femenino, ligas exóticas y mercados extra del partido
+    (córners, tarjetas, BTTS, escalera O/U completa, props de jugador
+    cuando la casa los ofreció). Los eventos terminados siguen
+    sirviendo apertura (`initialFractionalValue`) y cierre — dos
+    puntos de curva reales, misma convención de anclas que el CSV
+    (apertura a inicio-7d, cierre al inicio).
+
+    Transportes:
+    - Listado por día: solo rutas nativas — sportapi7 (si está
+      suscrito) y el directo curl_cffi. Los espejos de esquema propio
+      (allsportsapi2/sofascore6) no tienen listado por fecha.
+    - Odds por evento: primero allsportsapi2 (cuota dedicada del
+      snapshotter), luego los nativos sportapi7/sofascore6 y el
+      directo al final (expone la IP a Cloudflare — último recurso,
+      mismo orden que el snapshotter).
+
+    `revisit_done=True`: un evento ya auditado en 1X2 por las páginas
+    estáticas puede recibir aquí córners/tarjetas/props — una llamada
+    trae TODOS los mercados.
+    """
+
+    name = "sofascore"
+    revisit_done = True
+    _MIN_SCORE = 0.6
+    _SPORT_IDS = {"futbol": 1, "tenis": 2, "baloncesto": 3}
+    _SLUGS = {1: "football", 2: "tennis", 3: "basketball"}
+    _SPORT_NAMES = {v: k for k, v in _SPORT_IDS.items()}
+    # Convención football_csv: la apertura se ancla a inicio-7d.
+    _OPENING_ANCHOR = timedelta(days=7)
+
+    def __init__(self, settings) -> None:
+        self._listing: list = []
+        self._odds: list = []
+        # Providers de esquema propio que además sirven la búsqueda
+        # dual de eventos (`/api/search/{local} {visitante}`) — el
+        # plan B para cuando los listados por día están vetados. Van
+        # primero los hosts con cuota propia y holgada (footapi7,
+        # tennisapi1) y después la dedicada compartida con el
+        # snapshotter (allsportsapi2 — la más disputada).
+        self._search_providers: list[SofaScoreOddsProvider] = []
+        sports = frozenset(self._SPORT_IDS)
+        rapidapi_key = getattr(settings, "rapidapi_tennis_key", None)
+        if rapidapi_key:
+            if getattr(settings, "rapidapi_sportapi7_enabled", False):
+                t7 = rapidapi_transport(
+                    "sportapi7",
+                    settings.rapidapi_sportapi7_host,
+                    rapidapi_key,
+                )
+                self._listing.append(t7)
+                self._odds.append(SofaScoreNativeOddsProvider(t7, sports))
+            footapi_host = getattr(settings, "rapidapi_footapi_host", None)
+            if footapi_host:
+                p = SofaScoreOddsProvider(
+                    name="footapi7",
+                    api_key=rapidapi_key,
+                    api_host=footapi_host,
+                    sports=frozenset({"futbol"}),
+                )
+                self._odds.append(p)
+                self._search_providers.append(p)
+            tennis1_host = getattr(settings, "rapidapi_tennisapi1_host", None)
+            if tennis1_host:
+                p = SofaScoreOddsProvider(
+                    name="tennisapi1",
+                    api_key=rapidapi_key,
+                    api_host=tennis1_host,
+                    sports=frozenset({"tenis"}),
+                )
+                self._odds.append(p)
+                self._search_providers.append(p)
+            # Cuota dedicada de odds (esquema propio, solo tenis+futbol).
+            allsports_host = getattr(settings, "rapidapi_allsports_host", None)
+            if allsports_host:
+                p = SofaScoreOddsProvider(
+                    name="allsportsapi2",
+                    api_key=rapidapi_key,
+                    api_host=allsports_host,
+                    sports=frozenset({"tenis", "futbol"}),
+                )
+                self._odds.append(p)
+                self._search_providers.append(p)
+            if getattr(settings, "rapidapi_sofascore6_enabled", False):
+                self._odds.append(
+                    SofaScoreNativeOddsProvider(
+                        sofascore6_transport(
+                            settings.rapidapi_sofascore6_host,
+                            rapidapi_key,
+                        ),
+                        sports,
+                    )
+                )
+        if getattr(settings, "sofascore_direct_enabled", True):
+            t_direct = direct_transport()
+            self._listing.append(t_direct)
+            self._odds.append(SofaScoreNativeOddsProvider(t_direct, sports))
+        self._days: dict[
+            tuple[int, date], Optional[Union[list[_SofaFixture], _SofaSearchSpace]]
+        ] = {}
+
+    @property
+    def sport_ids(self) -> dict[str, int]:
+        return self._SPORT_IDS
+
+    @staticmethod
+    def _parse_event(raw: dict) -> Optional[_SofaFixture]:
+        eid = raw.get("id")
+        home = (raw.get("homeTeam") or {}).get("name") or ""
+        away = (raw.get("awayTeam") or {}).get("name") or ""
+        ts = raw.get("startTimestamp")
+        if not eid or not home or not away:
+            return None
+        start = (
+            datetime.fromtimestamp(ts, timezone.utc).replace(tzinfo=None)
+            if ts
+            else None
+        )
+        return _SofaFixture(
+            event_id=int(eid), home_name=home, away_name=away, start=start
+        )
+
+    async def fixtures(self, http, sport_id: int, day: date):
+        """Todos los eventos del día; None = error/listing no disponible
+        (reintento próxima pasada — un día vacío legítimo devuelve []).
+        Si NINGÚN transporte de listado responde y hay provider de
+        búsqueda configurado, devuelve `_SofaSearchSpace`: los picks
+        del cubo se resolverán por búsqueda dual de evento."""
+        key = (sport_id, day)
+        if key in self._days:
+            return self._days[key]
+        slug = self._SLUGS.get(sport_id)
+        found: Optional[list[_SofaFixture]] = None
+        if slug:
+            for transport in self._listing:
+                data = await transport.get_json(
+                    f"/api/v1/sport/{slug}/scheduled-events/{day:%Y-%m-%d}"
+                )
+                if data is None:
+                    continue
+                events = data.get("events")
+                if events is None:
+                    continue
+                found = [f for f in (self._parse_event(e) for e in events) if f]
+                break
+        if found is None and self._search_providers:
+            space = _SofaSearchSpace(
+                sport=self._SPORT_NAMES.get(sport_id, "futbol"),
+                providers=self._search_providers,
+                http=http,
+            )
+            self._days[key] = space
+            return space
+        self._days[key] = found
+        return found
+
+    def match(self, fixtures, hint, dt, sofascore_id):
+        if isinstance(fixtures, _SofaSearchSpace):
+            # Modo búsqueda: el loop espera la corrutina devuelta.
+            return self._search_match(fixtures, hint, dt, sofascore_id)
+        if sofascore_id is not None:
+            for f in fixtures:
+                if f.event_id == sofascore_id:
+                    return f
+        # Los tipsters escriben selecciones en español ("Suecia -
+        # Polonia") y Sofascore las nombra en inglés — se puntúa con
+        # la traducción y con el original y se queda la mejor.
+        hints = [hint]
+        translated = _translate_countries(hint)
+        if translated != hint:
+            hints.append(translated)
+        best: Optional[_SofaFixture] = None
+        best_score = 0.0
+        for f in fixtures:
+            score = max(match_score(h, f.home_name, f.away_name) for h in hints)
+            if score > best_score:
+                best, best_score = f, score
+        return best if best_score >= self._MIN_SCORE else None
+
+    async def _search_match(self, space: _SofaSearchSpace, hint, dt, sofascore_id):
+        """Resolución por búsqueda dual cuando el listado del día no
+        está disponible: `/api/search/{local} {visitante}` devuelve
+        entidades `event` de TODAS las ediciones del enfrentamiento —
+        se filtra por fecha del pick (±1d) y se puntúa como el match
+        normal. Devuelve `_SEARCH_FAILED` si la API falla (transitorio:
+        sin marca `nofixture`, reintenta en la próxima pasada)."""
+        if sofascore_id is not None:
+            # El snapshotter en vivo ya identificó el evento — misma
+            # familia de ids: gratis, sin llamada de búsqueda.
+            home, away = _split_event_hint(hint)
+            return _SofaFixture(sofascore_id, home, away, dt)
+        query = _search_query(hint)
+        if not query:
+            return None
+        # Primero los hosts cuya cuota está libre y son del deporte
+        # del pick; allsportsapi2 (compartida con el snapshotter) va
+        # al final de su grupo. Ningún resultado utilizable y todos
+        # en error -> _SEARCH_FAILED (transitorio, no miss).
+        providers = sorted(
+            space.providers,
+            key=lambda p: 0 if space.sport in p.SUPPORTED_SPORTS else 1,
+        )
+        results = None
+        saw_live = False
+        for provider in providers:
+            if is_rate_limited(provider.NAME):
+                continue
+            saw_live = True
+            results = await provider._search(space.http, space.sport, query)
+            if results is not None:
+                break
+        else:
+            if not saw_live:
+                return _SEARCH_FAILED
+        if results is None:
+            return _SEARCH_FAILED
+        hints = [hint]
+        translated = _translate_countries(hint)
+        if translated != hint:
+            hints.append(translated)
+        day = dt.date() if isinstance(dt, datetime) else dt
+        best: Optional[_SofaFixture] = None
+        best_score = 0.0
+        for res in results:
+            if res.get("type") != "event":
+                continue
+            fx = self._parse_event(res.get("entity") or {})
+            if fx is None:
+                continue
+            if (
+                day is not None
+                and fx.start is not None
+                and abs(fx.start - dt) > _SEARCH_DATE_TOLERANCE
+            ):
+                continue
+            score = max(match_score(h, fx.home_name, fx.away_name) for h in hints)
+            if score > best_score:
+                best, best_score = fx, score
+        return best if best_score >= self._MIN_SCORE else None
+
+    def ext_id(self, fixture: _SofaFixture) -> str:
+        return fixture.ext_id
+
+    def fixture_key(self, fixture: _SofaFixture) -> str:
+        return fixture.ext_id
+
+    @staticmethod
+    def _to_choices(rows: list[MarketChoice], start) -> list[HistoricalChoice]:
+        """MarketChoice (cierre + apertura) -> HistoricalChoice con la
+        curva de dos puntos (convención del CSV). Sin precio no hay fila."""
+        out: list[HistoricalChoice] = []
+        for c in rows:
+            points: list[PricePoint] = []
+            if c.cuota_apertura:
+                points.append(
+                    PricePoint(
+                        captured_at=start - _SofaScoreHistSource._OPENING_ANCHOR,
+                        cuota=c.cuota_apertura,
+                        suspended=c.suspended,
+                    )
+                )
+            if c.cuota:
+                points.append(
+                    PricePoint(captured_at=start, cuota=c.cuota, suspended=c.suspended)
+                )
+            if points:
+                out.append(
+                    HistoricalChoice(
+                        market_name=c.market_name,
+                        choice_name=c.choice_name,
+                        choice_group=c.choice_group,
+                        points=points,
+                    )
+                )
+        return out
+
+    async def choices(self, http, fixture: _SofaFixture, sport, picks):
+        """Todas las opciones del evento por la cadena de transportes.
+        [] explícito (evento sin mercados) = miss definitivo; todos
+        None = error transitorio (cuota/red) -> reintento."""
+        saw_empty = False
+        # Los hosts especializados del deporte van primero (footapi7,
+        # tennisapi1 — cuota propia holgada); la dedicada compartida
+        # con el snapshotter y los nativos directos quedan de reserva.
+        ordered = sorted(
+            self._odds,
+            key=lambda p: 0 if sport in getattr(p, "SUPPORTED_SPORTS", ()) else 1,
+        )
+        for provider in ordered:
+            rows = await provider.fetch_odds(fixture.ext_id, sport)
+            if rows is None:
+                continue
+            choices = self._to_choices(rows, fixture.start or utc_now())
+            if choices:
+                return "ok", choices
+            saw_empty = True
+        return ("miss", []) if saw_empty else ("error", [])
+
+
+def _book_defs(books, book) -> list:
+    """Las (idx, choice_name, choice_group) del market_book dado."""
+    for candidate, defs in books:
+        if candidate.market_book_id == book.market_book_id:
+            return defs
+    return []
+
+
+_BACKFILL_PROVIDERS = (
+    football_csv.NAME,
+    tennisdata.NAME,
+    static_pages.NAME_TE,
+    static_pages.NAME_BE,
+    _SofaScoreHistSource.name,
+    oddspapi.NAME,
+    oddsfeed.NAME,
+    betsapi.NAME,
+    # Cosecha manual por userscript (OddsPortal): sus filas resuelven
+    # el embudo igual que cualquier fuente automática.
+    harvest.NAME,
+    *_LLM_EXTRACTOR_PROVIDERS,
+)
+
+
+async def _load_picks(
+    session, limit: int | None, uncovered_sports: bool = False
+) -> list[ParsedPick]:
+    result = await session.exec(
+        select(ParsedPick)
+        .where(ParsedPick.es_apuesta == True)  # noqa: E712
+        .where(ParsedPick.es_combinada == False)  # noqa: E712
+        .where(ParsedPick.anulada == False)  # noqa: E712
+        .where(ParsedPick.deporte != None)  # noqa: E711
+        .where(ParsedPick.fecha_evento != None)  # noqa: E711
+        .where(ParsedPick.fecha_evento <= utc_now() - _EVENT_MARGIN)
+        .order_by(ParsedPick.fecha_evento)
+    )
+    sports = set().union(*(s.sport_ids for s in _sources(get_settings())))
+    if uncovered_sports:
+        # El goteo LLM no necesita provider de API: deportes sin
+        # fuente (F1, hockey...) también tienen intento honesto de
+        # auditar cuota en vez de quedar invisibles para siempre.
+        return [p for p in result.all()][:limit] if limit else list(result.all())
+    picks = [p for p in result.all() if _canonical_sport(p.deporte) in sports]
+    return picks[:limit] if limit else picks
+
+
+async def _done_event_ids(session) -> set[str]:
+    """Eventos ya procesados por CUALQUIER fuente de backfill
+    (idempotencia — una auditoría por evento basta)."""
+    result = await session.exec(
+        select(OddsSnapshot.event_ext_id)
+        .where(OddsSnapshot.provider.in_(_BACKFILL_PROVIDERS))
+        .distinct()
+    )
+    return set(result.all())
+
+
+async def _resolved_pick_ids(session) -> set[int]:
+    """Picks con filas de backfill a su nombre (`parsed_pick_id`).
+
+    Complementa `_done_event_ids`: un pick cuyo `odds_event_id`
+    apunta a un evento de otra familia ("sofascore:..." del
+    snapshotter en vivo) sigue teniendo su cuota auditada si una
+    fuente de backfill le escribió filas — sin esta comprobación el
+    embudo lo cuenta "en cola" para siempre."""
+    result = await session.exec(
+        select(OddsSnapshot.parsed_pick_id)
+        .where(OddsSnapshot.provider.in_(_BACKFILL_PROVIDERS))
+        .where(OddsSnapshot.parsed_pick_id != None)  # noqa: E711
+        .distinct()
+    )
+    return set(result.all())
+
+
+def _sources(settings) -> list[_HistorySource]:
+    """Fuentes disponibles según la configuración, en orden de uso."""
+    sources: list[_HistorySource] = [
+        _FootballCsvSource(),
+        _TennisDataSource(),
+        _TennisExplorerSource(),
+        _BetExplorerSource(),
+        _SofaScoreHistSource(settings),
+    ]
+    betsapi_token = getattr(settings, "betsapi_token", None)
+    if betsapi_token:
+        sources.append(_BetsApiSource(token=betsapi_token))
+    fivedollar_key = getattr(settings, "fivedollar_key", None)
+    if fivedollar_key:
+        sources.append(_FiveDollarSource(api_key=fivedollar_key))
+    # OddsPapi: con key directa (api.oddspapi.io) el histórico es
+    # gratis ilimitado — se prefiere sobre el canal RapidAPI, que
+    # queda como respaldo latente por si la directa se retira.
+    oddspapi_direct = getattr(settings, "oddspapi_direct_key", None)
+    if oddspapi_direct:
+        sources.append(_OddsPapiSource(api_key=oddspapi_direct, direct=True))
+    elif getattr(settings, "rapidapi_tennis_key", None):
+        sources.append(
+            _OddsPapiSource(
+                api_key=settings.rapidapi_tennis_key,
+                api_host=getattr(settings, "rapidapi_oddspapi_host", None),
+            )
+        )
+    if getattr(settings, "rapidapi_tennis_key", None):
+        sources.append(
+            _OddsFeedSource(
+                api_key=settings.rapidapi_tennis_key,
+                api_host=getattr(settings, "rapidapi_oddsfeed_host", None),
+            )
+        )
+    return sources
+
+
+def _llm_done_key() -> str:
+    """Marca de procesado del pipeline web+LLM por pick (neutra:
+    compartida por groq/gemini/cerebras — el intento cuenta una vez
+    sea cual sea el motor que lo hizo)."""
+    return f"{_LLM_ODDS_MARK}|done|{{}}"
+
+
+def _pick_pending(
+    pick: ParsedPick,
+    done: set[str],
+    settings,
+    resolved_picks: set[int] | None = None,
+) -> bool:
+    """El pick aún tiene alguna fuente VIVA que no lo ha resuelto.
+
+    Las fuentes API marcan "nofixture"; Gemini marca "done" cuando ya
+    lo intentó (cubierto por filas existentes, sin cuota en la web o
+    no buscable). Una fuente aparcada por quota larga (>~24 h, p. ej.
+    reset mensual) cuenta como saldada: no hay nada que reintentar
+    hasta que renueve, y las marcas caducan solas si vuelve.
+    """
+    # Cobertura ya escrita: el evento tiene filas de una fuente de
+    # backfill — resuelto, nada más que hacer (ni el barrido gratis
+    # de Gemini hace falta). O el pick tiene filas a su nombre aunque
+    # su odds_event_id apunte a otra familia (snapshotter en vivo).
+    if pick.odds_event_id in done or (
+        resolved_picks is not None and pick.id in resolved_picks
+    ):
+        return False
+    # Solo cuentan las fuentes que cubren el deporte del pick — un
+    # fútbol nunca lo intenta tennisdata y no debe quedar "en cola"
+    # suyo para siempre.
+    sport = _canonical_sport(pick.deporte)
+    covering = [s for s in _sources(settings) if sport in s.sport_ids]
+    sources_missed = all(
+        is_missed(f"{s.name}|nofixture|{pick.id}")
+        or is_missed(f"{s.name}|nomarket|{pick.id}")
+        or _source_quota_parked(s)
+        for s in covering
+    )
+    if not sources_missed:
+        return True
+    if _llm_odds_configured(settings) and not is_missed(
+        _llm_done_key().format(pick.id)
+    ):
+        return True
+    return False
+
+
+async def count_pending_backfill(session) -> int:
+    """Picks que aún necesitan pasada de backfill (para el early-exit
+    del job diario — cero llamadas a la API)."""
+    settings = get_settings()
+    sources = _sources(settings)
+    if not sources:
+        return 0
+    picks = await _load_picks(session, None)
+    done = await _done_event_ids(session)
+    resolved = await _resolved_pick_ids(session)
+    return sum(1 for p in picks if _pick_pending(p, done, settings, resolved))
+
+
+async def backfill_breakdown(session) -> dict:
+    """Desglose del backlog de cuotas históricas para la pantalla
+    depurativa — el embudo en números:
+
+    - `resueltos`: el evento ya tiene cuotas registradas.
+    - `en_cola`: alguna fuente VIVA le debe el intento (o Gemini) —
+      trabajo real que irá bajando con cada pasada.
+    - `aplazados`: solo le deben fuentes aparcadas por quota larga —
+      no hay nada que hacer hasta que renueven (vuelven solos: las
+      marcas `missed` caducan).
+    - `agotados`: todas las fuentes lo intentaron y nadie lo tenía.
+    """
+    settings = get_settings()
+    sources = _sources(settings)
+    if not sources:
+        return {}
+    picks = await _load_picks(session, None)
+    done = await _done_event_ids(session)
+    resolved_picks = await _resolved_pick_ids(session)
+    parked = {s.name for s in sources if _source_quota_parked(s)}
+    resueltos = en_cola = aplazados = agotados = 0
+    por_fuente = {s.name: 0 for s in sources}
+    llm_pendientes = 0
+    for pick in picks:
+        if pick.odds_event_id in done or pick.id in resolved_picks:
+            resueltos += 1
+            continue
+        sport = _canonical_sport(pick.deporte)
+        owing = [
+            s
+            for s in sources
+            if sport in s.sport_ids
+            and not is_missed(f"{s.name}|nofixture|{pick.id}")
+            and not is_missed(f"{s.name}|nomarket|{pick.id}")
+        ]
+        live_owing = [s for s in owing if s.name not in parked]
+        for s in live_owing:
+            por_fuente[s.name] += 1
+        llm_owes = _llm_odds_configured(settings) and not is_missed(
+            _llm_done_key().format(pick.id)
+        )
+        if llm_owes:
+            llm_pendientes += 1
+        if live_owing or llm_owes:
+            en_cola += 1
+        elif owing:
+            aplazados += 1
+        else:
+            agotados += 1
+    # Quién resolvió qué: picks (distintos) cuya cuota vino de cada
+    # fuente de backfill — las filas llevan parsed_pick_id del pick
+    # que disparó la descarga.
+    resueltos_por_fuente = {
+        str(provider): n
+        for provider, n in (
+            await session.exec(
+                select(
+                    OddsSnapshot.provider,
+                    func.count(distinct(OddsSnapshot.parsed_pick_id)),
+                )
+                .where(OddsSnapshot.provider.in_(_BACKFILL_PROVIDERS))
+                .where(OddsSnapshot.parsed_pick_id != None)  # noqa: E711
+                .group_by(OddsSnapshot.provider)
+            )
+        ).all()
+    }
+    return {
+        "total": len(picks),
+        "resueltos": resueltos,
+        "resueltos_por_fuente": resueltos_por_fuente,
+        "en_cola": en_cola,
+        "aplazados": aplazados,
+        "agotados": agotados,
+        "por_fuente": por_fuente,
+        "llm_pendientes": llm_pendientes,
+        # Acumulado histórico del pipeline web+LLM: intentos marcados
+        # `llm-odds|done` (resueltos con fila o descartados sin
+        # cuota publicada) — la cola "ya masticada" que no se repite.
+        "llm_procesados": count_missed_prefix(f"{_LLM_ODDS_MARK}|done|"),
+        "fuentes_en_pausa": {
+            s.name: rate_limited_until(s.name).isoformat()  # type: ignore[union-attr]
+            for s in sources
+            if s.name in parked
+        },
+        "ultima_pasada": loop_summary("odds_backfill"),
+        "ultimas_pasadas": loop_history("odds_backfill"),
+        # Auditoría semanal de consistencia (odds/audit.py): picks
+        # auditados y cuántas filas guardadas sigue casando el
+        # mapeador — la red de seguridad de las comparaciones.
+        "ultima_auditoria": loop_summary("odds_audit"),
+    }
+
+
+async def _register_event(session, event: OddsEvent, registered: set[str]) -> None:
+    """Inserta el OddsEvent si no existe — seguro ante escritores
+    concurrentes.
+
+    `registered` se carga al inicio de la pasada; el snapshotter o el
+    goteo llm-odds (procesos aparte) pueden crear la misma clave entre
+    esa carga y el commit final. El savepoint + flush inmediato hace
+    que el choque de clave aborte SOLO esta inserción en vez de tumbar
+    el commit de toda la pasada.
+    """
+    ext_id = event.event_ext_id
+    if ext_id in registered:
+        return
+    try:
+        async with session.begin_nested():
+            session.add(event)
+            await session.flush()
+    except IntegrityError:
+        # La fila la creó otro proceso durante la pasada — ya existe.
+        pass
+    registered.add(ext_id)
+
+
+_LINK_WEAK_TOKENS = _CLUB_TOKENS | {
+    "de",
+    "del",
+    "la",
+    "el",
+    "los",
+    "las",
+    "e",
+    "y",
+    "tenis",
+    "futbol",
+    "encuentro",
+    "partido",
+    "match",
+    "juego",
+    "torneo",
+    "liga",
+}
+
+
+def _link_consistent(pick: ParsedPick, event: OddsEvent, sport: str) -> bool:
+    """El enlace pick->OddsEvent es creíble solo si AMBOS lados del
+    hint del pick comparten algún token con los equipos del evento.
+
+    El snapshotter en vivo casa por tokens parciales — un apellido
+    compartido basta para enlazar "Djere vs Glinka" al partido
+    "Martínez vs Djere" (grupo D del estudio de backlog): con un
+    enlace así las fuentes buscan/escriben datos del partido
+    equivocado. Sin dos lados legibles no hay evidencia para dudar.
+    """
+    hint = _lookup_hint(pick, sport) or pick.evento or ""
+    texto = _translate_countries(fold_name(hint))
+    lados = [x.strip() for x in _HINT_SEPARATORS.split(texto) if x.strip()]
+    if len(lados) < 2:
+        return True
+    teams = set(
+        _translate_countries(
+            fold_name(f"{event.home_team or ''} {event.away_team or ''}")
+        ).split()
+    )
+    for lado in lados[:2]:
+        tokens = set(lado.split()) - _LINK_WEAK_TOKENS
+        if tokens and tokens.isdisjoint(teams):
+            return False
+    return True
+
+
+async def _run_source(
+    source: _HistorySource,
+    picks: list[ParsedPick],
+    done: set[str],
+    registered: set[str],
+    session,
+    http: httpx.AsyncClient,
+    apply: bool,
+    report: BackfillReport,
+    resolved_picks: set[int] | None = None,
+) -> None:
+    """Pasa una fuente sobre los picks pendientes de SU cobertura
+    deportiva. Añade a `done` los eventos que deja escritos."""
+    if _source_quota_parked(source):
+        report.detalles.append(
+            f"  ! [{source.name}] quota agotada hasta "
+            f"{rate_limited_until(source.name)} — pasada saltada, "
+            "sus pendientes no bloquean el drenaje"
+        )
+        return
+    nofixture_key = f"{source.name}|nofixture|{{}}"
+    nomarket_key = f"{source.name}|nomarket|{{}}"
+    hist_key = f"{source.name}|hist|{{}}"
+
+    # Enlaces pick->OddsEvent del snapshotter en vivo: cuando el
+    # `fecha_evento` del pick está corrupto (extractor/repost), la
+    # fecha real del enlace ancla día y match (grupo C). Si el evento
+    # enlazado no comparte ambos lados con el pick, el link apunta a
+    # otro partido (grupo D): se suelta y se desatribuyen sus filas.
+    event_ids = {p.odds_event_id for p in picks if p.odds_event_id}
+    events: dict[str, OddsEvent] = {}
+    if event_ids:
+        with session.no_autoflush:
+            ev_rows = await session.exec(
+                select(OddsEvent).where(OddsEvent.event_ext_id.in_(event_ids))
+            )
+            events = {e.event_ext_id: e for e in ev_rows.all()}
+    anchors: dict[int, datetime] = {}
+    unlinked_reported: set[int] = set()
+
+    # Resolución pick -> fixture agrupada por (deporte, día): una
+    # llamada de eventos por cubo cubre todos sus picks.
+    buckets: dict[tuple[int, object], list[ParsedPick]] = {}
+    for pick in picks:
+        sport = _canonical_sport(pick.deporte)
+        if sport not in source.sport_ids:
+            continue
+        linked = events.get(pick.odds_event_id or "")
+        if linked is not None and not _link_consistent(pick, linked, sport):
+            # El enlace era del snapshotter y apunta a OTRO partido:
+            # buscar por él fija el día equivocado y las filas
+            # atribuidas son precios de un evento que no es.
+            if pick.id not in unlinked_reported:
+                unlinked_reported.add(pick.id)
+                report.detalles.append(
+                    f"  ~ pick {pick.id}: odds_event_id "
+                    f"{pick.odds_event_id} es {linked.home_team}-"
+                    f"{linked.away_team} (no es el pick); enlace soltado"
+                )
+            if apply:
+                with session.no_autoflush:
+                    wrong_rows = (
+                        await session.exec(
+                            select(OddsSnapshot).where(
+                                OddsSnapshot.parsed_pick_id == pick.id
+                            )
+                        )
+                    ).all()
+                for row in wrong_rows:
+                    row.parsed_pick_id = None
+                    session.add(row)
+                pick.odds_event_id = None
+                session.add(pick)
+                clear_missed_for_pick(pick.id)
+            linked = None
+        if pick.odds_event_id in done and not getattr(source, "revisit_done", False):
+            continue
+        if resolved_picks is not None and pick.id in resolved_picks:
+            continue
+        anchor = linked.start if linked is not None else None
+        if anchor is not None:
+            anchors[pick.id or 0] = anchor
+        # Un enlace consistente con fecha distinta invalida las marcas
+        # previas: se escribieron buscando el día equivocado (grupo C).
+        stale_marks = anchor is not None and anchor.date() != pick.fecha_evento.date()
+        if stale_marks and apply:
+            cleared = clear_missed_for_pick(pick.id or 0)
+            if cleared:
+                report.detalles.append(
+                    f"  ~ pick {pick.id}: {cleared} marcas borradas "
+                    "(fecha del enlace difiere de fecha_evento)"
+                )
+        if not stale_marks and (
+            is_missed(nofixture_key.format(pick.id))
+            or is_missed(nomarket_key.format(pick.id))
+        ):
+            continue
+        # Fuentes que declaran `pick_supported` pueden descartar el
+        # pick sin llamada: p. ej. oddspapi no traduce props de
+        # jugador — buscarle fixture y curva sería cuota en vano.
+        supports = getattr(source, "pick_supported", None)
+        if supports is not None and not supports(pick):
+            report.sin_opcion += 1
+            report.detalles.append(
+                f"  - pick {pick.id}: mercado no traducible "
+                f"({pick.mercado} / {pick.seleccion}) [{source.name}]"
+            )
+            if apply:
+                mark_missed(nomarket_key.format(pick.id))
+            continue
+        day = (anchor or pick.fecha_evento).date()
+        buckets.setdefault((source.sport_ids[sport], day), []).append(pick)
+
+    fixtures_picks: dict[str, tuple[object, str, list[ParsedPick]]] = {}
+    # Días más recientes primero: los picks frescos (los que más
+    # importan) se resuelven antes de que se agote la paga diaria.
+    for (sport_id, day), day_picks in sorted(
+        buckets.items(),
+        key=lambda item: (item[0][0], -item[0][1].toordinal()),
+    ):
+        sport = _canonical_sport(day_picks[0].deporte)
+        # Un día por llamada y la caché del cliente dedup los días
+        # compartidos entre buckets vecinos.
+        fixtures: list = []
+        search_space: Optional[_SofaSearchSpace] = None
+        api_error = False
+        use_day_scan = True
+        # Descubrimiento dirigido (oddspapi por participante): ahorra
+        # las billables del barrido de días cuando TODOS los picks del
+        # cubo resuelven a equipos del catálogo.
+        discover = getattr(source, "fixtures_for_picks", None)
+        if discover is not None:
+            mode, directed = await discover(http, sport_id, day, day_picks)
+            if mode == "ok":
+                fixtures = list(directed or [])
+                use_day_scan = False
+            elif mode == "error":
+                api_error = True
+                use_day_scan = False
+        if use_day_scan:
+            for delta in getattr(source, "search_deltas", (-1, 0, 1)):
+                day_fixtures = await source.fixtures(
+                    http, sport_id, day + timedelta(days=delta)
+                )
+                if day_fixtures is None:
+                    api_error = True
+                    break
+                if isinstance(day_fixtures, _SofaSearchSpace):
+                    search_space = search_space or day_fixtures
+                    continue
+                fixtures += day_fixtures
+        if api_error:
+            report.sin_revisar += len(day_picks)
+            report.detalles.append(
+                f"  ! [{source.name}] error de API en eventos {sport} "
+                f"{day}: {len(day_picks)} picks sin revisar"
+            )
+            continue
+        # Con listado vacío y modo búsqueda disponible, los picks se
+        # resuelven evento a evento contra allsportsapi2.
+        match_space = search_space if not fixtures else None
+        for pick in day_picks:
+            # Con enlace consistente el dt de match es la fecha real
+            # del OddsEvent, no la (a veces corrupta) fecha_evento.
+            match_dt = anchors.get(pick.id or 0) or pick.fecha_evento
+            hint = _lookup_hint(pick, sport) or ""
+            found = source.match(
+                match_space if match_space is not None else fixtures,
+                hint,
+                match_dt,
+                _sofascore_id(pick),
+            )
+            fixture = await found if inspect.isawaitable(found) else found
+            if fixture is None:
+                # El alias traducido pudo perder tokens ("deportivo de
+                # a coruña" -> "la coruna" no casa con "RC Deportivo de
+                # A Coruna" de OddsPapi): segunda oportunidad con el
+                # `evento` original, sin coste de API.
+                raw_hint = (pick.evento or "").strip().lower()
+                if raw_hint and raw_hint != hint.lower():
+                    found = source.match(
+                        match_space if match_space is not None else fixtures,
+                        raw_hint,
+                        match_dt,
+                        _sofascore_id(pick),
+                    )
+                    fixture = await found if inspect.isawaitable(found) else found
+            if fixture is _SEARCH_FAILED:
+                report.sin_revisar += 1
+                report.detalles.append(
+                    f"  ! [{source.name}] error de API resolviendo "
+                    f"pick {pick.id} — reintento próxima pasada"
+                )
+                continue
+            if fixture is None:
+                report.sin_fixture += 1
+                report.detalles.append(
+                    f"  - pick {pick.id}: sin fixture "
+                    f"({pick.evento or pick.seleccion}) [{source.name}]"
+                )
+                if apply:
+                    mark_missed(nofixture_key.format(pick.id))
+                continue
+            real_start = getattr(fixture, "start", None)
+            if (
+                real_start is not None
+                and pick.fecha_evento is not None
+                and pick.fecha_evento.date() != real_start.date()
+            ):
+                # La fecha guardada era la del repost: la del fixture
+                # es la verdad del provider. La corregimos para que el
+                # resto de fuentes busquen el día correcto, y limpiamos
+                # las marcas "nofixture" dejadas con la fecha mala.
+                report.detalles.append(
+                    f"  ~ pick {pick.id}: fecha {pick.fecha_evento.date()} "
+                    f"-> {real_start.date()} [{source.name}]"
+                )
+                report.fechas_corregidas += 1
+                pick.fecha_evento = real_start
+                if apply:
+                    session.add(pick)
+                    for other in _sources(get_settings()):
+                        if other.name != source.name:
+                            clear_missed(f"{other.name}|nofixture|{pick.id}")
+                            clear_missed(f"{other.name}|nomarket|{pick.id}")
+            ext_id = source.ext_id(fixture)
+            if not pick.odds_event_id:
+                # Enlaza aunque luego no case ninguna opción: el evento
+                # ES este — la falta es de mercado, no de fixture, y el
+                # id permite reintentos desde el payload guardado sin
+                # otra búsqueda de fixtures.
+                pick.odds_event_id = ext_id
+                if apply:
+                    session.add(pick)
+            if ext_id in done and not getattr(source, "revisit_done", False):
+                continue
+            slot = fixtures_picks.setdefault(
+                source.fixture_key(fixture), (fixture, sport, [])
+            )
+            slot[2].append(pick)
+            report.con_fixture += 1
+
+    # Una curva por fixture alimenta todos sus picks.
+    pendientes_curva = sum(len(picks_) for _, _, picks_ in fixtures_picks.values())
+    procesados_curva = 0
+    for fixture, sport, event_picks in fixtures_picks.values():
+        ext_id = source.ext_id(fixture)
+        if is_missed(hist_key.format(source.fixture_key(fixture))):
+            procesados_curva += len(event_picks)
+            report.sin_historial += len(event_picks)
+            continue
+        try:
+            status, choices = await source.choices(http, fixture, sport, event_picks)
+        except Exception:
+            # Un payload con forma inesperada en UNA fuente no puede
+            # tumbar la pasada entera (perdimos un drenaje asi): se
+            # trata como error de API - sin marca, reintenta luego.
+            report.sin_revisar += pendientes_curva - procesados_curva
+            report.detalles.append(
+                f"  ! {fixture.home_name} vs {fixture.away_name}: "
+                f"excepcion en choices() [{source.name}], se reintenta luego"
+            )
+            break
+        if status == "miss":
+            # El fixture nunca tuvo mercados en esta fuente.
+            mark_missed(hist_key.format(source.fixture_key(fixture)))
+            procesados_curva += len(event_picks)
+            report.sin_historial += len(event_picks)
+            report.detalles.append(
+                f"  - {fixture.home_name} vs {fixture.away_name}: "
+                f"sin historial [{source.name}]"
+            )
+            continue
+        if status == "budget":
+            report.detalles.append(
+                f"  ! [{source.name}] presupuesto de llamadas agotado "
+                f"({_FEED_MAX_CALLS_PER_RUN}/pasada) — sigue mañana"
+            )
+            report.sin_revisar += pendientes_curva - procesados_curva
+            return
+        if status == "error":
+            # Error/cuota: no se marca — reintenta en otra pasada.
+            report.sin_revisar += pendientes_curva - procesados_curva
+            report.detalles.append(
+                f"  ! {fixture.home_name} vs {fixture.away_name}: "
+                f"error de API [{source.name}], se reintenta luego"
+            )
+            break
+        procesados_curva += len(event_picks)
+
+        # Filas virtuales con el formato exacto que lee el comparador.
+        virtual = [
+            OddsSnapshot(
+                provider=source.name,
+                event_ext_id=ext_id,
+                market_name=c.market_name,
+                choice_name=c.choice_name,
+                choice_group=c.choice_group,
+                cuota=p.cuota,
+                cuota_apertura=c.cuota_apertura,
+                suspended=p.suspended,
+                captured_at=p.captured_at,
+            )
+            for c in choices
+            for p in c.points
+        ]
+        event = OddsEvent(
+            event_ext_id=ext_id,
+            sport=sport,
+            home_team=fixture.home_name,
+            away_team=fixture.away_name,
+            start=fixture.start,
+        )
+        by_key = {(c.market_name, c.choice_name, c.choice_group): c for c in choices}
+
+        # key -> pick que casó esa opción: la fila se atribuye al
+        # pick real, no al primero del grupo (un pick O/U que no
+        # mapea nada no puede quedar "resuelto" por la fila del
+        # ganador de otro pick del mismo partido).
+        matched_keys: dict[tuple, int] = {}
+        matched_pick_ids: set[int] = set()
+        for pick in event_picks:
+            matched = map_pick_choices(pick, event, virtual)
+            if matched is None:
+                report.sin_opcion += 1
+                report.detalles.append(
+                    f"  - pick {pick.id}: sin opción comparable "
+                    f"({pick.mercado} / {pick.seleccion}) [{source.name}]"
+                )
+                if apply:
+                    # Miss definitivo por fuente: el evento existe y
+                    # sus mercados ya se descargaron — este pick nunca
+                    # casará aquí. Sin la marca, cada pasada rebusca y
+                    # re-descarga el fixture quemando cuota en vano.
+                    mark_missed(nomarket_key.format(pick.id))
+                continue
+            key = (matched.market_name, matched.choice_name, matched.choice_group)
+            matched_keys.setdefault(key, pick.id)
+            matched_pick_ids.add(pick.id)
+            report.mapeados += 1
+            choice = by_key[key]
+            precio_pub = _nearest_price(choice.points, pick.created_at)
+            report.detalles.append(
+                f"  + pick {pick.id}: {matched.market_name} / {matched.choice_name}"
+                f" | tipster {pick.cuota} vs mercado {precio_pub}"
+                f" | {len(choice.points)} puntos [{source.name}]"
+            )
+            if not pick.odds_event_id:
+                pick.odds_event_id = ext_id
+                if apply:
+                    session.add(pick)
+
+        if apply and matched_keys:
+            await _register_event(session, event, registered)
+            # Eventos revisitados (fuentes lazy): las opciones ya
+            # escritas no se duplican — una fila libre del mismo key
+            # se re-sella al pick que casó (cubre el caso del pick
+            # re-etiquetado cuya fila buena ya existía sin dueño).
+            existing_keys: set[tuple] = set()
+            if ext_id in done:
+                existing_keys = {
+                    (r[0], r[1], r[2])
+                    for r in (
+                        await session.exec(
+                            select(
+                                OddsSnapshot.market_name,
+                                OddsSnapshot.choice_name,
+                                OddsSnapshot.choice_group,
+                            )
+                            .where(OddsSnapshot.event_ext_id == ext_id)
+                            .where(OddsSnapshot.provider == source.name)
+                        )
+                    ).all()
+                }
+            for key, owner_id in matched_keys.items():
+                if key in existing_keys:
+                    free = (
+                        await session.exec(
+                            select(OddsSnapshot)
+                            .where(OddsSnapshot.provider == source.name)
+                            .where(OddsSnapshot.event_ext_id == ext_id)
+                            .where(OddsSnapshot.market_name == key[0])
+                            .where(OddsSnapshot.choice_name == key[1])
+                            .where(
+                                (OddsSnapshot.choice_group == key[2])
+                                if key[2] is not None
+                                else (OddsSnapshot.choice_group == None)  # noqa: E711
+                            )
+                            .where(OddsSnapshot.parsed_pick_id == None)  # noqa: E711
+                        )
+                    ).all()
+                    if free:
+                        for row in free:
+                            row.parsed_pick_id = owner_id
+                            session.add(row)
+                        report.detalles.append(
+                            f"  ~ pick {owner_id}: {key[0]}/{key[1]} "
+                            f"re-sellado ({len(free)} filas libres) "
+                            f"[{source.name}]"
+                        )
+                        continue
+                    # Todas atribuidas a picks hermanos: se escribe la
+                    # copia propia (misma convención que el snapshotter,
+                    # una fila por pick resuelto) cayendo al write de abajo.
+                for point in downsample(by_key[key].points):
+                    session.add(
+                        OddsSnapshot(
+                            provider=source.name,
+                            event_ext_id=ext_id,
+                            market_name=key[0],
+                            choice_name=key[1],
+                            choice_group=key[2],
+                            cuota=point.cuota,
+                            cuota_apertura=by_key[key].cuota_apertura,
+                            suspended=point.suspended,
+                            captured_at=point.captured_at,
+                            parsed_pick_id=owner_id,
+                        )
+                    )
+                    report.filas += 1
+                    report.filas_por_fuente[source.name] = (
+                        report.filas_por_fuente.get(source.name, 0) + 1
+                    )
+            done.add(ext_id)
+            if resolved_picks is not None:
+                resolved_picks |= matched_pick_ids
+        elif matched_keys:
+            n = sum(len(downsample(by_key[k].points)) for k in matched_keys)
+            report.filas += n
+            report.filas_por_fuente[source.name] = (
+                report.filas_por_fuente.get(source.name, 0) + n
+            )
+
+
+_EVENT_SPLIT = re.compile(r"\s+(?:vs\.?|v|[-–—])\s+")
+
+
+def _synthetic_event(pick: ParsedPick, sport: str, ext_id: str) -> OddsEvent:
+    """OddsEvent armado desde `pick.evento` ("A vs B") para picks sin
+    fixture de API. Equipos vacíos si el formato no se entiende: los
+    mercados de lado fallarán el autocheck y los de línea (O/U) no."""
+    home = away = ""
+    parts = _EVENT_SPLIT.split((pick.evento or "").strip(), maxsplit=1)
+    if len(parts) == 2:
+        home, away = parts[0].strip(), parts[1].strip()
+    return OddsEvent(
+        event_ext_id=ext_id,
+        sport=sport,
+        home_team=home,
+        away_team=away,
+        start=pick.fecha_evento,
+    )
+
+
+def _market_desc(pick: ParsedPick) -> str:
+    """Descripción natural de la apuesta para el prompt del modelo."""
+    parts = [p for p in (pick.mercado, pick.seleccion) if p]
+    desc = " / ".join(str(p) for p in parts)
+    if pick.linea is not None:
+        desc += f" (línea {pick.linea})"
+    return desc.strip()
+
+
+async def _run_gemini_pass(
+    picks: list[ParsedPick],
+    done: set[str],
+    registered: set[str],
+    session,
+    apply: bool,
+    report: BackfillReport,
+    resolved_picks: set[int] | None = None,
+) -> None:
+    """Última fuente de la cascada: Gemini lee comparadores web.
+
+    Recorre picks que ninguna fuente determinista dejó casados — ya
+    sea porque su evento no tiene filas o porque su mercado no estaba
+    cubierto (córners/tarjetas...). Para cada uno busca la cuota de
+    cierre en la web, y solo la escribe si la tripleta propuesta casa
+    con el pick vía `map_pick_choices` (autocheck determinista).
+    """
+    settings = get_settings()
+    if not _llm_odds_ready(settings):
+        # Sin key no hay nada que hacer; en cooldown tampoco — salir
+        # aquí evita quemar rescates de OpenAI para picks que no se
+        # van a buscar en esta pasada.
+        return
+    done_key = _llm_done_key()
+    resolved = resolved_picks or set()
+    candidates = [
+        p
+        for p in picks
+        if p.id is not None
+        and p.id not in resolved
+        and not is_missed(done_key.format(p.id))
+    ]
+    if not candidates:
+        return
+
+    # Cobertura ya existente: picks cuyo evento guarda filas de
+    # cualquier provider y casan — se marcan procesados sin gastar
+    # una sola llamada al modelo.
+    event_ids = {p.odds_event_id for p in candidates if p.odds_event_id}
+    events: dict[str, OddsEvent] = {}
+    rows_by_event: dict[str, list[OddsSnapshot]] = {}
+    if event_ids:
+        for e in (
+            await session.exec(
+                select(OddsEvent).where(OddsEvent.event_ext_id.in_(event_ids))
+            )
+        ).all():
+            events[e.event_ext_id] = e
+        for row in (
+            await session.exec(
+                select(OddsSnapshot)
+                .where(OddsSnapshot.event_ext_id.in_(event_ids))
+                .order_by(OddsSnapshot.captured_at)
+            )
+        ).all():
+            rows_by_event.setdefault(row.event_ext_id, []).append(row)
+
+    pending: list[ParsedPick] = []
+    for pick in candidates:
+        event = events.get(pick.odds_event_id or "")
+        if event is not None and map_pick_choices(
+            pick, event, rows_by_event.get(event.event_ext_id, [])
+        ):
+            if apply:
+                mark_missed(done_key.format(pick.id))
+            continue
+        pending.append(pick)
+
+    # Deportes sin provider de API: el comparador web no distingue,
+    # pero su `evento` no siempre es un cruce "A vs B" (F1: "GP
+    # ITALIA") — para ellos el propio nombre del evento es el hint.
+    api_sports = set().union(*(s.sport_ids for s in _sources(settings)))
+
+    # Agrupa por evento: patas/picks del mismo partido comparten la
+    # página del comparador — una búsqueda + una extracción por página
+    # resuelven el grupo entero en vez de un ciclo por pick.
+    groups: dict[tuple[str, date, str], list[ParsedPick]] = {}
+    # Los grupos cuyo cruce ya venía bien en el pick gastan las
+    # búsquedas antes que los que necesitaron rescate del raw (hint
+    # más fiable = búsqueda más útil con la cuota escasa).
+    group_rank: dict[tuple[str, date, str], int] = {}
+    for pick in pending:
+        sport = _canonical_sport(pick.deporte)
+        hint = (_lookup_hint(pick, sport) or "") if sport else ""
+        desc = _market_desc(pick)
+        if (
+            sport in api_sports and sport not in GeminiResearchProvider.SUPPORTED_SPORTS
+        ) or not desc:
+            # El gate SUPPORTED_SPORTS aplica a deportes con provider:
+            # para los sin fuente el LLM es agnóstico (el deporte solo
+            # se interpola en el prompt) — marcarlos "done" sin intento
+            # sería otra forma de hacerlos invisibles.
+            if apply:
+                mark_missed(done_key.format(pick.id))
+            continue
+        # En tenis el hint es el jugador (vale cualquier nombre); en
+        # los demás deportes hace falta un cruce "A vs B" — si el
+        # `evento` guardó la apuesta o basura OCR, la búsqueda es
+        # imposible y se intenta rescatar el partido del raw
+        # (texto -> mini-LLM -> imagen del slip) antes de rendirlo.
+        # La forma del cruce se comprueba sobre el `evento` ORIGINAL:
+        # `translate_team_aliases` (dentro de _lookup_hint) devuelve el
+        # nombre canónico en minúsculas y "a - b" en minúscula se
+        # rechaza a propósito (ambiguo con rangos "8 - 10") — un
+        # evento ya bueno tipo "Ipswich - Liverpool" se re-rescataba
+        # en cada pasada por culpa de esa bajada de caja.
+        usable = bool(hint) and (
+            sport == "tenis"
+            or looks_like_match_hint((pick.evento or "").strip())
+            or looks_like_match_hint(hint)
+            or (sport not in api_sports and len(hint.strip()) >= 5)
+        )
+        rescued_ok = False
+        if not usable and sport != "tenis":
+            rescued = await rescue_evento(session, pick, settings)
+            # El rescate también tiene que tener forma de cruce:
+            # basura tipo "Sáb - sep" haría una búsqueda imposible.
+            if rescued and looks_like_match_hint(rescued):
+                # In-place: la mutación solo se persiste si `run()`
+                # hace commit al final (modo apply).
+                pick.evento = rescued
+                session.add(pick)
+                hint = rescued
+                usable = True
+                rescued_ok = True
+                report.detalles.append(
+                    f"  ~ pick {pick.id}: evento rescatado del raw -> {rescued}"
+                )
+            elif rescued:
+                report.detalles.append(
+                    f"  - pick {pick.id}: rescate sin forma de partido "
+                    f"({rescued}) [{_LLM_ODDS_MARK}]"
+                )
+            else:
+                report.detalles.append(
+                    f"  - pick {pick.id}: evento no rescatable "
+                    f"(ni texto ni OCR ni imagen) [{_LLM_ODDS_MARK}]"
+                )
+        if not usable:
+            if apply:
+                mark_missed(done_key.format(pick.id))
+            continue
+        evento = re.sub(r"\s+", " ", (pick.evento or hint).strip().lower())
+        key = (sport, pick.fecha_evento.date(), evento)
+        groups.setdefault(key, []).append(pick)
+        group_rank[key] = min(group_rank.get(key, 1), 1 if rescued_ok else 0)
+
+    for (sport, _day, _evento), group in sorted(
+        groups.items(), key=lambda kv: group_rank[kv[0]]
+    )[:_GEMINI_MAX_EVENTS_PER_RUN]:
+        provider = GeminiResearchProvider(
+            sport, settings.google_api_key, calls_as=_GEMINI_ODDS_PROVIDER
+        )
+        hint = _lookup_hint(group[0], sport) or ""
+        results = await provider.find_closing_odds_multi(
+            group[0].fecha_evento, hint, [_market_desc(p) for p in group]
+        )
+        cooled = provider._in_cooldown()
+        for idx, pick in enumerate(group):
+            found = results.get(idx)
+            if found is None:
+                if cooled:
+                    # Búsqueda abortada por ritmo/cuota: sin marca,
+                    # se retoma en la próxima pasada.
+                    continue
+                if apply:
+                    mark_missed(done_key.format(pick.id))
+                report.detalles.append(
+                    f"  - pick {pick.id}: sin cuota en comparadores "
+                    f"[{_LLM_ODDS_MARK}]"
+                )
+                continue
+            await _record_gemini_closing(
+                session, events, registered, done, pick, found, apply, report
+            )
+        if cooled:
+            report.detalles.append(
+                "  ! [gemini-odds] cooldown del free tier — "
+                "el resto sigue en la próxima pasada"
+            )
+            break
+
+
+async def _record_gemini_closing(
+    session,
+    events: dict[str, OddsEvent],
+    registered: set[str],
+    done_events: set[str],
+    pick: ParsedPick,
+    found,
+    apply: bool,
+    report: BackfillReport,
+) -> None:
+    """Valida y persiste la cuota que el extractor propuso para UN pick.
+
+    Autocheck: la propuesta tiene que casar con el pick por la misma
+    función que usa el comparador. Si el evento sintético tiene los
+    lados invertidos se prueba la orientación contraria antes de
+    descartar. La fila se firma con el motor que la extrajo
+    (`{extractor}-odds`) — la auditoría dice quién produjo cada cuota.
+    """
+    sport = _canonical_sport(pick.deporte) or ""
+    row_provider = f"{found.extractor or 'gemini'}-odds"
+    ext_id = pick.odds_event_id or f"{row_provider}:{pick.id}"
+    event = events.get(ext_id) or _synthetic_event(pick, sport, ext_id)
+    probe = OddsSnapshot(
+        provider=row_provider,
+        event_ext_id=ext_id,
+        market_name=found.market_name,
+        choice_name=found.choice_name,
+        choice_group=found.choice_group,
+        cuota=found.cuota,
+        captured_at=pick.fecha_evento,
+    )
+    matched = map_pick_choices(pick, event, [probe])
+    if (
+        matched is None
+        and event.home_team
+        and event.away_team
+        and event is not events.get(ext_id)
+    ):
+        event = OddsEvent(
+            event_ext_id=event.event_ext_id,
+            sport=event.sport,
+            home_team=event.away_team,
+            away_team=event.home_team,
+            start=event.start,
+        )
+        matched = map_pick_choices(pick, event, [probe])
+    key = (found.market_name, found.choice_name, found.choice_group)
+    if (
+        matched is None
+        or (
+            matched.market_name,
+            matched.choice_name,
+            matched.choice_group,
+        )
+        != key
+    ):
+        if apply:
+            mark_missed(_llm_done_key().format(pick.id))
+        report.detalles.append(
+            f"  - pick {pick.id}: propuesta no verificable "
+            f"({found.market_name}/{found.choice_name}) "
+            f"[{row_provider}]"
+        )
+        return
+
+    report.mapeados += 1
+    report.detalles.append(
+        f"  + pick {pick.id}: {found.market_name} / {found.choice_name}"
+        f" | cierre {found.cuota} ({found.casa or '?'}) "
+        f"[{row_provider} via {found.source_url}]"
+    )
+    if apply:
+        # La fila OddsEvent solo se crea para ids propios
+        # ({provider}:{pick_id}). Cuando el pick ya enlaza a un evento
+        # de provider real (sofascore:...), las filas se cuelgan de ese
+        # ext_id pero la fila de evento la crea quien tenga los
+        # metadatos buenos (backfill/snapshotter) — un evento sintético
+        # bajo id ajeno colisiona con el creador real y le ensucia
+        # home/away.
+        if pick.odds_event_id is None:
+            await _register_event(session, event, registered)
+        session.add(
+            OddsSnapshot(
+                provider=row_provider,
+                event_ext_id=ext_id,
+                market_name=found.market_name,
+                choice_name=found.choice_name,
+                choice_group=found.choice_group,
+                cuota=found.cuota,
+                captured_at=pick.fecha_evento,
+                parsed_pick_id=pick.id,
+            )
+        )
+        if not pick.odds_event_id:
+            pick.odds_event_id = ext_id
+        session.add(pick)
+        done_events.add(ext_id)
+        report.filas += 1
+        report.filas_por_fuente[row_provider] = (
+            report.filas_por_fuente.get(row_provider, 0) + 1
+        )
+
+
+async def run(apply: bool, limit: int | None) -> BackfillReport:
+    settings = get_settings()
+    report = BackfillReport()
+    sources = _sources(settings)
+    if not sources:  # imposible hoy: tennisdata no pide key
+        report.detalles.append("Sin fuentes de histórico disponibles.")
+        return report
+
+    async with AsyncSessionLocal() as session, httpx.AsyncClient(timeout=60) as http:
+        picks = await _load_picks(session, limit)
+        report.picks = len(picks)
+        done = await _done_event_ids(session)
+        resolved = await _resolved_pick_ids(session)
+        # Early-exit antes de tocar la API: si no hay backlog pendiente
+        # el job diario no gasta ni una llamada.
+        if not any(_pick_pending(p, done, settings, resolved) for p in picks):
+            report.detalles.append("Sin backlog pendiente; no se llama a la API.")
+            return report
+
+        registered = set((await session.exec(select(OddsEvent.event_ext_id))).all())
+
+        for source in sources:
+            await _run_source(
+                source,
+                picks,
+                done,
+                registered,
+                session,
+                http,
+                apply,
+                report,
+                resolved,
+            )
+        if _gemini_pass_lock.locked():
+            report.detalles.append("  ! [llm-odds] pasada de goteo en curso — se omite")
+        else:
+            async with _gemini_pass_lock:
+                await _run_gemini_pass(
+                    picks, done, registered, session, apply, report, resolved
+                )
+
+        if apply:
+            await session.commit()
+            count_odds_rows_written(report.filas)
+            # Resumen visible en la pantalla depurativa (qué hizo la
+            # última pasada sin abrir logs del contenedor).
+            record_loop_summary(
+                "odds_backfill",
+                {
+                    "revisados": report.picks,
+                    "filas": report.filas,
+                    "con_fixture": report.con_fixture,
+                    "sin_fixture": report.sin_fixture,
+                    "sin_historial": report.sin_historial,
+                    "sin_opcion": report.sin_opcion,
+                    "mapeados": report.mapeados,
+                    "sin_revisar": report.sin_revisar,
+                    "fechas_corregidas": report.fechas_corregidas,
+                    "filas_por_fuente": report.filas_por_fuente,
+                },
+            )
+
+    return report
+
+
+async def run_gemini_odds_pass(apply: bool) -> Optional[BackfillReport]:
+    """Solo el tramo Gemini del backfill histórico (drenaje a goteo).
+
+    El cooldown del free tier dura ~20 min — esperar a la pasada
+    diaria dejaba el grifo cerrado 24 h. Este drenaje se engancha a
+    un loop corto propio (`_run_gemini_odds_loop` en lifecycle):
+
+    - sin key, provider aparcado o sin candidatos: sale gratis (unas
+      consultas a la BD y nada más);
+    - si la pasada diaria ya tiene el pass en curso: se omite para
+      no duplicar búsquedas sobre los mismos candidatos.
+
+    Devuelve el reporte si la pasada corrió, None si salió antes.
+    """
+    settings = get_settings()
+    if not _llm_odds_ready(settings):
+        return None
+    if _gemini_pass_lock.locked():
+        return None
+    async with _gemini_pass_lock, AsyncSessionLocal() as session:
+        # uncovered_sports: el comparador web no distingue deportes —
+        # F1/hockey/otros sin provider de API también se auditan aquí
+        # (la única vía para ellos; los del backfill diario siguen
+        # filtrados porque necesitan fixture en una fuente real).
+        picks = await _load_picks(session, None, uncovered_sports=True)
+        done = await _done_event_ids(session)
+        resolved = await _resolved_pick_ids(session)
+        done_key = _llm_done_key()
+        if not any(
+            p.id is not None
+            and p.id not in resolved
+            and not is_missed(done_key.format(p.id))
+            for p in picks
+        ):
+            return None
+        registered = set((await session.exec(select(OddsEvent.event_ext_id))).all())
+        report = BackfillReport()
+        await _run_gemini_pass(
+            picks, done, registered, session, apply, report, resolved
+        )
+        if apply:
+            await session.commit()
+            # Visible en la pantalla depurativa como "llm_odds":
+            # qué hizo el último goteo sin abrir logs del contenedor.
+            record_loop_summary(
+                "llm_odds",
+                {
+                    "mapeados": report.mapeados,
+                    "filas": report.filas,
+                    "detalles": report.detalles[:20],
+                },
+            )
+        return report

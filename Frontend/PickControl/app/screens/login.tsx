@@ -1,28 +1,56 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
-import { Formik } from 'formik';
-import * as Yup from 'yup';
-import * as LocalAuthentication from 'expo-local-authentication';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import BottomBar from '../components/bottom-bar';
-import TopBar from '../components/top-bar';
-import { useRouter } from 'expo-router';
-import { useAuth } from '../context/AuthContext'; // Corregir la ruta de importación
+import React, { useEffect, useState } from "react";
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  ScrollView,
+  Platform,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Formik } from "formik";
+import * as Yup from "yup";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import BottomBar from "@/src/components/bottom-bar";
+import TopBar from "@/src/components/top-bar";
+import { useRouter } from "expo-router";
+import { useAuth } from "@/src/context/AuthContext";
+import { login as loginApi } from "@/src/api/auth.api";
+import { ApiError } from "@/src/api/client";
+import { getSecureItem, setSecureItem } from "@/src/storage/secure";
 
 const LoginSchema = Yup.object().shape({
-  email: Yup.string()
-    .email('Email inválido')
-    .required('El email es requerido'),
-  password: Yup.string()
-    .required('La contraseña es requerida'),
+  email: Yup.string().email("Email inválido").required("El email es requerido"),
+  password: Yup.string().required("La contraseña es requerida"),
 });
+
+// expo-local-authentication ejecuta `requireNativeModule` al evaluarse:
+// en web/Expo Go el import estático lanzaría "Cannot find native
+// module" y tumbaría la pantalla al cargar. Carga perezosa — sin
+// módulo nativo simplemente no se ofrece login biométrico.
+type LocalAuthModule = typeof import("expo-local-authentication");
+let localAuthPromise: Promise<LocalAuthModule | null> | null = null;
+
+function loadLocalAuth(): Promise<LocalAuthModule | null> {
+  if (Platform.OS === "web") return Promise.resolve(null);
+  if (!localAuthPromise) {
+    localAuthPromise = import("expo-local-authentication").then(
+      (m) => m,
+      () => null
+    );
+  }
+  return localAuthPromise;
+}
 
 const LoginScreen = () => {
   const router = useRouter();
   const { login } = useAuth(); // Obtener la función de login del contexto de autenticación
+  const insets = useSafeAreaInsets();
   const [isBiometricSupported, setIsBiometricSupported] = useState(false);
   const [savedCredentials, setSavedCredentials] = useState(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     checkBiometricSupport();
@@ -30,18 +58,20 @@ const LoginScreen = () => {
   }, []);
 
   const checkBiometricSupport = async () => {
+    const LocalAuthentication = await loadLocalAuth();
+    if (!LocalAuthentication) return;
     const compatible = await LocalAuthentication.hasHardwareAsync();
     setIsBiometricSupported(compatible);
   };
 
   const checkSavedCredentials = async () => {
     try {
-      const credentials = await AsyncStorage.getItem('userCredentials');
+      const credentials = await getSecureItem("userCredentials");
       if (credentials) {
         setSavedCredentials(JSON.parse(credentials));
       }
     } catch (error) {
-      console.error('Error checking saved credentials:', error);
+      console.error("Error checking saved credentials:", error);
     }
   };
 
@@ -55,114 +85,110 @@ const LoginScreen = () => {
         return;
       }
 
+      const LocalAuthentication = await loadLocalAuth();
+      if (!LocalAuthentication) {
+        Alert.alert(
+          "No disponible",
+          "La autenticación biométrica no está disponible en este dispositivo"
+        );
+        return;
+      }
+
       const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Autenticación con huella dactilar',
-        cancelLabel: 'Cancelar',
+        promptMessage: "Autenticación con huella dactilar",
+        cancelLabel: "Cancelar",
         disableDeviceFallback: true,
       });
 
       if (result.success) {
         // Usar las credenciales guardadas para hacer login
-        const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/login`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(savedCredentials),
-        });
-
-        const data = await response.json();
+        const data = await loginApi(savedCredentials);
         console.log("Usuario logueado: ", data.user.name);
-        console.log("Datos del login: ", data);
 
-        if (!response.ok) {
-          throw new Error(data.message || 'Error al iniciar sesión');
-        }
-
-        await login(data.token, data.user.name);
-        router.replace('/');
+        await login(data.token, data.user.name, data.user.role);
+        router.replace("/");
       }
     } catch (error) {
-      console.error('Error en autenticación biométrica:', error);
-      Alert.alert(
-        "Error",
-        "No se pudo completar la autenticación biométrica"
-      );
+      console.error("Error en autenticación biométrica:", error);
+      Alert.alert("Error", "No se pudo completar la autenticación biométrica");
     }
   };
 
   const handleLogin = async (values: any) => {
     try {
-      const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          email: values.email,
-          password: values.password,
-        }),
+      const data = await loginApi({
+        email: values.email,
+        password: values.password,
       });
-
-      const data = await response.json();
       console.log("Usuario logueado: ", data.user.name);
 
-      if (response.ok) {
-        // Guardar credenciales
-        await AsyncStorage.setItem('userCredentials', JSON.stringify({
+      // Guardar credenciales para el login biométrico (SecureStore:
+      // Keychain/Keystore cifrado por el SO, no texto plano).
+      await setSecureItem(
+        "userCredentials",
+        JSON.stringify({
           email: values.email,
-          password: values.password
-        }));
+          password: values.password,
+        })
+      );
 
-        // Hacer login con token y nombre
-        await login(data.token, data.user.name);
-        router.replace('/');
-      } else {
-        throw new Error(data.message || 'Error al iniciar sesión');
-      }
+      // Hacer login con token y nombre
+      await login(data.token, data.user.name, data.user.role);
+      router.replace("/");
     } catch (error: any) {
       Alert.alert(
         "Error",
-        error.message || "Credenciales inválidas"
+        error instanceof ApiError ? error.message : "Credenciales inválidas"
       );
-      console.error('Error:', error);
+      console.error("Error:", error);
     }
   };
 
   return (
     <View style={styles.container}>
       <TopBar />
-      <ScrollView>
-        <View style={styles.formContainer}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 80 + insets.bottom }}>
+        <View style={[styles.formContainer, { marginTop: 80 + insets.top }]}>
           <View style={styles.headerContainer}>
             <Text style={styles.title}>Bienvenido</Text>
             <Text style={styles.subtitle}>Inicia sesión para continuar</Text>
           </View>
 
           {isBiometricSupported && savedCredentials && (
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.biometricButton}
               onPress={handleBiometricAuth}
             >
-              <MaterialCommunityIcons name="fingerprint" size={30} color="#ff9f1c" />
+              <MaterialCommunityIcons
+                name="fingerprint"
+                size={30}
+                color="#ff9f1c"
+              />
               <Text style={styles.biometricText}>Usar huella dactilar</Text>
             </TouchableOpacity>
           )}
 
           <Formik
             initialValues={{
-              email: '',
-              password: '',
+              email: "",
+              password: "",
             }}
             validationSchema={LoginSchema}
             onSubmit={handleLogin}
           >
-            {({ handleChange, handleSubmit, values, errors, touched, isSubmitting }) => (
+            {({
+              handleChange,
+              handleSubmit,
+              values,
+              errors,
+              touched,
+              isSubmitting,
+            }) => (
               <View style={styles.form}>
                 <View style={styles.inputContainer}>
                   <TextInput
                     style={styles.input}
-                    onChangeText={handleChange('email')}
+                    onChangeText={handleChange("email")}
                     value={values.email}
                     placeholder="Email"
                     placeholderTextColor="#95a5a6"
@@ -173,14 +199,27 @@ const LoginScreen = () => {
                     <Text style={styles.errorText}>{errors.email}</Text>
                   )}
 
-                  <TextInput
-                    style={styles.input}
-                    onChangeText={handleChange('password')}
-                    value={values.password}
-                    placeholder="Contraseña"
-                    placeholderTextColor="#95a5a6"
-                    secureTextEntry
-                  />
+                  <View style={styles.passwordContainer}>
+                    <TextInput
+                      style={[styles.input, styles.passwordInput]}
+                      onChangeText={handleChange("password")}
+                      value={values.password}
+                      placeholder="Contraseña"
+                      placeholderTextColor="#95a5a6"
+                      secureTextEntry={!showPassword}
+                    />
+                    <TouchableOpacity
+                      style={styles.eyeButton}
+                      onPress={() => setShowPassword((prev) => !prev)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      <MaterialCommunityIcons
+                        name={showPassword ? "eye-off" : "eye"}
+                        size={22}
+                        color="#95a5a6"
+                      />
+                    </TouchableOpacity>
+                  </View>
                   {errors.password && touched.password && (
                     <Text style={styles.errorText}>{errors.password}</Text>
                   )}
@@ -192,17 +231,17 @@ const LoginScreen = () => {
                   disabled={isSubmitting}
                 >
                   <Text style={styles.buttonText}>
-                    {isSubmitting ? 'Iniciando sesión...' : 'Iniciar Sesión'}
+                    {isSubmitting ? "Iniciando sesión..." : "Iniciar Sesión"}
                   </Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.registerLink}
-                  onPress={() => router.push('/screens/register')}
+                  onPress={() => router.push("/screens/register")}
                 >
                   <Text style={styles.registerText}>
-                    ¿No tienes una cuenta? 
-                    <Text style={styles.registerLinkText}>  Regístrate</Text>
+                    ¿No tienes una cuenta?
+                    <Text style={styles.registerLinkText}> Regístrate</Text>
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -218,17 +257,17 @@ const LoginScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1a1a1a', 
+    backgroundColor: "#1a1a1a",
   },
   formContainer: {
     flex: 1,
-    justifyContent: 'center',
+    justifyContent: "center",
     paddingHorizontal: 20,
-    backgroundColor: '#2d2d2d', 
-    marginTop: 80, 
-    marginHorizontal: 20, 
+    backgroundColor: "#2d2d2d",
+    marginTop: 80,
+    marginHorizontal: 20,
     borderRadius: 20,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: {
       width: 0,
       height: 4,
@@ -239,50 +278,63 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   headerContainer: {
-    alignItems: 'center',
+    alignItems: "center",
     marginVertical: 40,
   },
   title: {
     fontSize: 28,
-    fontWeight: 'bold',
-    color: '#ff9f1c', 
+    fontWeight: "bold",
+    color: "#ff9f1c",
     marginBottom: 10,
   },
   subtitle: {
     fontSize: 16,
-    color: '#bbb',
-    textAlign: 'center',
+    color: "#bbb",
+    textAlign: "center",
   },
   form: {
-    width: '100%',
+    width: "100%",
   },
   inputContainer: {
     marginBottom: 20,
   },
   input: {
-    backgroundColor: '#3d3d3d',
+    backgroundColor: "#3d3d3d",
     borderRadius: 10,
     padding: 15,
     marginBottom: 15,
     borderWidth: 1,
-    borderColor: '#4d4d4d',
+    borderColor: "#4d4d4d",
     fontSize: 16,
-    color: '#fff',
+    color: "#fff",
+  },
+  passwordContainer: {
+    position: "relative",
+    justifyContent: "center",
+    marginBottom: 15,
+  },
+  passwordInput: {
+    paddingRight: 48,
+    marginBottom: 0,
+  },
+  eyeButton: {
+    position: "absolute",
+    right: 14,
   },
   errorText: {
-    color: '#ff6b6b',
+    color: "#ff6b6b",
     fontSize: 14,
     marginTop: -12,
     marginBottom: 10,
     marginLeft: 5,
   },
   button: {
-    backgroundColor: '#2ecc71', 
+    backgroundColor: "#2ecc71",
     padding: 15,
     borderRadius: 10,
-    alignItems: 'center',
+    alignItems: "center",
     marginTop: 20,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: {
       width: 0,
       height: 2,
@@ -292,39 +344,39 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   buttonText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   registerLink: {
     marginTop: 30,
-    alignItems: 'center',
+    alignItems: "center",
   },
   registerText: {
-    color: '#bbb',
+    color: "#bbb",
     fontSize: 14,
   },
   registerLinkText: {
-    color: '#ff9f1c', 
-    fontWeight: 'bold',
+    color: "#ff9f1c",
+    fontWeight: "bold",
     marginLeft: 5,
   },
   biometricButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#3d3d3d',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#3d3d3d",
     padding: 15,
     borderRadius: 10,
     marginBottom: 20,
     borderWidth: 1,
-    borderColor: '#ff9f1c',
+    borderColor: "#ff9f1c",
   },
   biometricText: {
-    color: '#ff9f1c',
+    color: "#ff9f1c",
     fontSize: 16,
     marginLeft: 10,
-    fontWeight: '600',
+    fontWeight: "600",
   },
 });
 

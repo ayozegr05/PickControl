@@ -1,0 +1,543 @@
+"""Rescate de mensajes que quedaron a medias por errores transitorios.
+
+Dos piezas encadenadas (una alimenta a la otra):
+
+- `retry_pending_ocr`: reintenta el OCR de fotos sin `extracted_text`
+  (los 429 de OpenAI dejaban el raw vacío). Las fotos cuyo fichero ya
+  no existe en disco se saltan sin marcar — si reaparecen dentro de la
+  ventana de rescate, se procesan entonces.
+- `reprocess_pending_raws`: repasa raws `processed=False` (incluidos
+  los que el OCR acaba de rescatar) e intenta extraer pick de nuevo,
+  respetando la dedup por canal y rellenando `fecha_evento` desde
+  `received_at` cuando el texto no la traía.
+
+Ambas piezas están acotadas por `rescue_max_age_days`: un raw más viejo
+que la ventana se da por imposible (`processed=True` en el reproceso;
+excluido de la query en el OCR) para que la cola de pendientes no
+crezca indefinidamente. Los raws nunca se borran — la fila queda en la
+BD como evidencia de auditoría. Los scripts aceptan `--max-age-days 0`
+para reintentar sin límite de antigüedad si hiciera falta.
+
+El loop de `lifecycle.py` las corre cada `rescue_interval_hours`;
+los scripts `retry_ocr.py`/`reprocess_raw.py` son wrappers del mismo
+código para uso manual.
+"""
+
+from __future__ import annotations
+
+import os
+from datetime import timedelta
+from typing import Optional
+
+from openai import RateLimitError
+from sqlalchemy import func, or_, select
+
+from app.core.config import get_settings
+from app.core.dates import utc_now
+from app.core.logging import get_logger
+from app.db.postgres import AsyncSessionLocal
+from app.models.informante import Informante  # noqa: F401
+from app.models.parsed_pick import ParsedPick
+from app.models.telegram_raw_message import TelegramRawMessage
+from app.models.user import User  # noqa: F401
+from app.services.pick_service import get_or_create_informante
+from app.services.results.verifier import _evento_feo
+from app.services.telegram.ocr import extract_text_from_image
+from app.services.telegram.pick_extractor import (
+    _is_premium_urgency,
+    _is_settled_ticket,
+    _llm_extract,
+    extract_pick,
+    is_reposted_slip,
+)
+from app.services.telegram.processor import _find_duplicate_pick
+
+logger = get_logger("app.maintenance.rescue")
+
+
+def _media_path(media_path: str) -> str:
+    """`media_path` se guarda relativo con '/' y '\\' mezclados."""
+    return os.path.normpath(os.path.join(os.getcwd(), media_path))
+
+
+def _rescue_cutoff(settings, max_age_days: Optional[float]):
+    """Límite de antigüedad del rescate. `max_age_days <= 0` = sin límite."""
+    days = settings.rescue_max_age_days if max_age_days is None else max_age_days
+    return None if days <= 0 else utc_now() - timedelta(days=days)
+
+
+async def _ocr_candidates(session, cutoff):
+    """Raws con media sin OCR dentro de la ventana, separados en dos
+    grupos: con fichero presente en disco y sin fichero."""
+    stmt = (
+        select(TelegramRawMessage)
+        .where(TelegramRawMessage.media_path != None)  # noqa: E711
+        .where(
+            or_(
+                TelegramRawMessage.extracted_text.is_(None),
+                func.trim(TelegramRawMessage.extracted_text) == "",
+            )
+        )
+        .order_by(TelegramRawMessage.received_at.desc())  # type: ignore[arg-type]
+    )
+    if cutoff is not None:
+        stmt = stmt.where(TelegramRawMessage.received_at >= cutoff)
+    raws = list((await session.exec(stmt)).scalars().all())
+    present = [
+        r for r in raws if r.media_path and os.path.exists(_media_path(r.media_path))
+    ]
+    return raws, present
+
+
+async def retry_pending_ocr(
+    limit: Optional[int] = None, max_age_days: Optional[float] = None
+) -> dict[str, int]:
+    """OCR de fotos sin texto extraído.
+
+    Devuelve {pendientes, sin_fichero, hechos, fallos}. Solo se intentan
+    raws dentro de `rescue_max_age_days` cuyo fichero exista en disco.
+    """
+    settings = get_settings()
+    empty = {"pendientes": 0, "sin_fichero": 0, "hechos": 0, "fallos": 0}
+    if not settings.openai_api_key:
+        return empty
+
+    cutoff = _rescue_cutoff(settings, max_age_days)
+    async with AsyncSessionLocal() as session:
+        raws, pendientes = await _ocr_candidates(session, cutoff)
+        if limit:
+            pendientes = pendientes[:limit]
+
+        hechos = fallos = 0
+        for raw in pendientes:
+            try:
+                texto = await extract_text_from_image(
+                    _media_path(raw.media_path), settings.openai_api_key
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[RESCUE] OCR msg %s falló: %s", raw.message_id, exc)
+                fallos += 1
+                continue
+            if not (texto or "").strip():
+                fallos += 1
+                continue
+
+            raw.extracted_text = texto
+            # Si el raw nunca llegó a generar pick, queda pendiente para
+            # que el reproceso lo extraiga con el OCR nuevo.
+            tiene_pick = (
+                await session.exec(
+                    select(ParsedPick.id).where(ParsedPick.raw_message_id == raw.id)
+                )
+            ).first()
+            if not tiene_pick:
+                raw.processed = False
+            session.add(raw)
+            await session.commit()
+            hechos += 1
+
+    return {
+        "pendientes": len(pendientes),
+        "sin_fichero": len(raws) - len(pendientes),
+        "hechos": hechos,
+        "fallos": fallos,
+    }
+
+
+async def reprocess_pending_raws(
+    max_age_days: Optional[float] = None,
+) -> dict[str, int]:
+    """Re-extrae picks de raws `processed=False` (dedup por canal incluida).
+
+    Cierra como `processed=True` los que el extractor resuelve como "no
+    es pick" (si no, se reenviarían al LLM en cada ciclo para siempre) y
+    los que superan `rescue_max_age_days` — la fila queda en BD pero ya
+    no se reintenta ni catchup la vuelve a descargar.
+    """
+    settings = get_settings()
+    empty = {
+        "pendientes": 0,
+        "procesados": 0,
+        "picks": 0,
+        "duplicados": 0,
+        "sin_pick": 0,
+        "antiguos": 0,
+    }
+    if not settings.openai_api_key:
+        return empty
+
+    cutoff = _rescue_cutoff(settings, max_age_days)
+    procesados = picks_creados = duplicados = sin_pick = 0
+    async with AsyncSessionLocal() as session:
+        antiguos = 0
+        if cutoff is not None:
+            viejos = (
+                (
+                    await session.exec(
+                        select(TelegramRawMessage)
+                        .where(TelegramRawMessage.processed == False)  # noqa: E712
+                        .where(TelegramRawMessage.received_at < cutoff)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for raw in viejos:
+                raw.processed = True
+                session.add(raw)
+            antiguos = len(viejos)
+
+        stmt = (
+            select(TelegramRawMessage)
+            .where(TelegramRawMessage.processed == False)  # noqa: E712
+            .order_by(TelegramRawMessage.received_at.desc())
+        )
+        if cutoff is not None:
+            stmt = stmt.where(TelegramRawMessage.received_at >= cutoff)
+        raw_messages = list((await session.exec(stmt)).scalars().all())
+
+        for raw in raw_messages:
+            existing = await session.exec(
+                select(ParsedPick).where(ParsedPick.raw_message_id == raw.id)
+            )
+            if existing.first():
+                continue
+
+            source_text = (raw.extracted_text or raw.text or "").strip()
+            if not source_text:
+                if not raw.media_path:
+                    # Ni texto ni media referenciada: el raw está vacío
+                    # de nacimiento y nunca producirá nada — se cierra ya
+                    # en vez de esperar a que venza la ventana.
+                    raw.processed = True
+                    session.add(raw)
+                    sin_pick += 1
+                continue
+
+            try:
+                pick = await extract_pick(
+                    source_text,
+                    settings.openai_api_key,
+                    informante=raw.channel_name,
+                    fecha_referencia=raw.received_at,
+                )
+            except RateLimitError:
+                # Sin cuota de OpenAI: se deja processed=False para la
+                # siguiente pasada.
+                continue
+            if not pick:
+                # El extractor resolvió "no es pick": se cierra para no
+                # reenviarlo al LLM en cada ciclo indefinidamente.
+                raw.processed = True
+                session.add(raw)
+                sin_pick += 1
+                continue
+
+            if pick.fecha_evento is None and raw.received_at is not None:
+                # Sin fecha en el texto: asumimos que el pick se publicó
+                # el mismo día del partido.
+                pick.fecha_evento = raw.received_at
+
+            duplicate = None
+            if pick.es_apuesta:
+                duplicate = await _find_duplicate_pick(
+                    session, raw.channel_name, pick, raw.received_at
+                )
+
+            if duplicate:
+                duplicados += 1
+                if duplicate.fecha_evento is None and pick.fecha_evento is not None:
+                    duplicate.fecha_evento = pick.fecha_evento
+                    session.add(duplicate)
+                    await session.flush()
+            else:
+                informante = await get_or_create_informante(session, raw.channel_name)
+                session.add(
+                    ParsedPick(
+                        raw_message_id=raw.id,
+                        informante_id=informante.id,
+                        es_apuesta=pick.es_apuesta,
+                        apuesta=pick.seleccion,
+                        deporte=pick.deporte,
+                        evento=pick.evento,
+                        mercado=pick.mercado,
+                        seleccion=pick.seleccion,
+                        cuota=pick.cuota,
+                        stake=pick.stake,
+                        casa=pick.casa,
+                        informante=raw.channel_name,
+                        explicacion=pick.explicacion,
+                        fecha_evento=pick.fecha_evento,
+                        linea=pick.linea,
+                        metodo=pick.metodo,
+                        confianza=pick.confianza,
+                    )
+                )
+                await session.flush()
+                picks_creados += 1
+
+            raw.processed = True
+            session.add(raw)
+            procesados += 1
+
+        await session.commit()
+
+    return {
+        "pendientes": len(raw_messages),
+        "procesados": procesados,
+        "picks": picks_creados,
+        "duplicados": duplicados,
+        "sin_pick": sin_pick,
+        "antiguos": antiguos,
+    }
+
+
+# Campos que la pasada LLM aporta a un pick incompleto de reglas: el
+# LLM manda cuando trae valor — una extracción `rule` sin evento ya
+# está rota y su selección/cuota también suelen ser menos fiables.
+_LLM_BACKFILL_FIELDS = (
+    "evento",
+    "seleccion",
+    "deporte",
+    "mercado",
+    "cuota",
+    "linea",
+    "casa",
+    "explicacion",
+)
+
+
+async def retry_incomplete_picks(
+    max_age_days: Optional[float] = None,
+) -> dict[str, int]:
+    """Reintenta la pasada LLM en picks con `evento` inservible.
+
+    Caso real: el pick salió por reglas con el rival solo en la prosa
+    del análisis y la 2ª pasada LLM falló en ese momento (429/red) —
+    queda `es_apuesta=True` con `evento` vacío y nunca verificará. Lo
+    mismo pasa con `evento` basura ("Lun - sep", "Desconocido": el
+    extractor tomó el encabezado del día en vez del partido) — el OCR
+    suele tener los dos nombres y la 2ª pasada los recupera. El ciclo
+    lo reintenta hasta que el LLM lo analiza de verdad:
+
+    - LLM rellena `evento` -> se actualizan los campos que aporta.
+    - LLM dice "no es apuesta" -> `es_apuesta=False` (basura confirmada
+      por análisis, no por patrón).
+    - LLM falla (429/red) o no aporta evento -> no se toca nada; se
+      reintenta en el siguiente ciclo hasta `rescue_max_age_days`.
+
+    Patas de combinada (`combinada_id` not null): el LLM devuelve el
+    boleto completo y no hay forma segura de mapearlo pata a pata, así
+    que solo se rellenan `evento`/`deporte` — la identidad del fixture
+    es común a todo el boleto y basta para que el verificador lo
+    encuentre. Tampoco se marca `es_apuesta=False` en una pata (rompería
+    la liquidación del padre).
+    """
+    settings = get_settings()
+    resumen = {"candidatos": 0, "rellenados": 0, "descartados": 0, "fallos": 0}
+    if not settings.openai_api_key:
+        return resumen
+
+    cutoff = _rescue_cutoff(settings, max_age_days)
+    async with AsyncSessionLocal() as session:
+        stmt = (
+            select(ParsedPick, TelegramRawMessage)
+            .join(
+                TelegramRawMessage,
+                ParsedPick.raw_message_id == TelegramRawMessage.id,
+            )
+            .where(ParsedPick.es_apuesta == True)  # noqa: E712
+            .where(ParsedPick.acierto.is_(None))
+            .where(ParsedPick.anulada == False)  # noqa: E712
+            .where(ParsedPick.es_combinada == False)  # noqa: E712
+            # Prefiltro SQL amplio; `_evento_feo` decide si la pasada
+            # LLM merece la pena (no se reextrae "Como v Parma" corto
+            # pero válido).
+            .where(
+                or_(
+                    ParsedPick.evento.is_(None),
+                    func.trim(ParsedPick.evento) == "",
+                    func.length(func.trim(ParsedPick.evento)) < 12,
+                    func.lower(ParsedPick.evento).like("%desconocido%"),
+                )
+            )
+        )
+        if cutoff is not None:
+            stmt = stmt.where(TelegramRawMessage.received_at >= cutoff)
+        rows = (await session.exec(stmt)).all()
+        rows = [(p, r) for p, r in rows if _evento_feo(p.evento)]
+        resumen["candidatos"] = len(rows)
+
+        for pick, raw in rows:
+            text = (raw.extracted_text or raw.text or "").strip()
+            if not text:
+                continue
+            try:
+                llm = await _llm_extract(
+                    text,
+                    settings.openai_api_key,
+                    informante=raw.channel_name,
+                    fecha_referencia=raw.received_at,
+                )
+            except RateLimitError:
+                # Sin cuota: no se tocó nada, reintento en el próximo ciclo.
+                resumen["fallos"] += 1
+                continue
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "[RESCUE] LLM incompleto pick %s falló: %s", pick.id, exc
+                )
+                resumen["fallos"] += 1
+                continue
+            if llm is None:
+                resumen["fallos"] += 1
+                continue
+            if pick.combinada_id is not None:
+                # Pata: solo identidad del fixture — el resto del pick
+                # (mercado/cuota/línea) es propio de la pata y no se
+                # remapea desde el boleto completo.
+                if not llm.es_apuesta or not llm.evento:
+                    continue
+                pick.evento = llm.evento
+                if llm.deporte:
+                    pick.deporte = llm.deporte
+                session.add(pick)
+                resumen["rellenados"] += 1
+                continue
+            if not llm.es_apuesta:
+                # Analizado de verdad y no es apuesta -> descarte.
+                pick.es_apuesta = False
+                session.add(pick)
+                resumen["descartados"] += 1
+                continue
+            if not llm.evento:
+                continue
+            for campo in _LLM_BACKFILL_FIELDS:
+                valor = getattr(llm, campo, None)
+                if valor is not None:
+                    setattr(pick, campo, valor)
+            pick.metodo = "rule+llm"
+            session.add(pick)
+            resumen["rellenados"] += 1
+
+        await session.commit()
+    return resumen
+
+
+# Rechazos deterministas que el re-triage aplica a pendientes antiguos:
+# señales que NO existen en un boleto vivo (sello "GANADOR", payout
+# "GANASTE <importe>", "<importe>€ Ganancias" con ✓ por pata...). Si se
+# añade otra regla de rechazo a `pick_extractor`, se suma aquí.
+_DETERMINISTIC_REJECTS = (_is_settled_ticket, _is_premium_urgency)
+
+
+async def _retriage_source(session, pick: ParsedPick, raw: TelegramRawMessage) -> str:
+    """Material del pick igual que lo ve `repair._source_text`: texto +
+    OCR propio y, si el raw no lo trae, el OCR del slip emparejado en
+    ventana de 10 min (par foto+texto). Sin él, un "texto de pick +
+    foto del boleto ya cobrado" (caso 5158) nunca sería detectable."""
+    from app.services.maintenance.repair import _source_text  # noqa: PLC0415
+
+    source, _ = await _source_text(session, pick)
+    if source:
+        return source
+    return (raw.extracted_text or raw.text or "").strip()
+
+
+async def retriage_pending_picks(
+    max_age_days: Optional[float] = None,
+) -> dict[str, int]:
+    """Re-clasifica pendientes que hoy serían rechazados por reglas.
+
+    Cierra el agujero del ciclo: `retry_incomplete_picks` solo re-LLM
+    picks con `evento` feo — un pick mal clasificado con `evento`
+    bonito nunca se re-evalúa, así que si entró antes de que existiera
+    una regla determinista de rechazo queda pendiente para siempre.
+    Esta pasada aplica las reglas sobre el texto del raw — gratis, sin
+    LLM — y el pick pasa a `es_apuesta=False` (fuera de stats, fuera de
+    pendientes). El raw y la fila quedan intactos para auditoría.
+    """
+    resumen = {"candidatos": 0, "descartados": 0}
+    cutoff = _rescue_cutoff(get_settings(), max_age_days)
+    async with AsyncSessionLocal() as session:
+        stmt = (
+            select(ParsedPick, TelegramRawMessage)
+            .join(
+                TelegramRawMessage,
+                ParsedPick.raw_message_id == TelegramRawMessage.id,
+            )
+            .where(ParsedPick.es_apuesta == True)  # noqa: E712
+            .where(ParsedPick.acierto.is_(None))
+            .where(ParsedPick.anulada == False)  # noqa: E712
+        )
+        if cutoff is not None:
+            stmt = stmt.where(TelegramRawMessage.received_at >= cutoff)
+        rows = (await session.exec(stmt)).all()
+        resumen["candidatos"] = len(rows)
+
+        for pick, raw in rows:
+            text = await _retriage_source(session, pick, raw)
+            if not text:
+                continue
+            if any(reject(text) for reject in _DETERMINISTIC_REJECTS) or (
+                is_reposted_slip(text, raw.received_at)
+            ):
+                pick.es_apuesta = False
+                session.add(pick)
+                resumen["descartados"] += 1
+                logger.info(
+                    "[RESCUE] Retriage: pick %s -> es_apuesta=False "
+                    "(raw %s casa con boleto liquidado/republicado)",
+                    pick.id,
+                    raw.id,
+                )
+
+        await session.commit()
+    return resumen
+
+
+async def run_rescue_cycle() -> dict[str, dict[str, int]]:
+    """Una pasada completa de rescate: primero OCR, luego reproceso
+    (así los raws recién rescatados se extraen en el mismo ciclo),
+    después los picks incompletos sin `evento` y por último el
+    re-triage determinista de pendientes mal clasificados."""
+    ocr = await retry_pending_ocr()
+    reproc = await reprocess_pending_raws()
+    incomplete = await retry_incomplete_picks()
+    retriage = await retriage_pending_picks()
+    if (
+        ocr["hechos"]
+        or reproc["picks"]
+        or reproc["antiguos"]
+        or incomplete["rellenados"]
+        or incomplete["descartados"]
+        or retriage["descartados"]
+    ):
+        logger.info(
+            "[RESCUE] Ciclo: OCR %s ok/%s fallos de %s (%s sin fichero); "
+            "reproceso %s/%s (+%s picks, %s dups, %s sin pick, %s antiguos); "
+            "incompletos %s/%s rellenados, %s descartados, %s fallos; "
+            "retriage %s/%s descartados",
+            ocr["hechos"],
+            ocr["fallos"],
+            ocr["pendientes"],
+            ocr["sin_fichero"],
+            reproc["procesados"],
+            reproc["pendientes"],
+            reproc["picks"],
+            reproc["duplicados"],
+            reproc["sin_pick"],
+            reproc["antiguos"],
+            incomplete["rellenados"],
+            incomplete["candidatos"],
+            incomplete["descartados"],
+            incomplete["fallos"],
+            retriage["descartados"],
+            retriage["candidatos"],
+        )
+    return {
+        "ocr": ocr,
+        "reprocess": reproc,
+        "incomplete": incomplete,
+        "retriage": retriage,
+    }

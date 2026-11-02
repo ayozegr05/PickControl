@@ -16,6 +16,8 @@ expo-env.d.ts
 *.p12
 *.key
 *.mobileprovision
+/android
+/ios
 
 # Include package.json explicitly
 !package.json
@@ -34,6 +36,9 @@ yarn-error.*
 
 # local env files
 .env*.local
+.env
+.ENV
+!.env.example
 
 # typescript
 *.tsbuildinfo

@@ -1,0 +1,917 @@
+"""GeminiResearchProvider: investigador de último recurso.
+
+Pipeline de dos saltos: (1) DDG Lite por fetch propio -> URLs filtradas
+por allowlist (url_context solo si la página es ilegible); (2) el
+modelo lee SOLO esas páginas y reporta el estado.
+Fase 1: solo estados "no jugado" (cancelled/postponed/walkover) y SOLO
+citando una de las URLs fiables leídas — sin esa cita la respuesta se
+descarta aunque el modelo jure que está cancelado.
+"""
+
+import datetime
+import json
+from datetime import timedelta
+from types import SimpleNamespace
+
+import pytest
+
+from app.core.config import get_settings
+from app.core.dates import utc_now
+from app.services.results.base import MatchState
+from app.services.results.gemini_research import (
+    GeminiResearchProvider,
+    _comparator_variants,
+    _market_terms,
+)
+
+pytestmark = pytest.mark.anyio
+
+_DATE = datetime.datetime(2026, 9, 16)
+_TENNIS_URL = "https://www.tennis.com/tournaments/x/matches/abc"
+_SOFA_URL = "https://www.sofascore.com/tennis/match/x/y"
+
+
+def _payload(text: str, read_urls: list[str] | None = None) -> dict:
+    return {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": text}]},
+                "urlContextMetadata": {
+                    "urlMetadata": [{"retrievedUrl": u} for u in (read_urls or [])]
+                },
+            }
+        ]
+    }
+
+
+def _answer(status: str, sources: list[str] | None = None) -> str:
+    return json.dumps(
+        {
+            "status": status,
+            "home_team": "Kestelboim M./Romboli F.",
+            "away_team": "Rodriguez Taverna S./Vega Hernandez D.",
+            "sources": sources or [],
+        }
+    )
+
+
+def _stub(payload):
+    async def fake(*a, **k):
+        return payload
+
+    return fake
+
+
+def _stub_search(urls: list[str]):
+    async def fake(date, hint, priority_terms=None):
+        return urls
+
+    return fake
+
+
+def _stub_page(text: str = "contenido de la página"):
+    async def fake(url):
+        return text
+
+    return fake
+
+
+@pytest.fixture
+def provider():
+    return GeminiResearchProvider("tenis", "k")
+
+
+class TestSearchUrls:
+    """Salto 1: DDG Lite por fetch propio (gratis); url_context solo
+    como plan B cuando el fetch no devuelve página legible."""
+
+    async def test_ddg_lite_decodifica_uddg_y_filtra(self, provider, monkeypatch):
+        html = (
+            '<a rel="nofollow" href="//duckduckgo.com/l/?uddg='
+            "https%3A%2F%2Fwww.tennis.com%2Ftournaments%2Fx%2Fmatches%2Fabc"
+            '&amp;rut=xyz">r</a>'
+            '<a href="https://blog-random.io/pick">x</a>'
+            '<a href="javascript:alert(1)">y</a>'
+        )
+        monkeypatch.setattr(provider, "_fetch_html", _stub_page(html))
+
+        async def no_debe_llamarse(*a, **k):
+            raise AssertionError("_ask no debería llamarse con DDG propio")
+
+        monkeypatch.setattr(provider, "_ask", no_debe_llamarse)
+        urls = await provider._search_urls(_DATE, "Kestelboim/Romboli")
+        assert urls == [_TENNIS_URL]
+
+    async def test_error_api_devuelve_vacio(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_fetch_html", _stub_page(""))
+        monkeypatch.setattr(provider, "_ask", _stub(None))
+        assert await provider._search_urls(_DATE, "x") == []
+
+    async def test_fetch_roto_cae_a_url_context(self, provider, monkeypatch):
+        calls = []
+
+        async def spy(prompt, use_tool=False):
+            calls.append(use_tool)
+            return _payload(json.dumps({"urls": [_TENNIS_URL]}))
+
+        monkeypatch.setattr(provider, "_fetch_html", _stub_page(""))
+        monkeypatch.setattr(provider, "_ask", spy)
+        urls = await provider._search_urls(_DATE, "x")
+        assert urls == [_TENNIS_URL]
+        assert calls and all(c is True for c in calls)
+
+    async def test_pagina_legible_sin_hits_no_gasta_modelo(self, provider, monkeypatch):
+        """DDG respondió pero sin dominios permitidos -> siguiente
+        query gratis; leer la misma página vía modelo daría igual."""
+        queries = []
+
+        async def fetch(url):
+            queries.append(url)
+            return '<a href="https://blog-random.io/pick">x</a>'
+
+        async def no_debe_llamarse(*a, **k):
+            raise AssertionError("_ask no debería llamarse")
+
+        monkeypatch.setattr(provider, "_fetch_html", fetch)
+        monkeypatch.setattr(provider, "_ask", no_debe_llamarse)
+        assert await provider._search_urls(_DATE, "x") == []
+        # Probó las 3 queries genéricas, todas por fetch propio.
+        assert len(queries) == 3
+
+
+class TestFindPostponedMatch:
+    @pytest.fixture(autouse=True)
+    def _pages(self, provider, monkeypatch):
+        # La verificación descarga las páginas: texto cualquiera vale.
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub_page())
+
+    async def test_cancelado_con_fuente_fiable(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(_payload(_answer("cancelled", [_TENNIS_URL]))),
+        )
+        state = await provider.find_postponed_match(_DATE, "Kestelboim/Romboli")
+        assert isinstance(state, MatchState)
+        assert state.status == "cancelled"
+        assert "Taverna" in state.away_team
+
+    async def test_cancelado_citando_url_no_leida_descartado(
+        self, provider, monkeypatch
+    ):
+        # Anti-alucinación: la fuente debe ser una página que le dimos.
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(_payload(_answer("cancelled", ["https://otra-web.io/x"]))),
+        )
+        state = await provider.find_postponed_match(_DATE, "Kestelboim/Romboli")
+        assert state is None
+
+    async def test_cancelado_sin_fuentes_descartado(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(provider, "_ask", _stub(_payload(_answer("cancelled"))))
+        state = await provider.find_postponed_match(_DATE, "Kestelboim/Romboli")
+        assert state is None
+
+    async def test_cita_via_url_context_metadata(self, provider, monkeypatch):
+        # La fuente puede venir del metadata aunque el JSON la omita
+        # de la lista de leídas — si el modelo la cita y estaba leída, vale.
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(
+                _payload(
+                    _answer("postponed", [_SOFA_URL]),
+                    read_urls=[_SOFA_URL],
+                )
+            ),
+        )
+        state = await provider.find_postponed_match(_DATE, "Kestelboim/Romboli")
+        assert isinstance(state, MatchState)
+        assert state.status == "postponed"
+
+    async def test_sin_urls_de_busqueda_no_verifica(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([]))
+
+        async def no_debe_llamarse(*a, **k):
+            raise AssertionError("_ask no debería llamarse sin URLs")
+
+        monkeypatch.setattr(provider, "_ask", no_debe_llamarse)
+        state = await provider.find_postponed_match(_DATE, "Kestelboim/Romboli")
+        assert state is None
+
+    async def test_played_no_devuelve_estado(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(_payload(_answer("played", [_TENNIS_URL]))),
+        )
+        state = await provider.find_postponed_match(_DATE, "Kestelboim/Romboli")
+        assert state is None
+
+    async def test_walkover_normaliza_a_cancelled(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(_payload(_answer("walkover", [_TENNIS_URL]))),
+        )
+        state = await provider.find_postponed_match(_DATE, "Kestelboim/Romboli")
+        assert state is not None
+        assert state.status == "cancelled"
+
+    async def test_error_api_devuelve_none(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(provider, "_ask", _stub(None))
+        state = await provider.find_postponed_match(_DATE, "Kestelboim/Romboli")
+        assert state is None
+
+
+def _stub_seq(payloads: list):
+    queue = list(payloads)
+
+    async def fake(*a, **k):
+        return queue.pop(0) if queue else None
+
+    return fake
+
+
+def _played_answer(home: int, away: int, sets=None) -> str:
+    return json.dumps(
+        {
+            "status": "played",
+            "home_team": "Kestelboim M./Romboli F.",
+            "away_team": "Barton H./Sanchez Izquierdo N.",
+            "home_score": home,
+            "away_score": away,
+            "sets": sets,
+            "sources": [_SOFA_URL],
+        }
+    )
+
+
+class TestFindMatch:
+    @pytest.fixture(autouse=True)
+    def _pages(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub_page())
+
+    async def test_played_con_doble_lectura_liquida(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_SOFA_URL]))
+        payload = _payload(_played_answer(2, 1, sets=[[6, 4], [3, 6], [7, 5]]))
+        monkeypatch.setattr(provider, "_ask", _stub(payload))
+        result = await provider.find_match(_DATE, "Kestelboim/Romboli")
+        assert result is not None
+        assert (result.home_score, result.away_score) == (2, 1)
+        assert result.sets == [(6, 4), (3, 6), (7, 5)]
+
+    async def test_lecturas_discrepantes_descartan(self, provider, monkeypatch):
+        # Anti-alucinación Fase 2: dos lecturas que no coinciden -> None.
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_SOFA_URL]))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub_seq(
+                [
+                    _payload(_played_answer(2, 1)),
+                    _payload(_played_answer(1, 2)),
+                ]
+            ),
+        )
+        assert await provider.find_match(_DATE, "Kestelboim/Romboli") is None
+
+    async def test_played_sin_marcador_no_liquida(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_SOFA_URL]))
+        text = json.dumps(
+            {
+                "status": "played",
+                "home_team": "A",
+                "away_team": "B",
+                "home_score": None,
+                "away_score": None,
+                "sources": [_SOFA_URL],
+            }
+        )
+        monkeypatch.setattr(provider, "_ask", _stub(_payload(text)))
+        assert await provider.find_match(_DATE, "x") is None
+
+    async def test_played_sin_fuente_leida_no_liquida(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_SOFA_URL]))
+        text = json.dumps(
+            {
+                "status": "played",
+                "home_team": "A",
+                "away_team": "B",
+                "home_score": 3,
+                "away_score": 1,
+                "sources": ["https://blog-inventado.io/x"],
+            }
+        )
+        monkeypatch.setattr(provider, "_ask", _stub(_payload(text)))
+        assert await provider.find_match(_DATE, "x") is None
+
+    async def test_unknown_no_liquida(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_SOFA_URL]))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(_payload(_answer("unknown", [_SOFA_URL]))),
+        )
+        assert await provider.find_match(_DATE, "x") is None
+
+    async def test_sin_urls_no_consulta(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([]))
+
+        async def no_debe_llamarse(*a, **k):
+            raise AssertionError("_ask no debería llamarse sin URLs")
+
+        monkeypatch.setattr(provider, "_ask", no_debe_llamarse)
+        assert await provider.find_match(_DATE, "x") is None
+
+
+_PAGE = (
+    "Invest in Szczecin Open Kestelboim Romboli Rodriguez Taverna "
+    "Vega Hernandez Completed Match Statistics Aces 14 12 "
+    "Double Faults 3 1 Winners 30 25"
+)
+
+
+def _stats_answer(stats: dict) -> str:
+    return json.dumps(
+        {
+            "team1": "Kestelboim/Romboli",
+            "team2": "Taverna/Vega",
+            "stats": stats,
+        }
+    )
+
+
+class TestFindMatchStats:
+    """Fase 3: fetch propio + extracción IA + validación contra el
+    texto real (un número alucinado no aparece en el HTML -> fuera)."""
+
+    async def test_stats_verificadas_devuelven_matchstats(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub(_PAGE))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(_payload(_stats_answer({"Aces": [14, 12], "Double Faults": [3, 1]}))),
+        )
+        stats = await provider.find_match_stats(_DATE, "Kestelboim/Romboli")
+        assert stats is not None
+        assert stats.values["Aces"] == (14, 12)
+        assert stats.values["Double Faults"] == (3, 1)
+
+    async def test_stat_alucinada_se_descarta(self, provider, monkeypatch):
+        # El modelo reporta valores que NO están en el texto.
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub(_PAGE))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(_payload(_stats_answer({"Aces": [99, 88]}))),
+        )
+        assert await provider.find_match_stats(_DATE, "x") is None
+
+    async def test_stat_desconocida_se_ignora(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub(_PAGE))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(
+                _payload(_stats_answer({"Aces": [14, 12], "Rarezas Varias": [7, 7]}))
+            ),
+        )
+        stats = await provider.find_match_stats(_DATE, "x")
+        assert stats is not None
+        assert set(stats.values) == {"Aces"}
+
+    async def test_sin_stats_en_texto_devuelve_none(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub("página sin tabla"))
+        monkeypatch.setattr(provider, "_ask", _stub(_payload(_stats_answer({}))))
+        assert await provider.find_match_stats(_DATE, "x") is None
+
+    async def test_layout_valor_antes_del_nombre(self, provider, monkeypatch):
+        # tennis.com: "4 Aces 16" (v1 nombre v2), no "Aces v1 v2".
+        page = "Vacherot Harris Completed Match Statistics 4 Aces 16 2 Double Faults 2"
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub(page))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(_payload(_stats_answer({"Aces": [4, 16], "Double Faults": [2, 2]}))),
+        )
+        stats = await provider.find_match_stats(_DATE, "x")
+        assert stats is not None
+        assert stats.values["Aces"] == (4, 16)
+        assert stats.values["Double Faults"] == (2, 2)
+
+    async def test_fetch_fallido_pasa_a_siguiente_url(self, provider, monkeypatch):
+        monkeypatch.setattr(
+            provider, "_search_urls", _stub_search([_SOFA_URL, _TENNIS_URL])
+        )
+        pages = iter([None, _PAGE])
+        monkeypatch.setattr(
+            provider,
+            "_fetch_page_text",
+            _stub_seq(list(pages)),
+        )
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(_payload(_stats_answer({"Aces": [14, 12]}))),
+        )
+        stats = await provider.find_match_stats(_DATE, "x")
+        assert stats is not None
+        assert stats.values["Aces"] == (14, 12)
+
+
+class TestFlareSolverrFallback:
+    """Cuando el fetch directo choca con Cloudflare (403 o challenge
+    HTML) se reintenta vía el Chromium de la VM."""
+
+    async def test_fetch_directo_ok_no_llama_flaresolverr(self, provider, monkeypatch):
+        monkeypatch.setattr(
+            provider, "_fetch_via_flaresolverr", _stub("<html>flare</html>")
+        )
+
+        class _Resp:
+            status_code = 200
+            text = "<html>contenido real</html>"
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url):
+                return _Resp()
+
+        monkeypatch.setattr(
+            "app.services.results.gemini_research.httpx.AsyncClient",
+            lambda **k: _Client(),
+        )
+        assert (
+            await provider._fetch_html("https://x.com") == "<html>contenido real</html>"
+        )
+
+    async def test_403_cae_a_flaresolverr(self, provider, monkeypatch):
+        monkeypatch.setattr(get_settings(), "flaresolverr_url", "http://flare:8191")
+        monkeypatch.setattr(
+            provider, "_fetch_via_flaresolverr", _stub("<html>flare</html>")
+        )
+
+        class _Resp:
+            status_code = 403
+            text = "challenge"
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url):
+                return _Resp()
+
+        monkeypatch.setattr(
+            "app.services.results.gemini_research.httpx.AsyncClient",
+            lambda **k: _Client(),
+        )
+        assert await provider._fetch_html("https://x.com") == "<html>flare</html>"
+
+    async def test_challenge_en_200_cae_a_flaresolverr(self, provider, monkeypatch):
+        # Cloudflare a veces devuelve 200 con la página del challenge.
+        monkeypatch.setattr(
+            provider, "_fetch_via_flaresolverr", _stub("<html>flare</html>")
+        )
+
+        class _Resp:
+            status_code = 200
+            text = 'window._cf_chl_opt={};fa:"__cf_chl_f_tk=abc"'
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url):
+                return _Resp()
+
+        monkeypatch.setattr(
+            "app.services.results.gemini_research.httpx.AsyncClient",
+            lambda **k: _Client(),
+        )
+        assert await provider._fetch_html("https://x.com") == "<html>flare</html>"
+
+    async def test_sin_url_devuelve_none(self, provider, monkeypatch):
+        monkeypatch.setattr(get_settings(), "flaresolverr_url", None)
+        assert await provider._fetch_via_flaresolverr("https://x.com") is None
+
+    async def test_circuito_abierto_tras_n_fallos(self, provider, monkeypatch):
+        """N timeouts seguidos abren el circuito: las llamadas
+        siguientes se devuelven None sin tocar FlareSolverr — el
+        goteo de la pasada no encola minutos de basura en la VM."""
+        import httpx
+
+        import app.services.results.gemini_research as gr
+
+        monkeypatch.setattr(get_settings(), "flaresolverr_url", "http://flare:8191")
+        monkeypatch.setattr(gr, "_flare_fails", 0)
+        monkeypatch.setattr(gr, "_flare_open_until", None)
+        calls = []
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, json=None):
+                calls.append(url)
+                raise httpx.ReadTimeout("boom")
+
+        monkeypatch.setattr(
+            "app.services.results.gemini_research.httpx.AsyncClient",
+            lambda **k: _Client(),
+        )
+        for _ in range(gr._FLARE_FAIL_THRESHOLD + 3):
+            assert await provider._fetch_via_flaresolverr("https://x.com") is None
+        # Solo los primeros N llegaron a FlareSolverr; el resto
+        # salió cortocircuitado.
+        assert len(calls) == gr._FLARE_FAIL_THRESHOLD
+
+
+class TestFindFixture:
+    """Reconstrucción del cruce cuando el pick solo guardó el torneo."""
+
+    async def test_fixture_con_jugador_valido(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub_page("cronica"))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(_payload(json.dumps({"fixture": "Brunold vs Kopriva"}))),
+        )
+        fixture = await provider.find_fixture(_DATE, "Brunold", "Challenger Biella")
+        assert fixture == "Brunold vs Kopriva"
+
+    async def test_fixture_sin_apellido_descartado(self, provider, monkeypatch):
+        # Anti-alucinación: el cruce debe contener al jugador buscado.
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub_page("cronica"))
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            _stub(_payload(json.dumps({"fixture": "Nadal vs Federer"}))),
+        )
+        assert (
+            await provider.find_fixture(_DATE, "Brunold", "Challenger Biella") is None
+        )
+
+    async def test_fixture_null_devuelve_none(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([_TENNIS_URL]))
+        monkeypatch.setattr(provider, "_fetch_page_text", _stub_page("cronica"))
+        monkeypatch.setattr(
+            provider, "_ask", _stub(_payload(json.dumps({"fixture": None})))
+        )
+        assert (
+            await provider.find_fixture(_DATE, "Brunold", "Challenger Biella") is None
+        )
+
+    async def test_sin_urls_devuelve_none(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_search_urls", _stub_search([]))
+        assert (
+            await provider.find_fixture(_DATE, "Brunold", "Challenger Biella") is None
+        )
+
+
+class TestTickerCornerSummary:
+    """Conteo determinista de córners de tickers tipo Opta (El País)."""
+
+    def test_cuenta_eventos_por_equipo(self):
+        from app.services.results.gemini_research import _ticker_corner_summary
+
+        text = (
+            "87 Corner,Real Madrid Femenino. Corner cometido por Jade. "
+            "82 Corner,Paris Saint-Germain Féminines. otro evento. "
+            "77 Corner,Real Madrid Femenino."
+        )
+        summary = _ticker_corner_summary(text)
+        assert "Real Madrid Femenino 2" in summary
+        assert "Paris Saint-Germain Féminines 1" in summary
+        # Las dos ordenaciones: valida sea cual sea el orden del modelo.
+        assert "Paris Saint-Germain Féminines 1 Real Madrid Femenino 2" in summary
+
+    def test_sin_ticker_devuelve_vacio(self):
+        from app.services.results.gemini_research import _ticker_corner_summary
+
+        assert _ticker_corner_summary("resumen del partido sin ticker") == ""
+
+    def test_un_solo_equipo_no_genera_resumen(self):
+        from app.services.results.gemini_research import _ticker_corner_summary
+
+        # Con un solo equipo no hay par home/away que validar.
+        text = "10 Corner,Solo FC. 20 Corner,Solo FC."
+        assert _ticker_corner_summary(text) == ""
+
+    def test_formato_ordinal_betsapi(self):
+        from app.services.results.gemini_research import _ticker_corner_summary
+
+        text = (
+            "1' - 1st Corner - (Silkeborg IF Reserves) "
+            "19' - 2nd Corner - (Sonderjyske Reserves) "
+            "40' - 3rd Corner - (Sonderjyske Reserves) "
+            "43' - 4th Corner - (Silkeborg IF Reserves)"
+        )
+        summary = _ticker_corner_summary(text)
+        assert "Silkeborg IF Reserves 2" in summary
+        assert "Sonderjyske Reserves 2" in summary
+
+
+class _FakeResp:
+    def __init__(self, text: str, status: int = 200):
+        self.text = text
+        self.status_code = status
+
+
+class _FakeHttpClient:
+    """Sustituye httpx.AsyncClient dentro de gemini_research."""
+
+    def __init__(self, text: str):
+        self._text = text
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url):
+        return _FakeResp(self._text)
+
+
+class TestFetchHtmlSkeleton:
+    """`_fetch_html`: un 200 con esqueleto JS (sin tabla) debe caer al
+    render de FlareSolverr — el comparador devuelve la página vacía y
+    las cuotas solo existen en el DOM."""
+
+    async def test_esqueleto_js_cae_a_flaresolverr(self, provider, monkeypatch):
+        from app.services.results import gemini_research as gr
+
+        monkeypatch.setattr(
+            gr.httpx, "AsyncClient", lambda **k: _FakeHttpClient("<html>ok</html>")
+        )
+        rendered = "<html>" + "x" * 40000 + "</html>"
+        monkeypatch.setattr(provider, "_fetch_via_flaresolverr", _stub(rendered))
+
+        html = await provider._fetch_html("https://www.betexplorer.com/x")
+        assert html == rendered
+
+    async def test_pagina_rica_no_gasta_flaresolverr(self, provider, monkeypatch):
+        from app.services.results import gemini_research as gr
+
+        rich = "<html>" + "x" * 40000 + "</html>"
+        monkeypatch.setattr(gr.httpx, "AsyncClient", lambda **k: _FakeHttpClient(rich))
+        calls = []
+
+        async def fs(url):
+            calls.append(url)
+            return None
+
+        monkeypatch.setattr(provider, "_fetch_via_flaresolverr", fs)
+        html = await provider._fetch_html("https://www.betexplorer.com/x")
+        assert html == rich
+        assert calls == []
+
+    async def test_esqueleto_sin_flaresolverr_conserva_html(
+        self, provider, monkeypatch
+    ):
+        from app.services.results import gemini_research as gr
+
+        skeleton = "<html>shell</html>"
+        monkeypatch.setattr(
+            gr.httpx, "AsyncClient", lambda **k: _FakeHttpClient(skeleton)
+        )
+        monkeypatch.setattr(provider, "_fetch_via_flaresolverr", _stub(None))
+        html = await provider._fetch_html("https://www.betexplorer.com/x")
+        assert html == skeleton
+
+
+class TestModelQuotaCooldown:
+    """Cuota diaria POR MODELO: el 429 del free tier trae
+    "retry in XhYm" (reset real de la ración del día) y ese modelo se
+    aparca solo hasta la hora indicada — sin gastar llamadas
+    redescubriendo que sigue seco. Los demás modelos siguen con su
+    cuota independiente."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_state(self, monkeypatch, tmp_path):
+        from app.services.results import base as results_base
+        from app.services.results import gemini_research as gr
+
+        monkeypatch.setattr(results_base, "_STATE", None)
+        monkeypatch.setattr(
+            results_base, "_STATE_FILE", tmp_path / "provider_state.json"
+        )
+        monkeypatch.setattr(gr, "_MODEL_QUOTA_UNTIL", {})
+
+    @staticmethod
+    def _resp_429(hint: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            status_code=429,
+            text=f'{{"error":{{"message":"quota. Please retry in {hint}."}}}}',
+        )
+
+    def test_retry_hint_parsea_horas_minutos_segundos(self):
+        from app.services.results.base import retry_hint_seconds
+
+        resp = SimpleNamespace(text="Please retry in 3h45m1.219278153s.")
+        assert retry_hint_seconds(resp) == pytest.approx(
+            3 * 3600 + 45 * 60 + 1.219278153
+        )
+
+    def test_retry_hint_sin_hint_devuelve_none(self):
+        from app.services.results.base import retry_hint_seconds
+
+        assert retry_hint_seconds(SimpleNamespace(text="rate limit")) is None
+
+    async def test_modelo_agotado_se_aparca_hasta_el_hint(self, provider, monkeypatch):
+        from app.services.results import gemini_research as gr
+
+        calls: list[str] = []
+
+        async def fake_call(model, prompt, use_tool=False):
+            calls.append(model)
+            if model == "gemini-3.5-flash":
+                return None, self._resp_429("3h45m")
+            return {"ok": True}, None
+
+        monkeypatch.setattr(provider, "_call_model", fake_call)
+        out = await provider._ask("x")
+
+        assert out == {"ok": True}
+        assert calls == ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
+        until = gr._MODEL_QUOTA_UNTIL["gemini-3.5-flash"]
+        assert until > utc_now() + timedelta(hours=3)
+
+    async def test_modelo_aparcado_se_salta_sin_llamar(self, provider, monkeypatch):
+        from app.services.results import gemini_research as gr
+
+        gr._MODEL_QUOTA_UNTIL["gemini-3.5-flash"] = utc_now() + timedelta(hours=2)
+        calls: list[str] = []
+
+        async def fake_call(model, prompt, use_tool=False):
+            calls.append(model)
+            return {"ok": True}, None
+
+        monkeypatch.setattr(provider, "_call_model", fake_call)
+        out = await provider._ask("x")
+
+        assert out == {"ok": True}
+        assert calls == ["gemini-3.1-flash-lite"]  # 3.5 ni se intenta
+
+    async def test_todos_aparcados_cooldown_hasta_el_primero(
+        self, provider, monkeypatch
+    ):
+        """Toda la familia seca por cuota diaria: el provider queda en
+        cooldown hasta que el primer modelo renueve (no a los 20 min
+        de siempre) y no se gasta ni una llamada."""
+        from app.services.results import gemini_research as gr
+
+        primero = utc_now() + timedelta(hours=1)
+        gr._MODEL_QUOTA_UNTIL["gemini-3.5-flash"] = utc_now() + timedelta(hours=3)
+        gr._MODEL_QUOTA_UNTIL["gemini-3.1-flash-lite"] = primero
+        gr._MODEL_QUOTA_UNTIL["gemini-3.8-flash"] = utc_now() + timedelta(hours=2)
+        calls: list[str] = []
+
+        async def fake_call(model, prompt, use_tool=False):
+            calls.append(model)
+            return None, None
+
+        monkeypatch.setattr(provider, "_call_model", fake_call)
+        assert await provider._ask("x") is None
+
+        assert calls == []
+        assert provider._cooldown_until == primero
+        assert provider._in_cooldown()
+
+    async def test_429_sin_hint_cooldown_de_ritmo(self, provider, monkeypatch):
+        """429 sin hint de reset -> el modelo se aparca 20 min y, si
+        todos fallan, el provider enfría esos 20 min como siempre."""
+        from app.services.results import gemini_research as gr
+
+        async def fake_call(model, prompt, use_tool=False):
+            return None, self._resp_429("")
+
+        monkeypatch.setattr(provider, "_call_model", fake_call)
+        assert await provider._ask("x") is None
+
+        for model in gr._MODELS:
+            until = gr._MODEL_QUOTA_UNTIL[model]
+            assert timedelta() < until - utc_now() <= timedelta(minutes=20)
+        assert provider._in_cooldown()
+
+
+class TestMarketTargeting:
+    """Punto 1: queries y subpáginas dirigidas por el mercado del pick
+    — la portada del comparador suele traer solo 1X2."""
+
+    def test_market_terms_corners(self):
+        terms = _market_terms(["córners / más de 9.5"])
+        assert any("corners" in t for t in terms)
+
+    def test_market_terms_goles(self):
+        terms = _market_terms(["total goles / más de 2.5 (línea 2.5)"])
+        assert any("over" in t for t in terms)
+
+    def test_market_terms_ganador_sin_dirigida(self):
+        assert _market_terms(["ganador / Walling gana"]) == []
+
+    def test_variants_oddsportal_over_under(self):
+        urls = ["https://www.oddsportal.com/football/x/swansea-watford-abc/"]
+        v = _comparator_variants(urls, ["total goles / más de 2.5 (línea 2.5)"])
+        assert v == [
+            "https://www.oddsportal.com/football/x/swansea-watford-abc/#over-under;2.5"
+        ]
+
+    def test_variants_oddsportal_handicap(self):
+        urls = ["https://www.oddsportal.com/football/x/abc/"]
+        v = _comparator_variants(urls, ["hándicap asiático / -1.5"])
+        assert v == ["https://www.oddsportal.com/football/x/abc/#ah;1.5"]
+
+    def test_variants_primera_parte_no_genera(self):
+        """La pestaña #over-under de oddsportal es tiempo completo —
+        para un mercado de 1ª parte no se pide (línea equivocada)."""
+        urls = ["https://www.oddsportal.com/football/x/abc/"]
+        assert _comparator_variants(urls, ["1ª parte / más de 1.5"]) == []
+
+    def test_variants_solo_oddsportal(self):
+        urls = ["https://oddspedia.com/football/x-123"]
+        assert _comparator_variants(urls, ["más de 2.5 goles"]) == []
+
+    def test_variants_sin_oddsportal_vacio(self):
+        assert _comparator_variants(["https://x.io/y"], ["más de 2.5"]) == []
+
+    def test_variants_ignora_h2h_y_team(self):
+        """En páginas h2h/team el fragmento no selecciona tabla."""
+        urls = [
+            "https://www.oddsportal.com/football/h2h/a-x/b-y/",
+            "https://www.oddsportal.com/football/team/a/x/",
+        ]
+        assert _comparator_variants(urls, ["más de 2.5 goles"]) == []
+
+    def test_market_terms_prop_goleador_con_nombre(self):
+        """Prop de goleador: la query lleva el nombre del jugador,
+        no términos de totales de equipo."""
+        terms = _market_terms(["jugador / Alexander Isak: Marca gol"])
+        assert any("Isak anytime goalscorer" in t for t in terms)
+        assert not any("over under" in t for t in terms)
+
+    def test_market_terms_prop_marca_o_asiste(self):
+        terms = _market_terms(["jugador / Marca o asiste Cody Gakpo"])
+        assert any("Gakpo" in t and "score or assist" in t for t in terms)
+
+    def test_market_terms_prop_tarjeta_jugador(self):
+        """Prop de tarjeta: queries de 'to be carded', no de cards
+        de partido."""
+        terms = _market_terms(["jugador / Recibe una tarjeta - Ivan Romero"])
+        assert any("Ivan Romero to be carded" in t for t in terms)
+        assert not any("betexplorer cards" == t for t in terms)
+
+    def test_market_terms_prop_sin_nombre_generico(self):
+        """Sin nombre extraíble queda el término genérico de props."""
+        terms = _market_terms(["jugador / Marca o asiste"])
+        assert terms == ["oddspedia player props"]
+
+    def test_market_terms_prop_no_contamina_otros(self):
+        """Un pick de córners en el mismo grupo sigue recibiendo sus
+        términos de mercado normales."""
+        terms = _market_terms(
+            ["jugador / Alexander Isak: Marca gol", "córners / más de 9.5"]
+        )
+        assert any("corners" in t for t in terms)
+        assert any("Isak" in t for t in terms)
+
+    def test_prop_no_se_dispara_en_mercados_normales(self):
+        """'Ambos marcan' / 'primero en marcar' / 'equipo a marcar'
+        no son props."""
+        for desc in (
+            "ambos marcan / Sí",
+            "primer equipo en marcar / Real Madrid",
+            "equipo a marcar / Liverpool",
+        ):
+            assert "oddspedia player props" not in _market_terms([desc])

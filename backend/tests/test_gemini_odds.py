@@ -1,0 +1,924 @@
+"""Tests del fallback de cuotas de cierre vía Gemini (find_closing_odds
++ la pasada `gemini-odds` del backfill histórico).
+
+Sin HTTP real: `_search_urls`/`_fetch_page_text`/`_ask` se mockean y la
+validación clave (literal de la cuota en el HTML + autocheck con
+`map_pick_choices`) se ejercita de verdad.
+"""
+
+from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+from sqlmodel import select
+
+from app.core.dates import utc_now
+from app.models.odds_snapshot import OddsEvent, OddsSnapshot
+from app.models.parsed_pick import ParsedPick
+from app.models.telegram_raw_message import TelegramRawMessage
+from app.services.odds import historical_backfill as hb
+from app.services.results import base as results_base
+from app.services.results.gemini_research import (
+    ClosingOdds,
+    GeminiResearchProvider,
+)
+
+_ODDS_PAGE = (
+    "Parma vs Inter de Milán · Comparador de cuotas · "
+    "Más/Menos 2.5 goles: Más 2.5 a 1.85 en bet365, Menos 2.5 a 2.05 "
+    "en Stake. 1X2: Parma 10.00, Empate 5.40, Inter 1.36."
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_state(monkeypatch, tmp_path):
+    """provider_state.json aislado por test (misses/cooldowns)."""
+    monkeypatch.setattr(results_base, "_STATE", None)
+    monkeypatch.setattr(results_base, "_STATE_FILE", tmp_path / "provider_state.json")
+
+
+def _provider() -> GeminiResearchProvider:
+    return GeminiResearchProvider("futbol", api_key="test-key")
+
+
+class TestOddsLiteralOk:
+    def test_decimal_litera_en_pagina(self):
+        assert GeminiResearchProvider._odds_literal_ok(_ODDS_PAGE, "1.85", 1.85)
+
+    def test_decimal_con_coma(self):
+        text = "cuota 2,05 en bet365"
+        assert GeminiResearchProvider._odds_literal_ok(text, "2,05", 2.05)
+
+    def test_fraccion_uk_coherente(self):
+        text = "England boosted from 4/6 to evens"
+        # 4/6 -> 1.67 decimal.
+        assert GeminiResearchProvider._odds_literal_ok(text, "4/6", 4 / 6 + 1)
+
+    def test_fraccion_incoherente_rechaza(self):
+        text = "cuota 4/6 en la casa"
+        # 4/6 = 1.67, no 2.50 — el decimal no cuadra con el literal.
+        assert not GeminiResearchProvider._odds_literal_ok(text, "4/6", 2.50)
+
+    def test_literal_ausente_rechaza(self):
+        assert not GeminiResearchProvider._odds_literal_ok(_ODDS_PAGE, "9.99", 9.99)
+
+    def test_literal_dentro_de_otro_numero_rechaza(self):
+        # "1.85" no vale si solo aparece dentro de "21.85".
+        text = "la cuota era 21.85"
+        assert not GeminiResearchProvider._odds_literal_ok(text, "1.85", 1.85)
+
+    def test_ancla_lejos_rechaza(self):
+        # Caso real pick 1966: "11.00" era el precio del 1X2 rival,
+        # lejos de cualquier "Under"/"4" — colaba antes de las anclas.
+        lejos = "partido disputado en Anoeta " * 20
+        text = f"Espanyol gana a 11.00. {lejos} Menos de 4 goles a 1.05"
+        assert not GeminiResearchProvider._odds_literal_ok(
+            text, "11.00", 11.0, ["Under", "4"]
+        )
+
+    def test_ancla_cerca_acepta(self):
+        lejos = "partido disputado en Anoeta " * 20
+        text = f"Espanyol gana a 11.00. {lejos} Menos de 4 goles a 1.05"
+        assert GeminiResearchProvider._odds_literal_ok(
+            text, "1.05", 1.05, ["Under", "4"]
+        )
+
+    def test_ancla_numerica_no_mata_parciales(self):
+        # La línea "4" no casa dentro de "5.40" ni "14.5".
+        text = "Empate 5.40, corneres 14.5, nada mas"
+        assert not GeminiResearchProvider._odds_literal_ok(
+            text, "5.40", 5.40, ["Under", "4"]
+        )
+
+    def test_linea_no_es_cuota(self):
+        # Caso real pick 1419: "Under 11 córners" — el modelo puso la
+        # línea (11) como cuota. El literal solapado con el ancla no
+        # cuenta: solo valdría un "11" APARTE, como precio real.
+        text = "Corners 2-Way: Over 11 a 1.83, Under 11 a 1.95"
+        assert not GeminiResearchProvider._odds_literal_ok(
+            text, "11", 11.0, ["Under", "11"]
+        )
+
+    def test_linea_igual_cuota_real_acepta(self):
+        # Si la página sí muestra un precio 11.0 para Under 11,
+        # hay una aparición extra del literal junto al ancla.
+        text = "Corners 2-Way: Over 11 a 1.01, Under 11 a 11.00"
+        assert GeminiResearchProvider._odds_literal_ok(
+            text, "11.00", 11.0, ["Under", "11"]
+        )
+
+    def test_ancla_no_casa_handicap(self):
+        # Caso real pick 1618: el "1.01" era el precio Away del
+        # hándicap "-3/+3"; el ancla "3.5" casaba dentro de "-3.5".
+        # Con la exclusión de "-"/"+" el ancla no casa y se rechaza.
+        text = (
+            "AH -3.5/+3.5 Home 12.00 Away 1.01 Compare odds "
+            "1x2 Home 1.83 Draw 3.90 Away 4.50"
+        )
+        assert not GeminiResearchProvider._odds_literal_ok(
+            text, "1.01", 1.01, ["Under", "3.5"]
+        )
+
+    _TOTALS_TABLE = (
+        "Total Goals 0.5 1.09 Over 1.09 9.50 Under 9.50 Compare odds "
+        "0.75 1.10 Over 1.10 7.60 Under 7.60 Compare odds "
+        "1 1.12 Over 1.12 7.00 Under 7.00 Compare odds "
+        "1.5 1.25 Over 1.25 5.50 Under 5.50 Compare odds"
+    )
+
+    def test_precio_linea_vecina_rechaza(self):
+        # Caso real pick 1997/1943: el "1.12" es el precio de Over
+        # 1.0 — estaba a 30 chars de la fila "1.5" y colaba por la
+        # ventana. Con la barrera de fila, "1.5" no está en el
+        # segmento del literal -> rechazado.
+        assert not GeminiResearchProvider._odds_literal_ok(
+            self._TOTALS_TABLE, "1.12", 1.12, ["Over", "1.5"]
+        )
+
+    def test_precio_linea_propia_acepta(self):
+        # La misma tabla: Over 1.0 @1.12 sí valida — el ancla "1"
+        # está en el segmento del literal y "Over" le va pegado.
+        assert GeminiResearchProvider._odds_literal_ok(
+            self._TOTALS_TABLE, "1.12", 1.12, ["Over", "1"]
+        )
+
+    def test_under_misma_fila_acepta(self):
+        # Under 1.5 @5.50: el literal está en la fila "1.5" y
+        # pegado a su etiqueta "Under".
+        assert GeminiResearchProvider._odds_literal_ok(
+            self._TOTALS_TABLE, "5.50", 5.50, ["Under", "1.5"]
+        )
+
+    def test_precio_lado_contrario_rechaza(self):
+        # Una cuota Under con el precio del lado Over (1.25) de la
+        # fila correcta: "Under" existe en la fila pero NO va pegado
+        # al literal — tampoco cuela.
+        assert not GeminiResearchProvider._odds_literal_ok(
+            self._TOTALS_TABLE, "1.25", 1.25, ["Under", "1.5"]
+        )
+
+    def test_fila_sin_delimitador_ventana_corta(self):
+        # Sin "Compare odds" (otros comparadores): fallback de ±45
+        # a la línea — acepta si la línea está cerca.
+        text = "pronóstico: Menos de 4.5 goles @ 1.61 en bet365"
+        assert GeminiResearchProvider._odds_literal_ok(
+            text, "1.61", 1.61, ["Under", "4.5"]
+        )
+
+    def test_fila_sin_delimitador_lejos_rechaza(self):
+        lejos = "texto de relleno sin números " * 10
+        text = f"Over 1.0 @ 1.12 {lejos} total 1.5 otro mercado"
+        assert not GeminiResearchProvider._odds_literal_ok(
+            text, "1.12", 1.12, ["Over", "1.5"]
+        )
+
+
+class TestLiteralAnchors:
+    def test_eleccion_1x2_sin_linea_no_ancla(self):
+        # "1"/"X"/"2" sueltas no son ancla útil: chequeo global.
+        from app.services.results.gemini_research import _literal_anchors
+
+        assert _literal_anchors("1", None) == []
+        assert _literal_anchors("2", None) == []
+        assert _literal_anchors("Over", "4.0") == ["Over", "4"]
+        assert _literal_anchors("Real Sociedad", None) == ["Real Sociedad"]
+
+
+class TestClosingFromText:
+    def test_happy_path(self):
+        data = {
+            "market_name": "Match goals",
+            "choice_name": "Over",
+            "choice_group": "2.5",
+            "cuota_decimal": 1.85,
+            "cuota_texto": "1.85",
+            "casa": "bet365",
+        }
+        found = _provider()._closing_from_text(_ODDS_PAGE, data, "http://x")
+        assert found is not None
+        assert found.market_name == "Match goals"
+        assert found.cuota == 1.85
+        assert found.casa == "bet365"
+        assert found.source_url == "http://x"
+
+    def test_mercado_fuera_de_vocabulario(self):
+        data = {
+            "market_name": "Player props",
+            "choice_name": "Over",
+            "choice_group": "2.5",
+            "cuota_decimal": 1.85,
+            "cuota_texto": "1.85",
+        }
+        assert _provider()._closing_from_text(_ODDS_PAGE, data, "u") is None
+
+    def test_cuota_no_litera(self):
+        data = {
+            "market_name": "Match goals",
+            "choice_name": "Over",
+            "choice_group": "2.5",
+            "cuota_decimal": 7.77,
+            "cuota_texto": "7.77",
+        }
+        assert _provider()._closing_from_text(_ODDS_PAGE, data, "u") is None
+
+    def test_cuota_fuera_de_rango(self):
+        data = {
+            "market_name": "Match goals",
+            "choice_name": "Over",
+            "choice_group": "2.5",
+            "cuota_decimal": 0.5,
+            "cuota_texto": "1.85",
+        }
+        assert _provider()._closing_from_text(_ODDS_PAGE, data, "u") is None
+
+
+class TestFindClosingOdds:
+    async def test_flujo_completo(self, monkeypatch):
+        provider = _provider()
+        monkeypatch.setattr(
+            provider,
+            "_search_urls",
+            AsyncMock(return_value=["https://oddspedia.com/es/futbol/x"]),
+        )
+        monkeypatch.setattr(
+            provider, "_fetch_page_text", AsyncMock(return_value=_ODDS_PAGE)
+        )
+        import json as _json
+
+        monkeypatch.setattr(
+            provider,
+            "_ask",
+            AsyncMock(
+                return_value={
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {
+                                        "text": _json.dumps(
+                                            {
+                                                "market_name": "Match goals",
+                                                "choice_name": "Over",
+                                                "choice_group": "2.5",
+                                                "cuota_decimal": 1.85,
+                                                "cuota_texto": "1.85",
+                                                "casa": "bet365",
+                                            }
+                                        )
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ),
+        )
+        found = await provider.find_closing_odds(
+            utc_now() - timedelta(days=1),
+            "Parma vs Inter de Milán",
+            "más de 2.5 goles",
+        )
+        assert found is not None
+        assert found.choice_name == "Over"
+        assert found.source_url.endswith("/x")
+
+    async def test_sin_urls_devuelve_none(self, monkeypatch):
+        provider = _provider()
+        monkeypatch.setattr(provider, "_search_urls", AsyncMock(return_value=[]))
+        found = await provider.find_closing_odds(utc_now(), "A vs B", "gana A")
+        assert found is None
+
+    async def test_sin_desc_devuelve_none(self):
+        provider = _provider()
+        assert await provider.find_closing_odds(utc_now(), "A vs B", "") is None
+
+
+class TestGeminiBackfillPass:
+    def _pick(self, **kwargs) -> ParsedPick:
+        kwargs.setdefault("id", 42)
+        kwargs.setdefault("raw_message_id", 1)
+        kwargs.setdefault("es_apuesta", True)
+        kwargs.setdefault("es_combinada", False)
+        kwargs.setdefault("deporte", "fútbol")
+        kwargs.setdefault("evento", "Parma vs Inter de Milán")
+        kwargs.setdefault("mercado", "más/menos goles")
+        kwargs.setdefault("seleccion", "Más de 2.5 goles")
+        kwargs.setdefault("linea", 2.5)
+        kwargs.setdefault("cuota", 1.90)
+        kwargs.setdefault("fecha_evento", utc_now() - timedelta(days=2))
+        return ParsedPick(**kwargs)
+
+    def _settings(self):
+        return SimpleNamespace(
+            google_api_key="test-key",
+            rapidapi_tennis_key=None,
+        )
+
+    async def test_escribe_snapshot_validado(self, session, monkeypatch):
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        monkeypatch.setattr(
+            GeminiResearchProvider,
+            "find_closing_odds",
+            AsyncMock(
+                return_value=ClosingOdds(
+                    market_name="Match goals",
+                    choice_name="Over",
+                    choice_group="2.5",
+                    cuota=1.85,
+                    casa="bet365",
+                    source_url="https://oddspedia.com/x",
+                )
+            ),
+        )
+        pick = self._pick()
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [pick], set(), set(), session, apply=True, report=report
+        )
+        await session.commit()
+
+        assert report.mapeados == 1
+        assert pick.odds_event_id == "gemini-odds:42"
+        rows = (
+            await session.exec(
+                select(OddsSnapshot).where(OddsSnapshot.provider == "gemini-odds")
+            )
+        ).all()
+        assert len(rows) == 1
+        assert rows[0].market_name == "Match goals"
+        assert rows[0].cuota == 1.85
+        assert rows[0].captured_at == pick.fecha_evento
+
+    async def test_propuesta_incoherente_se_descarta(self, session, monkeypatch):
+        """El modelo propone Full time/1 para un pick de Over: el
+        autocheck con map_pick_choices lo rechaza y no se escribe."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        monkeypatch.setattr(
+            GeminiResearchProvider,
+            "find_closing_odds",
+            AsyncMock(
+                return_value=ClosingOdds(
+                    market_name="Full time",
+                    choice_name="1",
+                    choice_group=None,
+                    cuota=1.36,
+                    casa="Stake",
+                    source_url="https://oddspedia.com/x",
+                )
+            ),
+        )
+        pick = self._pick()
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [pick], set(), set(), session, apply=True, report=report
+        )
+
+        assert report.mapeados == 0
+        assert pick.odds_event_id is None
+        # Marcada como procesada: no se reintenta en cada pasada.
+        assert results_base.is_missed(f"llm-odds|done|{pick.id}")
+
+    async def test_cubierto_por_filas_existentes_no_llama(self, session, monkeypatch):
+        """Si el evento ya tiene la opción casada por otro provider,
+        la pasada marca el pick procesado sin llamar al modelo."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        finder = AsyncMock(return_value=None)
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds", finder)
+        pick = self._pick(odds_event_id="oddspapi:7")
+        session.add(
+            OddsEvent(
+                event_ext_id="oddspapi:7",
+                sport="futbol",
+                home_team="Parma",
+                away_team="Inter de Milán",
+                start=pick.fecha_evento,
+            )
+        )
+        session.add(
+            OddsSnapshot(
+                provider="oddspapi",
+                event_ext_id="oddspapi:7",
+                market_name="Match goals",
+                choice_name="Over",
+                choice_group="2.5",
+                cuota=1.9,
+                captured_at=pick.fecha_evento,
+            )
+        )
+        await session.commit()
+
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [pick], {"oddspapi:7"}, set(), session, apply=True, report=report
+        )
+        assert finder.await_count == 0
+        assert results_base.is_missed("llm-odds|done|42")
+
+    async def test_picks_mismo_evento_comparten_busqueda(self, session, monkeypatch):
+        """Dos picks del mismo partido: UNA llamada multi resuelve a
+        los dos — la búsqueda web es por evento, no por pick."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        calls: list[list[str]] = []
+
+        async def multi(self, date, hint, descs):
+            calls.append(descs)
+            offers = [
+                ClosingOdds(
+                    market_name="Match goals",
+                    choice_name="Over",
+                    choice_group="2.5",
+                    cuota=1.85,
+                    casa="bet365",
+                    source_url="https://oddspedia.com/x",
+                ),
+                ClosingOdds(
+                    market_name="Match goals",
+                    choice_name="Under",
+                    choice_group="3.5",
+                    cuota=2.10,
+                    casa="bet365",
+                    source_url="https://oddspedia.com/x",
+                ),
+            ]
+            return {i: offers[i] for i in range(len(descs))}
+
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        p1 = self._pick(id=10)
+        p2 = self._pick(id=11, seleccion="Menos de 3.5 goles", linea=3.5)
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [p1, p2], set(), set(), session, apply=True, report=report
+        )
+
+        assert len(calls) == 1  # una búsqueda para el evento
+        assert len(calls[0]) == 2  # con las dos apuestas
+        assert report.mapeados == 2
+
+    async def test_eventos_distintos_busquedas_independientes(
+        self, session, monkeypatch
+    ):
+        """Dos eventos distintos siguen gastando una pasada cada uno."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        calls: list[list[str]] = []
+
+        async def multi(self, date, hint, descs):
+            calls.append(descs)
+            return {}
+
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        p1 = self._pick(id=20)
+        p2 = self._pick(id=21, evento="Sevilla vs Betis")
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [p1, p2], set(), set(), session, apply=True, report=report
+        )
+
+        assert len(calls) == 2
+        assert results_base.is_missed("llm-odds|done|20")
+        assert results_base.is_missed("llm-odds|done|21")
+
+    async def test_evento_feo_se_rescata_del_raw(self, session, monkeypatch):
+        """`evento` con la apuesta en vez del cruce: el rescate lo
+        repara in situ y el pick entra en la búsqueda con el evento
+        bueno."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        monkeypatch.setattr(
+            hb, "rescue_evento", AsyncMock(return_value="Parma vs Inter de Milán")
+        )
+        multi = AsyncMock(
+            return_value={
+                0: ClosingOdds(
+                    market_name="Match goals",
+                    choice_name="Over",
+                    choice_group="2.5",
+                    cuota=1.85,
+                    casa="bet365",
+                    source_url="https://oddspedia.com/x",
+                )
+            }
+        )
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        pick = self._pick(id=30, evento="9,5 córners en total")
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [pick], set(), set(), session, apply=True, report=report
+        )
+
+        assert pick.evento == "Parma vs Inter de Milán"  # reparado in situ
+        multi.assert_awaited_once()
+        assert report.mapeados == 1
+
+    async def test_evento_no_rescatable_marca_done(self, session, monkeypatch):
+        """Ni texto ni OCR ni imagen tienen el partido: se marca done
+        sin gastar ninguna búsqueda."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        monkeypatch.setattr(hb, "rescue_evento", AsyncMock(return_value=None))
+        multi = AsyncMock(return_value={})
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        pick = self._pick(id=31, evento="premiumpay.net/register")
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [pick], set(), set(), session, apply=True, report=report
+        )
+
+        multi.assert_not_awaited()
+        assert results_base.is_missed("llm-odds|done|31")
+
+
+class TestPickPendingGemini:
+    """La marca `llm-odds|done` entra en el conteo de pendientes."""
+
+    def _pick(self) -> ParsedPick:
+        return ParsedPick(
+            id=7,
+            es_apuesta=True,
+            deporte="fútbol",
+            fecha_evento=utc_now() - timedelta(days=1),
+        )
+
+    def test_sin_google_key_no_cambia_conteo(self):
+        pick = self._pick()
+        # footballdata siempre cubre fútbol: para aislar la regla de
+        # Gemini, el pick ya fue intentado por la fuente gratis.
+        results_base.mark_missed("footballdata|nofixture|7")
+        results_base.mark_missed("betexplorer|nofixture|7")
+        results_base.mark_missed("sofascore|nofixture|7")
+        settings = SimpleNamespace(google_api_key=None, rapidapi_tennis_key=None)
+        assert not hb._pick_pending(pick, set(), settings)
+
+    def test_con_google_key_queda_pendiente(self):
+        pick = self._pick()
+        results_base.mark_missed("footballdata|nofixture|7")
+        results_base.mark_missed("betexplorer|nofixture|7")
+        results_base.mark_missed("sofascore|nofixture|7")
+        settings = SimpleNamespace(google_api_key="k", rapidapi_tennis_key=None)
+        assert hb._pick_pending(pick, set(), settings)
+
+    def test_marcado_done_no_pendiente(self):
+        pick = self._pick()
+        settings = SimpleNamespace(google_api_key="k", rapidapi_tennis_key=None)
+        results_base.mark_missed("footballdata|nofixture|7")
+        results_base.mark_missed("betexplorer|nofixture|7")
+        results_base.mark_missed("sofascore|nofixture|7")
+        results_base.mark_missed("llm-odds|done|7")
+        assert not hb._pick_pending(pick, set(), settings)
+
+
+class TestQuotaLargaNoBloquea:
+    """Opción B: una fuente aparcada por quota larga (reset mensual de
+    la suscripción) no bloquea el drenaje ni se le llama — no es un
+    miss ("no lo tenía"), es "no hay nada que reintentar hasta que
+    renueve". Las marcas caducan solas si la fuente vuelve."""
+
+    def _settings(self, google: str | None = "k"):
+        return SimpleNamespace(
+            google_api_key=google,
+            rapidapi_tennis_key="k",
+            rapidapi_oddspapi_host="h",
+            rapidapi_oddsfeed_host="h",
+        )
+
+    def _pick(self, id_: int = 7) -> ParsedPick:
+        return ParsedPick(
+            id=id_,
+            es_apuesta=True,
+            deporte="fútbol",
+            fecha_evento=utc_now() - timedelta(days=1),
+        )
+
+    def test_quota_larga_no_bloquea_pending(self):
+        """oddsfeed y footballdata ya lo intentaron (nofixture) y
+        oddspapi está aparcado 20 días por quota mensual: el pick sale
+        del pendiente."""
+        pick = self._pick()
+        results_base.mark_missed("oddsfeed|nofixture|7")
+        results_base.mark_missed("footballdata|nofixture|7")
+        results_base.mark_missed("betexplorer|nofixture|7")
+        results_base.mark_missed("sofascore|nofixture|7")
+        results_base.mark_missed("sofascore|nofixture|7")
+        results_base.mark_cooldown("oddspapi", utc_now() + timedelta(days=20))
+        assert not hb._pick_pending(pick, set(), self._settings(google=None))
+
+    def test_sin_quota_sigue_pendiente(self):
+        """Con oddspapi viva, su deuda sí bloquea aunque oddsfeed y
+        footballdata ya hayan marcado nofixture."""
+        pick = self._pick()
+        results_base.mark_missed("oddsfeed|nofixture|7")
+        results_base.mark_missed("footballdata|nofixture|7")
+        results_base.mark_missed("betexplorer|nofixture|7")
+        results_base.mark_missed("sofascore|nofixture|7")
+        results_base.mark_missed("sofascore|nofixture|7")
+        assert hb._pick_pending(pick, set(), self._settings(google=None))
+
+    def test_cooldown_corto_si_bloquea(self):
+        """Un cooldown de ritmo (minutos) NO es quota: la fuente sigue
+        contando como viva y bloquea el drenaje."""
+        pick = self._pick()
+        results_base.mark_missed("oddsfeed|nofixture|7")
+        results_base.mark_missed("footballdata|nofixture|7")
+        results_base.mark_missed("betexplorer|nofixture|7")
+        results_base.mark_missed("sofascore|nofixture|7")
+        results_base.mark_missed("sofascore|nofixture|7")
+        results_base.mark_cooldown("oddspapi", utc_now() + timedelta(minutes=20))
+        assert hb._pick_pending(pick, set(), self._settings(google=None))
+
+    async def test_run_source_salta_fuente_aparcada(self, session):
+        """Una fuente en quota larga ni se llama: cero fetch muertos."""
+        results_base.mark_cooldown("oddspapi", utc_now() + timedelta(days=20))
+        source = hb._OddsPapiSource(api_key="k", api_host="h")
+        report = hb.BackfillReport()
+        await hb._run_source(
+            source, [self._pick()], set(), set(), session, None, True, report
+        )
+        assert any("quota agotada" in d for d in report.detalles)
+
+
+@pytest.mark.asyncio
+class TestBackfillBreakdown:
+    """El desglose del embudo clasifica cada pick del backlog."""
+
+    def _settings(self):
+        return SimpleNamespace(
+            google_api_key="k",
+            rapidapi_tennis_key="k",
+            rapidapi_oddspapi_host="h",
+            rapidapi_oddsfeed_host="h",
+        )
+
+    async def _pick(self, session, message_id: int) -> ParsedPick:
+        raw = TelegramRawMessage(
+            channel_id=1,
+            message_id=message_id,
+            channel_name="Test",
+            text="pick",
+            processed=True,
+        )
+        session.add(raw)
+        await session.flush()
+        pick = ParsedPick(
+            raw_message_id=raw.id,
+            es_apuesta=True,
+            deporte="fútbol",
+            fecha_evento=utc_now() - timedelta(days=2),
+        )
+        session.add(pick)
+        await session.flush()
+        return pick
+
+    async def test_clasifica_en_cola_aplazado_agotado_resuelto(
+        self, session, monkeypatch
+    ):
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        results_base.mark_cooldown("oddspapi", utc_now() + timedelta(days=20))
+
+        await self._pick(session, 1)  # nadie lo intentó aún -> en cola
+        aplazado = await self._pick(session, 2)  # solo le debe oddspapi
+        results_base.mark_missed(f"oddsfeed|nofixture|{aplazado.id}")
+        results_base.mark_missed(f"footballdata|nofixture|{aplazado.id}")
+        results_base.mark_missed(f"betexplorer|nofixture|{aplazado.id}")
+        results_base.mark_missed(f"sofascore|nofixture|{aplazado.id}")
+        results_base.mark_missed(f"llm-odds|done|{aplazado.id}")
+        agotado = await self._pick(session, 3)  # todos intentaron
+        for src in ("oddsfeed", "oddspapi", "footballdata", "betexplorer", "sofascore"):
+            results_base.mark_missed(f"{src}|nofixture|{agotado.id}")
+        results_base.mark_missed(f"llm-odds|done|{agotado.id}")
+        resuelto = await self._pick(session, 4)  # ya tiene cuotas
+        resuelto.odds_event_id = "oddsfeed:99"
+        session.add(
+            OddsSnapshot(
+                provider="oddsfeed",
+                event_ext_id="oddsfeed:99",
+                market_name="Match goals",
+                choice_name="Over",
+                choice_group="2.5",
+                cuota=1.9,
+                captured_at=utc_now(),
+            )
+        )
+        await session.commit()
+
+        bd = await hb.backfill_breakdown(session)
+        assert bd["total"] == 4
+        assert bd["resueltos"] == 1
+        assert bd["en_cola"] == 1
+        assert bd["aplazados"] == 1
+        assert bd["agotados"] == 1
+        # En cola le debe a footballdata y oddsfeed (oddspapi está
+        # aparcada y no cuenta).
+        assert bd["por_fuente"] == {
+            "footballdata": 1,
+            "tennisdata": 0,
+            "tennisexplorer": 0,
+            "betexplorer": 1,
+            "sofascore": 1,
+            "oddspapi": 0,
+            "oddsfeed": 1,
+        }
+        assert bd["llm_pendientes"] == 1
+        assert "oddspapi" in bd["fuentes_en_pausa"]
+        # El contador del job diario solo mide trabajo real (en_cola).
+        assert await hb.count_pending_backfill(session) == 1
+
+    async def test_filas_por_pick_resuelven_aunque_event_id_sea_otro(
+        self, session, monkeypatch
+    ):
+        """Pick con `odds_event_id` del snapshotter en vivo ("sofascore:")
+        pero con filas de backfill a su nombre (parsed_pick_id): el embudo
+        lo cuenta resuelto — la cuota ya está, solo cambia el contador."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        pick = await self._pick(session, 10)
+        pick.odds_event_id = "sofascore:77"
+        session.add(
+            OddsSnapshot(
+                provider="tennisdata",
+                event_ext_id="tennisdata:2026-09-20:sinner|alcaraz",
+                parsed_pick_id=pick.id,
+                market_name="Full time",
+                choice_name="1",
+                choice_group="",
+                cuota=1.5,
+                captured_at=utc_now(),
+            )
+        )
+        await session.commit()
+
+        bd = await hb.backfill_breakdown(session)
+        assert bd["resueltos"] == 1
+        assert bd["en_cola"] == 0
+        assert bd["resueltos_por_fuente"] == {"tennisdata": 1}
+        assert await hb.count_pending_backfill(session) == 0
+
+    async def test_filas_solo_en_vivo_no_cuentan_como_backfill(
+        self, session, monkeypatch
+    ):
+        """Un snapshot del snapshotter en vivo (provider no-backfill)
+        con parsed_pick_id NO resuelve el backlog histórico."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        pick = await self._pick(session, 11)
+        session.add(
+            OddsSnapshot(
+                provider="allsportsapi2",
+                event_ext_id="sofascore:88",
+                parsed_pick_id=pick.id,
+                market_name="Full time",
+                choice_name="1",
+                choice_group="",
+                cuota=1.5,
+                captured_at=utc_now(),
+            )
+        )
+        await session.commit()
+
+        bd = await hb.backfill_breakdown(session)
+        assert bd["resueltos"] == 0
+        assert bd["en_cola"] == 1
+
+
+class TestGeminiPassGuards:
+    """Guardas del pass de Gemini: rescate validado, orden de grupos
+    y early-exit en cooldown (sin quemar rescates de OpenAI)."""
+
+    def _pick(self, **kwargs) -> ParsedPick:
+        kwargs.setdefault("id", 42)
+        kwargs.setdefault("raw_message_id", 1)
+        kwargs.setdefault("es_apuesta", True)
+        kwargs.setdefault("es_combinada", False)
+        kwargs.setdefault("deporte", "fútbol")
+        kwargs.setdefault("evento", "Parma vs Inter de Milán")
+        kwargs.setdefault("mercado", "más/menos goles")
+        kwargs.setdefault("seleccion", "Más de 2.5 goles")
+        kwargs.setdefault("linea", 2.5)
+        kwargs.setdefault("cuota", 1.90)
+        kwargs.setdefault("fecha_evento", utc_now() - timedelta(days=2))
+        return ParsedPick(**kwargs)
+
+    def _settings(self):
+        return SimpleNamespace(google_api_key="test-key")
+
+    async def test_rescate_sin_forma_de_partido_marca_done(self, session, monkeypatch):
+        """El rescate devolvió basura ("Sáb - sep"): no vale como cruce,
+        el pick se marca done y no se gasta ninguna búsqueda."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        monkeypatch.setattr(hb, "rescue_evento", AsyncMock(return_value="Sáb - sep"))
+        multi = AsyncMock(return_value={})
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        pick = self._pick(id=50, evento="9,5 córners en total")
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [pick], set(), set(), session, apply=True, report=report
+        )
+
+        multi.assert_not_awaited()
+        assert pick.evento == "9,5 córners en total"  # no se ensucia
+        assert results_base.is_missed("llm-odds|done|50")
+
+    async def test_grupos_limpios_antes_que_rescatados(self, session, monkeypatch):
+        """Los eventos con cruce bueno de origen se buscan antes que
+        los que necesitaron rescate — la cuota escasa va a lo fiable."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        monkeypatch.setattr(
+            hb, "rescue_evento", AsyncMock(return_value="Alavés vs Valencia")
+        )
+        order: list[str] = []
+
+        async def multi(self, date, hint, descs):
+            order.append(hint)
+            return {}
+
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        # El rescatado va PRIMERO en la lista de candidatos (fecha más
+        # vieja) — la prioridad tiene que poner el limpio delante.
+        rescued_pick = self._pick(
+            id=51,
+            evento="9,5 córners en total",
+            fecha_evento=utc_now() - timedelta(days=5),
+        )
+        clean_pick = self._pick(id=52, evento="Sevilla vs Betis")
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [rescued_pick, clean_pick],
+            set(),
+            set(),
+            session,
+            apply=True,
+            report=report,
+        )
+
+        # El hint que se busca es el canónico (alias traducidos).
+        assert order == ["sevilla vs real betis", "alavés vs valencia"]
+
+    async def test_cooldown_no_quema_rescates(self, session, monkeypatch):
+        """En cooldown del free tier la pasada sale al principio: ni
+        un rescate de OpenAI ni una búsqueda."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        results_base.mark_cooldown("gemini-odds", utc_now() + timedelta(minutes=20))
+        rescue = AsyncMock(return_value="Alavés vs Valencia")
+        monkeypatch.setattr(hb, "rescue_evento", rescue)
+        multi = AsyncMock(return_value={})
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        pick = self._pick(id=53, evento="9,5 córners en total")
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [pick], set(), set(), session, apply=True, report=report
+        )
+
+        rescue.assert_not_awaited()
+        multi.assert_not_awaited()
+        # No marcada: se retoma cuando el cooldown expire.
+        assert not results_base.is_missed("llm-odds|done|53")
+
+    async def test_run_gemini_odds_pass_en_cooldown_devuelve_none(self, monkeypatch):
+        """El drenaje a goteo sale gratis si el provider está aparcado."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        results_base.mark_cooldown("gemini-odds", utc_now() + timedelta(minutes=20))
+        assert await hb.run_gemini_odds_pass(apply=True) is None
+
+    async def test_run_gemini_odds_pass_sin_key_devuelve_none(self, monkeypatch):
+        monkeypatch.setattr(
+            hb,
+            "get_settings",
+            lambda: SimpleNamespace(google_api_key=None),
+        )
+        assert await hb.run_gemini_odds_pass(apply=True) is None
+
+    async def test_evento_con_guion_no_renecesita_rescate(self, session, monkeypatch):
+        """`evento` ya bueno en formato "A - B": `_lookup_hint` lo
+        devuelve en minúsculas (canónico) y el check NO debe rechazarlo
+        ni llamar al rescate — antes se re-rescataba en cada pasada."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        rescue = AsyncMock(return_value=None)
+        monkeypatch.setattr(hb, "rescue_evento", rescue)
+        multi = AsyncMock(return_value={})
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        pick = self._pick(id=54, evento="Ipswich - Liverpool")
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [pick], set(), set(), session, apply=True, report=report
+        )
+
+        rescue.assert_not_awaited()
+        multi.assert_awaited_once()
+
+    async def test_deporte_sin_fuente_llega_a_la_busqueda(self, session, monkeypatch):
+        """Automovilismo no tiene provider de API ni cruce "A vs B"
+        ("GP ITALIA" es un evento, no un partido) — el goteo LLM debe
+        intentarlo igual en vez de dejarlo invisible para siempre."""
+        monkeypatch.setattr(hb, "get_settings", self._settings)
+        multi = AsyncMock(return_value={})
+        monkeypatch.setattr(GeminiResearchProvider, "find_closing_odds_multi", multi)
+        pick = self._pick(
+            id=54,
+            deporte="automovilismo",
+            evento="GP ITALIA",
+            mercado="coches clasificados",
+            seleccion="Menos de 19,5 coches",
+            linea=19.5,
+        )
+        report = hb.BackfillReport()
+        await hb._run_gemini_pass(
+            [pick], set(), set(), session, apply=True, report=report
+        )
+
+        multi.assert_awaited()
+        assert results_base.is_missed("llm-odds|done|54")

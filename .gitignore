@@ -1,0 +1,82 @@
+# ============================
+# Variables de entorno / secretos
+# ============================
+.env
+.env.*
+!.env.example
+!.env.*.example
+.ENV
+.ENV.*
+!.ENV.example
+!.ENV.*.example
+*.pem
+*.key
+
+# ============================
+# Node.js
+# ============================
+node_modules/
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+package-lock.json.bak
+
+# ============================
+# Python
+# ============================
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.coverage
+.ruff_cache/
+.pgdata_dev/
+
+# ============================
+# Telegram (Telethon) sesiones e imágenes descargadas
+# ============================
+*.session
+*.session-journal
+media/
+# Estado persistente de cuotas/fallos de las APIs de resultados
+provider_state.json
+# Caché persistente de respuestas (ids de entidad, listas de eventos)
+provider_cache.json
+
+# ============================
+# Backend: bases de datos locales y logs de desarrollo
+# ============================
+*.db
+*.log
+
+# ============================
+# Expo / React Native
+# ============================
+.expo/
+dist/
+web-build/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+android/app/build/
+android/.gradle/
+.metro-health-check*
+
+# ============================
+# Sistema / IDE
+# ============================
+.DS_Store
+*.tsbuildinfo
+
+# Backups de PostgreSQL (pg_dump) — nunca commitear dumps
+backups/
+backend/backups/
+
+# APKs locales (builds manuales)
+*.apk
+google-services.json

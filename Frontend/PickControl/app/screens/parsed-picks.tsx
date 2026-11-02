@@ -1,0 +1,1687 @@
+import React, { useCallback, useMemo, useState } from "react";
+import {
+  View,
+  Text,
+  ScrollView,
+  StyleSheet,
+  ActivityIndicator,
+  TouchableOpacity,
+  RefreshControl,
+  Alert,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFocusEffect, useRouter } from "expo-router";
+import TopBar from "@/src/components/top-bar";
+import BottomBar from "@/src/components/bottom-bar";
+import {
+  getParsedPicks,
+  updateParsedPickAcierto,
+  anularResiduoPendiente,
+  ParsedPick,
+} from "@/src/api/parsed-picks.api";
+import { listInformantes } from "@/src/api/informantes.api";
+import {
+  getProvidersStatus,
+  getPicksStatus,
+  ProvidersStatus,
+  PicksStatus,
+} from "@/src/api/system.api";
+import { useAuth } from "@/src/context/AuthContext";
+
+const OVERVIEW_PER_CHANNEL = 2;
+const CHANNEL_PAGE_SIZE = 20;
+
+function formatDate(isoDate: string): string {
+  const date = new Date(isoDate);
+  if (isNaN(date.getTime())) return isoDate;
+  return date.toLocaleString("es-ES", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function cleanChannel(name: string | null): string {
+  if (!name) return "desconocido";
+  // Los canales se llaman p. ej. "Dm7 || GRATUITO || ⚡️": quedarse solo
+  // con el primer segmento haría que "Dm7 || Allsports ||" y
+  // "Dm7 || GRATUITO ||" se vieran ambos como "Dm7". Unimos todos los
+  // segmentos con texto para que cada canal tenga un nombre distinto.
+  return (
+    name
+      .split("|")
+      .map((part) =>
+        part
+          .replace(/[^\p{L}\p{N}\s]/gu, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+      )
+      .filter(Boolean)
+      .join(" ") || "desconocido"
+  );
+}
+
+type ChannelGroup = {
+  key: string;
+  informanteId: number | null;
+  name: string;
+  picks: ParsedPick[];
+};
+
+export default function ParsedPicksScreen() {
+  const [overviewPicks, setOverviewPicks] = useState<ParsedPick[]>([]);
+  const [channelNames, setChannelNames] = useState<string[]>([]);
+  const [channelPicks, setChannelPicks] = useState<ParsedPick[]>([]);
+  const [selectedChannel, setSelectedChannel] = useState<{
+    id: number;
+    name: string;
+  } | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const [soloPendientes, setSoloPendientes] = useState(false);
+  const [providersStatus, setProvidersStatus] =
+    useState<ProvidersStatus | null>(null);
+  const [picksStatus, setPicksStatus] = useState<PicksStatus | null>(null);
+  const [dupPicks, setDupPicks] = useState<ParsedPick[]>([]);
+  const [dupsOpen, setDupsOpen] = useState(false);
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const { isAdmin } = useAuth();
+
+  const loadOverview = useCallback(
+    async (includeDiscarded: boolean, pending: boolean) => {
+      const [picksData, informantesData] = await Promise.all([
+        getParsedPicks({
+          perChannel: OVERVIEW_PER_CHANNEL,
+          soloApuestas: !includeDiscarded,
+          soloPendientes: pending,
+        }),
+        // Los canales reales vienen de /informantes (ya filtrado a
+        // es_canal_telegram), para que un canal sin picks en el filtro
+        // actual siga apareciendo como sección vacía.
+        listInformantes(),
+      ]);
+      setOverviewPicks(picksData);
+      setChannelNames(informantesData.map((i) => i.informante));
+    },
+    []
+  );
+
+  const loadChannel = useCallback(
+    async (
+      informanteId: number,
+      offset: number,
+      includeDiscarded: boolean,
+      pending: boolean
+    ) => {
+      const data = await getParsedPicks({
+        informanteId,
+        soloApuestas: !includeDiscarded,
+        soloPendientes: pending,
+        offset,
+        limit: CHANNEL_PAGE_SIZE,
+      });
+      if (offset === 0) {
+        setChannelPicks(data);
+      } else {
+        setChannelPicks((prev) => [...prev, ...data]);
+      }
+      setHasMore(data.length === CHANNEL_PAGE_SIZE);
+    },
+    []
+  );
+
+  const reload = useCallback(async () => {
+    try {
+      await loadOverview(showAll, soloPendientes);
+      if (selectedChannel) {
+        await loadChannel(selectedChannel.id, 0, showAll, soloPendientes);
+      }
+      // Panel de sistema: solo admin; un fallo aquí no rompe la lista.
+      if (isAdmin) {
+        getProvidersStatus()
+          .then(setProvidersStatus)
+          .catch(() => setProvidersStatus(null));
+        getPicksStatus()
+          .then(setPicksStatus)
+          .catch(() => setPicksStatus(null));
+        // Reposteos anulados por dedup: van a su card, fuera del listado.
+        getParsedPicks({ soloDuplicados: true, limit: 200 })
+          .then(setDupPicks)
+          .catch(() => setDupPicks([]));
+      }
+      setError(null);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }, [
+    loadOverview,
+    loadChannel,
+    selectedChannel,
+    showAll,
+    soloPendientes,
+    isAdmin,
+  ]);
+
+  // Recarga automáticamente cada vez que entras a esta pantalla (p. ej.
+  // al volver desde otra pestaña), sin tener que reabrir la app.
+  useFocusEffect(
+    useCallback(() => {
+      setLoading(true);
+      reload().finally(() => setLoading(false));
+    }, [reload])
+  );
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await reload();
+    setRefreshing(false);
+  }, [reload]);
+
+  const handleSelectChannel = useCallback(
+    async (channel: { id: number; name: string } | null) => {
+      setSelectedChannel(channel);
+      setChannelPicks([]);
+      setHasMore(false);
+      if (channel) {
+        try {
+          await loadChannel(channel.id, 0, showAll, soloPendientes);
+          setError(null);
+        } catch (err: any) {
+          setError(err.message);
+        }
+      }
+    },
+    [loadChannel, showAll, soloPendientes]
+  );
+
+  const handleLoadMore = useCallback(async () => {
+    if (!selectedChannel || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      await loadChannel(
+        selectedChannel.id,
+        channelPicks.length,
+        showAll,
+        soloPendientes
+      );
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [
+    selectedChannel,
+    loadingMore,
+    channelPicks.length,
+    loadChannel,
+    showAll,
+    soloPendientes,
+  ]);
+
+  const handleToggleShowAll = useCallback(async () => {
+    const next = !showAll;
+    setShowAll(next);
+    // El filtro es_apuesta se aplica en el backend ANTES del top-N,
+    // así que hay que refetchear para que el resumen no se quede con
+    // mensajes descartados ocupando los huecos de cada canal.
+    setLoading(true);
+    try {
+      await loadOverview(next, soloPendientes);
+      if (selectedChannel) {
+        await loadChannel(selectedChannel.id, 0, next, soloPendientes);
+      }
+      setError(null);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [showAll, loadOverview, loadChannel, selectedChannel, soloPendientes]);
+
+  const handleTogglePendientes = useCallback(async () => {
+    const next = !soloPendientes;
+    setSoloPendientes(next);
+    // Igual que showAll: el filtro va en el backend antes del top-N.
+    setLoading(true);
+    try {
+      await loadOverview(showAll, next);
+      if (selectedChannel) {
+        await loadChannel(selectedChannel.id, 0, showAll, next);
+      }
+      setError(null);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [soloPendientes, loadOverview, loadChannel, selectedChannel, showAll]);
+
+  // Clasifica el bloqueo de rate_limited: timestamp con "T" cercano =
+  // cooldown por ritmo (minutos); fecha desnuda (quota del día) o
+  // timestamp lejano (>24h) = quota agotada (reset diario/mensual).
+  const clasificarBloqueo = (raw: string | null) => {
+    if (!raw) return { cooldownHasta: null, quotaHasta: null };
+    if (raw.includes("T")) {
+      const until = new Date(raw).getTime();
+      if (Number.isFinite(until) && until - Date.now() > 24 * 3600 * 1000) {
+        return { cooldownHasta: null, quotaHasta: raw };
+      }
+      return { cooldownHasta: raw, quotaHasta: null };
+    }
+    return { cooldownHasta: null, quotaHasta: raw };
+  };
+
+  const providerRows = useMemo(() => {
+    if (!providersStatus) return [];
+    const names = new Set<string>([
+      ...Object.keys(providersStatus.rate_limited),
+      ...Object.keys(providersStatus.missed_by_provider),
+      ...Object.keys(providersStatus.calls_today ?? {}),
+      ...Object.keys(providersStatus.resolved_by_provider ?? {}),
+    ]);
+    return [...names]
+      .sort((a, b) => {
+        const aLimited = a in providersStatus.rate_limited;
+        const bLimited = b in providersStatus.rate_limited;
+        if (aLimited !== bLimited) return aLimited ? -1 : 1;
+        return a.localeCompare(b);
+      })
+      .map((name) => {
+        const limitedSince = providersStatus.rate_limited[name] ?? null;
+        return {
+          name,
+          limitedSince,
+          ...clasificarBloqueo(limitedSince),
+          misses: providersStatus.missed_by_provider[name] ?? 0,
+          callsToday: providersStatus.calls_today?.[name] ?? 0,
+          dailyLimit: providersStatus.daily_limits?.[name] ?? null,
+          resolved: providersStatus.resolved_by_provider?.[name] ?? 0,
+        };
+      });
+  }, [providersStatus]);
+
+  // Providers de la capa de cuotas (snapshotter + backfill histórico).
+  // Los comparten nombre con los de resultados (espn...) — la sección
+  // separa por rol, no por proveedor físico.
+  const oddsProviderRows = useMemo(() => {
+    if (!providersStatus) return [];
+    const known = new Set([
+      "espn",
+      "allsportsapi2",
+      "tennisapi1",
+      "sportapi7",
+      "sofascore6",
+      "sofascore_direct",
+      "oddspapi",
+      "oddsfeed",
+    ]);
+    // Fuentes de datos puras: snapshots propios o actividad conocida.
+    const names = new Set<string>(
+      [
+        ...Object.keys(providersStatus.odds_snapshots_by_provider ?? {}),
+        ...[...known].filter(
+          (n) =>
+            n in providersStatus.rate_limited ||
+            (providersStatus.calls_today?.[n] ?? 0) > 0
+        ),
+      ].filter(
+        (n) => !/^[a-z0-9]+-odds$/.test(n) && !n.startsWith("llm-compat")
+      )
+    );
+    const generic = [...names].map((name) => {
+      const limitedSince = providersStatus.rate_limited[name] ?? null;
+      return {
+        name,
+        limitedSince,
+        ...clasificarBloqueo(limitedSince),
+        callsToday: providersStatus.calls_today?.[name] ?? 0,
+        dailyLimit: providersStatus.daily_limits?.[name] ?? null,
+        snapshots: providersStatus.odds_snapshots_by_provider?.[name] ?? 0,
+        purposeCalls: {} as Record<string, number>,
+        extractOk: null as number | null,
+        extractFail: null as number | null,
+      };
+    });
+    // Motores del pipeline web+LLM: una fila por extractor
+    // (`{motor}-odds`). Las llamadas de groq/cerebras/openrouter se
+    // cuentan como `llm-compat-{motor}`; las de Gemini como
+    // `gemini-odds` (su calls_as histórico).
+    const engines = new Set<string>();
+    for (const src of [
+      providersStatus.calls_today ?? {},
+      providersStatus.rate_limited ?? {},
+      providersStatus.calls_by_purpose ?? {},
+    ]) {
+      for (const n of Object.keys(src)) {
+        const m = n.match(/^llm-compat-(.+)$/);
+        if (m) engines.add(m[1]);
+      }
+    }
+    for (const n of Object.keys(
+      providersStatus.odds_snapshots_by_provider ?? {}
+    )) {
+      const m = n.match(/^([a-z0-9]+)-odds$/);
+      if (m) engines.add(m[1]);
+    }
+    for (const n of Object.keys(providersStatus.extract_stats ?? {})) {
+      engines.add(n);
+    }
+    if (
+      "gemini-odds" in providersStatus.rate_limited ||
+      (providersStatus.calls_today?.["gemini-odds"] ?? 0) > 0
+    ) {
+      engines.add("gemini");
+    }
+    const engineRows = [...engines].map((engine) => {
+      const callMark =
+        engine === "gemini" ? "gemini-odds" : `llm-compat-${engine}`;
+      const rowProvider = `${engine}-odds`;
+      const limitedSince =
+        providersStatus.rate_limited[callMark] ??
+        providersStatus.rate_limited[rowProvider] ??
+        null;
+      const stats = providersStatus.extract_stats?.[engine];
+      return {
+        name: rowProvider,
+        limitedSince,
+        ...clasificarBloqueo(limitedSince),
+        callsToday: providersStatus.calls_today?.[callMark] ?? 0,
+        dailyLimit: providersStatus.daily_limits?.[callMark] ?? null,
+        snapshots:
+          providersStatus.odds_snapshots_by_provider?.[rowProvider] ?? 0,
+        purposeCalls: providersStatus.calls_by_purpose?.[callMark] ?? {},
+        extractOk: stats?.ok ?? null,
+        extractFail: stats?.fail ?? null,
+      };
+    });
+    return [...generic, ...engineRows].sort((a, b) => {
+      const aLimited = a.limitedSince !== null;
+      const bLimited = b.limitedSince !== null;
+      if (aLimited !== bLimited) return aLimited ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [providersStatus]);
+
+  const applyUpdate = (list: ParsedPick[], updated: ParsedPick) =>
+    list.map((p) => (p.id === updated.id ? updated : p));
+
+  const handleCorregirAcierto = async (
+    pick: ParsedPick,
+    update: { acierto?: boolean | null; anulada?: boolean }
+  ) => {
+    try {
+      const updated = await updateParsedPickAcierto(pick.id, update);
+      setOverviewPicks((prev) => applyUpdate(prev, updated));
+      setChannelPicks((prev) => applyUpdate(prev, updated));
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  // Corrección de una PATA de combinada: el PATCH re-liquida el padre
+  // en el backend, pero la pata no es fila de primer nivel en la UI —
+  // hay que recargar para verla y ver el nuevo estado de la combinada.
+  const handleCorregirPata = async (
+    pata: ParsedPick,
+    update: { acierto?: boolean | null; anulada?: boolean }
+  ) => {
+    try {
+      await updateParsedPickAcierto(pata.id, update);
+      await reload();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const handleAnularResiduo = useCallback(() => {
+    const n = picksStatus?.pendientes_backlog ?? 0;
+    Alert.alert(
+      "Anular residuo >14d",
+      `Se marcarán como anulados los ${n} pendientes que el verifier ya no reintenta. Salen de la cola y cuentan como void. ¿Seguir?`,
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Anular",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await anularResiduoPendiente();
+              await reload();
+            } catch (err: any) {
+              setError(err.message);
+            }
+          },
+        },
+      ]
+    );
+  }, [picksStatus, reload]);
+
+  const estadoPata = (pata: ParsedPick): string => {
+    if (pata.anulada) {
+      return pata.motivo_anulada
+        ? `Anulada · ${pata.motivo_anulada}`
+        : "Anulada";
+    }
+    if (pata.acierto === true) return "Acertó";
+    if (pata.acierto === false) return "Falló";
+    return "Pendiente";
+  };
+
+  const renderPataRow = (pata: ParsedPick) => (
+    <View key={pata.id} style={styles.pataRow}>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.pataText}>
+          {pata.orden != null ? `${pata.orden + 1}. ` : ""}
+          {pata.seleccion || "(pata)"}
+        </Text>
+        {pata.evento ? (
+          <Text style={styles.pataMeta}>{pata.evento}</Text>
+        ) : null}
+        <Text style={styles.pataMeta}>
+          {estadoPata(pata)}
+          {pata.verificado_por ? ` (${pata.verificado_por})` : ""}
+          {pata.fuera_ventana ? " · fuera de ventana" : ""}
+        </Text>
+      </View>
+      <View style={styles.pataButtons}>
+        <TouchableOpacity
+          onPress={() => handleCorregirPata(pata, { acierto: true })}
+        >
+          <Text style={styles.pataButton}>✅</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => handleCorregirPata(pata, { acierto: false })}
+        >
+          <Text style={styles.pataButton}>❌</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => handleCorregirPata(pata, { anulada: true })}
+        >
+          <Text style={styles.pataButton}>↩️</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() =>
+            handleCorregirPata(pata, { acierto: null, anulada: false })
+          }
+        >
+          <Text style={styles.pataButton}>❓</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  const channelGroups = useMemo<ChannelGroup[]>(() => {
+    const map = new Map<string, ChannelGroup>();
+    // Primero todos los canales reales: un canal sin picks en el filtro
+    // actual (p. ej. todos descartados) sigue apareciendo, vacío.
+    for (const nombre of channelNames) {
+      map.set(nombre, {
+        key: nombre,
+        informanteId: null,
+        name: cleanChannel(nombre),
+        picks: [],
+      });
+    }
+    for (const p of overviewPicks) {
+      const key = p.informante ?? "";
+      let group = map.get(key);
+      if (!group) {
+        group = {
+          key,
+          informanteId: p.informante_id,
+          name: cleanChannel(p.informante),
+          picks: [],
+        };
+        map.set(key, group);
+      }
+      group.informanteId = group.informanteId ?? p.informante_id;
+      group.picks.push(p);
+    }
+    return Array.from(map.values()).sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
+  }, [overviewPicks, channelNames]);
+
+  const renderPickCard = (pick: ParsedPick) => (
+    <View key={pick.id} style={styles.card}>
+      <Text style={styles.cardTitle}>{pick.apuesta || "Sin apuesta"}</Text>
+      <Text style={styles.cardDate}>
+        {formatDate(pick.fecha_evento ?? pick.created_at)}
+      </Text>
+      <Text style={styles.cardMeta}>
+        Canal:{" "}
+        <Text
+          style={styles.channelLink}
+          onPress={() =>
+            router.push(`/dynamic-routes/${pick.informante}` as any)
+          }
+        >
+          {cleanChannel(pick.informante)}
+        </Text>
+      </Text>
+      <Text style={styles.cardMeta}>
+        Cuota: {pick.cuota ?? "-"} | Stake: {pick.stake ?? "-"}
+      </Text>
+      <Text style={styles.cardMeta}>
+        Método: {pick.metodo} | Confianza: {pick.confianza}
+      </Text>
+      {showAll && (
+        <Text style={styles.cardMeta}>
+          Es apuesta: {pick.es_apuesta ? "Sí" : "No"}
+        </Text>
+      )}
+      {pick.explicacion && (
+        <Text style={styles.explanation}>{pick.explicacion}</Text>
+      )}
+
+      {pick.es_apuesta && (
+        <View style={styles.acertoSection}>
+          {pick.linea !== null && (
+            <Text style={styles.cardMeta}>Línea: {pick.linea}</Text>
+          )}
+          <Text style={styles.cardMeta}>
+            Resultado:{" "}
+            <Text
+              style={
+                pick.anulada
+                  ? styles.acertoAnulada
+                  : pick.acierto === true
+                    ? styles.acertoTrue
+                    : pick.acierto === false
+                      ? styles.acertoFalse
+                      : styles.acertoPending
+              }
+            >
+              {pick.anulada
+                ? pick.motivo_anulada
+                  ? `Anulada · ${pick.motivo_anulada}`
+                  : "Anulada"
+                : pick.acierto === true
+                  ? "Acertó"
+                  : pick.acierto === false
+                    ? "Falló"
+                    : "Pendiente"}
+            </Text>
+            {pick.verificado_por && (
+              <Text style={styles.cardMeta}> ({pick.verificado_por})</Text>
+            )}
+          </Text>
+          {pick.fuera_ventana && (
+            <Text style={styles.fueraVentana}>
+              fuera de ventana — ya no se reintenta
+            </Text>
+          )}
+
+          <View style={styles.acertoButtons}>
+            <TouchableOpacity
+              style={[styles.acertoButton, styles.acertoButtonTrue]}
+              onPress={() => handleCorregirAcierto(pick, { acierto: true })}
+            >
+              <Text style={styles.acertoButtonText}>Acertó</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.acertoButton, styles.acertoButtonFalse]}
+              onPress={() => handleCorregirAcierto(pick, { acierto: false })}
+            >
+              <Text style={styles.acertoButtonText}>Falló</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.acertoButton, styles.acertoButtonAnulada]}
+              onPress={() => handleCorregirAcierto(pick, { anulada: true })}
+            >
+              <Text style={styles.acertoButtonText}>Anulada</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.acertoButton, styles.acertoButtonPending]}
+              onPress={() =>
+                handleCorregirAcierto(pick, {
+                  acierto: null,
+                  anulada: false,
+                })
+              }
+            >
+              <Text style={styles.acertoButtonText}>Pendiente</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {pick.es_combinada && (pick.patas?.length ?? 0) > 0 && (
+        <View style={styles.acertoSection}>
+          <Text style={styles.cardMeta}>
+            Patas ({pick.patas!.length})
+            {pick.cuota_efectiva != null && pick.cuota_efectiva !== pick.cuota
+              ? ` · cuota efectiva ${pick.cuota_efectiva}`
+              : ""}
+          </Text>
+          {(pick.patas ?? []).map(renderPataRow)}
+        </View>
+      )}
+    </View>
+  );
+
+  return (
+    <View style={styles.container}>
+      <TopBar />
+      <ScrollView
+        contentContainerStyle={[
+          styles.scroll,
+          { paddingTop: 80 + insets.top, paddingBottom: 80 + insets.bottom },
+        ]}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor="#ff9f1c"
+          />
+        }
+      >
+        <Text style={styles.title}>Picks extraídos de Telegram</Text>
+
+        <TouchableOpacity
+          style={styles.toggleRow}
+          onPress={handleToggleShowAll}
+        >
+          <View style={[styles.checkbox, showAll && styles.checkboxChecked]} />
+          <Text style={styles.toggleLabel}>
+            Ver todos (incluye mensajes descartados por el filtro)
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.toggleRow}
+          onPress={handleTogglePendientes}
+        >
+          <View
+            style={[styles.checkbox, soloPendientes && styles.checkboxChecked]}
+          />
+          <Text style={styles.toggleLabel}>Solo pendientes de liquidar</Text>
+        </TouchableOpacity>
+
+        {isAdmin && providersStatus !== null && (
+          <View style={styles.systemCard}>
+            <Text style={styles.systemTitle}>Sistema · providers</Text>
+            {providerRows.length === 0 ? (
+              <Text style={styles.providerOk}>Todos operativos</Text>
+            ) : (
+              providerRows.map((row) => (
+                <View key={row.name} style={styles.providerItem}>
+                  <View style={styles.providerRow}>
+                    <Text style={styles.providerName} numberOfLines={1}>
+                      {row.name}
+                    </Text>
+                    <View
+                      style={[
+                        styles.providerBadge,
+                        row.quotaHasta
+                          ? styles.providerBadgeBad
+                          : row.cooldownHasta
+                            ? styles.providerBadgeWarn
+                            : styles.providerBadgeOk,
+                      ]}
+                    >
+                      <Text
+                        style={
+                          row.quotaHasta
+                            ? styles.providerBad
+                            : row.cooldownHasta
+                              ? styles.providerWarn
+                              : styles.providerOk
+                        }
+                      >
+                        {row.quotaHasta
+                          ? row.quotaHasta.includes("T")
+                            ? `quota → ${row.quotaHasta.slice(8, 10)}/${row.quotaHasta.slice(5, 7)}`
+                            : "quota hoy"
+                          : row.cooldownHasta
+                            ? "cooldown"
+                            : "OK"}
+                      </Text>
+                    </View>
+                  </View>
+                  {(row.callsToday > 0 ||
+                    row.misses > 0 ||
+                    row.resolved > 0 ||
+                    row.cooldownHasta !== null) && (
+                    <Text style={styles.providerMeta}>
+                      {row.cooldownHasta
+                        ? `hasta ${row.cooldownHasta
+                            .slice(5, 16)
+                            .replace("T", " ")} UTC`
+                        : ""}
+                      {row.cooldownHasta && row.callsToday > 0 ? " · " : ""}
+                      {row.callsToday > 0
+                        ? `${row.callsToday}${
+                            row.dailyLimit ? `/${row.dailyLimit}` : ""
+                          } llamada${row.callsToday !== 1 ? "s" : ""} hoy`
+                        : ""}
+                      {(row.cooldownHasta || row.callsToday > 0) &&
+                      row.misses > 0
+                        ? " · "
+                        : ""}
+                      {row.misses > 0
+                        ? `${row.misses} no encontrado${
+                            row.misses !== 1 ? "s" : ""
+                          } (en caché)`
+                        : ""}
+                      {(row.callsToday > 0 ||
+                        row.misses > 0 ||
+                        row.cooldownHasta) &&
+                      row.resolved > 0
+                        ? " · "
+                        : ""}
+                      {row.resolved > 0
+                        ? `${row.resolved} liquidada${
+                            row.resolved !== 1 ? "s" : ""
+                          }`
+                        : ""}
+                    </Text>
+                  )}
+                </View>
+              ))
+            )}
+          </View>
+        )}
+
+        {isAdmin && providersStatus !== null && (
+          <View style={styles.systemCard}>
+            <Text style={styles.systemTitle}>Sistema · cuotas</Text>
+            {oddsProviderRows.length === 0 ? (
+              <Text style={styles.providerOk}>Sin actividad aún</Text>
+            ) : (
+              oddsProviderRows.map((row) => (
+                <View key={row.name} style={styles.providerItem}>
+                  <View style={styles.providerRow}>
+                    <Text style={styles.providerName} numberOfLines={1}>
+                      {row.name}
+                    </Text>
+                    <View
+                      style={[
+                        styles.providerBadge,
+                        row.quotaHasta
+                          ? styles.providerBadgeBad
+                          : row.cooldownHasta
+                            ? styles.providerBadgeWarn
+                            : styles.providerBadgeOk,
+                      ]}
+                    >
+                      <Text
+                        style={
+                          row.quotaHasta
+                            ? styles.providerBad
+                            : row.cooldownHasta
+                              ? styles.providerWarn
+                              : styles.providerOk
+                        }
+                      >
+                        {row.quotaHasta
+                          ? row.quotaHasta.includes("T")
+                            ? `quota → ${row.quotaHasta.slice(8, 10)}/${row.quotaHasta.slice(5, 7)}`
+                            : "quota hoy"
+                          : row.cooldownHasta
+                            ? `cooldown · ${row.cooldownHasta.slice(
+                                11,
+                                16
+                              )} UTC`
+                            : "OK"}
+                      </Text>
+                    </View>
+                  </View>
+                  {(row.callsToday > 0 || row.snapshots > 0) && (
+                    <Text style={styles.providerMeta}>
+                      {row.callsToday > 0
+                        ? `${row.callsToday}${
+                            row.dailyLimit ? `/${row.dailyLimit}` : ""
+                          } llamada${row.callsToday !== 1 ? "s" : ""} hoy`
+                        : ""}
+                      {row.callsToday > 0 && row.snapshots > 0 ? " · " : ""}
+                      {row.snapshots > 0
+                        ? `${row.snapshots} cuota${
+                            row.snapshots !== 1 ? "s" : ""
+                          } registrada${row.snapshots !== 1 ? "s" : ""}`
+                        : ""}
+                    </Text>
+                  )}
+                  {Object.keys(row.purposeCalls).length > 0 && (
+                    <Text style={styles.providerMeta}>
+                      {Object.entries(row.purposeCalls)
+                        .map(([p, n]) => `${n} ${p}`)
+                        .join(" · ")}
+                    </Text>
+                  )}
+                  {row.extractOk !== null || row.extractFail !== null ? (
+                    <Text style={styles.providerMeta}>
+                      extracciones: {row.extractOk ?? 0} ok
+                      {(row.extractFail ?? 0) > 0
+                        ? ` · ${row.extractFail} fallos`
+                        : ""}
+                    </Text>
+                  ) : null}
+                </View>
+              ))
+            )}
+            <Text style={styles.statSub}>
+              {providersStatus.odds_events_count ?? 0} eventos con cuota
+              registrada
+            </Text>
+            {Object.entries(providersStatus.odds_snapshots_por_dia ?? {}).map(
+              ([dia, n]) => (
+                <Text key={dia} style={styles.statSub}>
+                  {dia.slice(8, 10)}/{dia.slice(5, 7)} → {n} cuota
+                  {n !== 1 ? "s" : ""} guardada{n !== 1 ? "s" : ""}
+                </Text>
+              )
+            )}
+            {providersStatus.odds_backfill && (
+              <View style={styles.funnel}>
+                <Text style={styles.funnelHint}>
+                  Un pick sale de la cola cuando todos los providers vivos lo
+                  han intentado (o su cuota ya está registrada).
+                </Text>
+                <Text style={styles.funnelHint}>
+                  Fase A: listar partidos del día (~3 llamadas por día, más si
+                  hay muchas páginas) · Fase B: bajar la curva de cuotas (1
+                  llamada por partido) · tope 40 llamadas/pasada.
+                </Text>
+                <View style={styles.providerRow}>
+                  <Text style={styles.statLabel}>Por auditar</Text>
+                  <Text style={styles.providerWarn}>
+                    {providersStatus.odds_backfill.total}
+                  </Text>
+                </View>
+                <View style={styles.providerRow}>
+                  <Text style={styles.statLabel}>· En cola</Text>
+                  <Text style={styles.providerBad}>
+                    {providersStatus.odds_backfill.en_cola}
+                  </Text>
+                </View>
+                <View style={styles.providerRow}>
+                  <Text style={styles.statLabel}>· Aplazados</Text>
+                  <Text style={styles.providerWarn}>
+                    {providersStatus.odds_backfill.aplazados}
+                  </Text>
+                </View>
+                {Object.entries(
+                  providersStatus.odds_backfill.fuentes_en_pausa
+                ).map(([name, until]) => (
+                  <Text key={name} style={styles.statSub}>
+                    {"   "}
+                    {name} en quota →{" "}
+                    {until.includes("T")
+                      ? `${until.slice(8, 10)}/${until.slice(5, 7)}`
+                      : until}{" "}
+                    (vuelven solos)
+                  </Text>
+                ))}
+                <View style={styles.providerRow}>
+                  <Text style={styles.statLabel}>· Cuota registrada</Text>
+                  <Text style={styles.providerOk}>
+                    {providersStatus.odds_backfill.resueltos}
+                  </Text>
+                </View>
+                {(() => {
+                  const porFuente = Object.entries(
+                    providersStatus.odds_backfill?.resueltos_por_fuente ?? {}
+                  ).filter(([, n]) => n > 0);
+                  return porFuente.length > 0 ? (
+                    <Text style={styles.statSub}>
+                      {"   "}por fuente:{" "}
+                      {porFuente.map(([n, c]) => `${n} ${c}`).join(" · ")}
+                    </Text>
+                  ) : null;
+                })()}
+                {(providersStatus.odds_backfill.agotados ?? 0) > 0 && (
+                  <View style={styles.providerRow}>
+                    <Text style={styles.statLabel}>· Nadie los tenía</Text>
+                    <Text style={styles.statValue}>
+                      {providersStatus.odds_backfill.agotados}
+                    </Text>
+                  </View>
+                )}
+                {(() => {
+                  const deudas = [
+                    ...Object.entries(
+                      providersStatus.odds_backfill?.por_fuente ?? {}
+                    ).filter(([, n]) => n > 0),
+                    ...((providersStatus.odds_backfill?.llm_pendientes ?? 0) > 0
+                      ? ([
+                          [
+                            "llm-odds",
+                            providersStatus.odds_backfill?.llm_pendientes ?? 0,
+                          ],
+                        ] as [string, number][])
+                      : []),
+                  ];
+                  return deudas.length > 0 ? (
+                    <Text style={styles.statSub}>
+                      Providers que aún les deben el intento:{" "}
+                      {deudas.map(([n, c]) => `${n} ${c}`).join(" · ")}
+                    </Text>
+                  ) : null;
+                })()}
+                {(providersStatus.odds_backfill.llm_procesados ?? 0) > 0 && (
+                  <Text style={styles.statSub}>
+                    Pipeline web+LLM:{" "}
+                    {providersStatus.odds_backfill.llm_procesados} ya procesados
+                    (con cuota o sin encontrarla)
+                  </Text>
+                )}
+                {(() => {
+                  // Historial de pasadas (más reciente primero); si aún
+                  // no existe la lista, al menos la última suelta.
+                  const pasadas = (
+                    providersStatus.odds_backfill?.ultimas_pasadas ??
+                    (providersStatus.odds_backfill?.ultima_pasada
+                      ? [providersStatus.odds_backfill.ultima_pasada]
+                      : [])
+                  )
+                    .slice(-5)
+                    .reverse();
+                  return pasadas.map((p, i) => (
+                    <Text key={p.at ?? i} style={styles.statSub}>
+                      {i === 0 ? "Última pasada" : "Pasada anterior"}{" "}
+                      {(p.at ?? "").slice(5, 16).replace("T", " ")} UTC ·{" "}
+                      {p.revisados ?? 0} revisados · {p.con_fixture ?? 0} con
+                      partido · {p.filas ?? 0} cuotas registradas
+                      {Object.keys(p.filas_por_fuente ?? {}).length > 0
+                        ? ` (${Object.entries(p.filas_por_fuente ?? {})
+                            .filter(([, n]) => n > 0)
+                            .map(([n, c]) => `${n} ${c}`)
+                            .join(" · ")})`
+                        : ""}
+                      {(p.sin_revisar ?? 0) > 0
+                        ? ` · ${p.sin_revisar} sin revisar (paga diaria agotada)`
+                        : ""}
+                    </Text>
+                  ));
+                })()}
+              </View>
+            )}
+          </View>
+        )}
+
+        {isAdmin && picksStatus !== null && (
+          <View style={styles.systemCard}>
+            <Text style={styles.systemTitle}>Sistema · verificación</Text>
+            <View style={styles.providerRow}>
+              <Text style={styles.statLabel}>Resueltas hoy</Text>
+              <Text style={styles.providerOk}>{picksStatus.resueltas_hoy}</Text>
+            </View>
+            <Text style={styles.statSub}>
+              {picksStatus.resueltas_hoy_evento_hoy} de eventos de hoy ·{" "}
+              {picksStatus.resueltas_hoy_evento_previo} backlog
+            </Text>
+            <View style={styles.providerRow}>
+              <Text style={styles.statLabel}>Pendientes</Text>
+              <Text style={styles.providerBad}>
+                {picksStatus.pendientes_simples +
+                  picksStatus.pendientes_patas +
+                  picksStatus.pendientes_combinadas}
+              </Text>
+            </View>
+            <Text style={styles.statSub}>
+              {picksStatus.pendientes_simples} simples ·{" "}
+              {picksStatus.pendientes_combinadas} combinadas (
+              {picksStatus.pendientes_patas} patas)
+            </Text>
+            <Text style={styles.statSub}>
+              {picksStatus.pendientes_jugados_ventana ?? 0} jugadas &lt;14d
+              {" · "}
+              {picksStatus.pendientes_futuros ?? 0} futuras / en juego
+              {(picksStatus.pendientes_sin_fecha ?? 0) > 0
+                ? ` · ${picksStatus.pendientes_sin_fecha} sin fecha`
+                : ""}
+            </Text>
+            <View style={styles.providerRow}>
+              <Text style={styles.statLabel}>· backlog &gt;14d</Text>
+              <Text
+                style={
+                  (picksStatus.pendientes_backlog ?? 0) > 0
+                    ? styles.providerBad
+                    : styles.statValue
+                }
+              >
+                {picksStatus.pendientes_backlog ?? 0}
+              </Text>
+            </View>
+            {(picksStatus.pendientes_backlog ?? 0) > 0 && (
+              <TouchableOpacity
+                style={styles.residuoButton}
+                onPress={handleAnularResiduo}
+              >
+                <Text style={styles.residuoButtonText}>
+                  Anular residuo &gt;14d ({picksStatus.pendientes_backlog})
+                </Text>
+              </TouchableOpacity>
+            )}
+            {Object.keys(picksStatus.pendientes_por_deporte ?? {}).length >
+              0 && (
+              <Text style={styles.statSub}>
+                {Object.entries(picksStatus.pendientes_por_deporte ?? {})
+                  .map(([dep, n]) => `${n} ${dep}`)
+                  .join(" · ")}
+              </Text>
+            )}
+            <View style={styles.providerRow}>
+              <Text style={styles.statLabel}>Resueltas total</Text>
+              <Text style={styles.providerOk}>
+                {picksStatus.resueltas_total}
+              </Text>
+            </View>
+            <Text style={styles.systemSubtitle}>Por día</Text>
+            {Object.entries(picksStatus.resueltas_por_dia).map(([dia, n]) => (
+              <View key={dia} style={styles.providerRow}>
+                <Text style={styles.statSubFlex}>{dia}</Text>
+                <Text style={styles.statValue}>{n}</Text>
+              </View>
+            ))}
+            {Object.keys(picksStatus.resueltas_por_pasada ?? {}).length > 0 && (
+              <>
+                <Text style={styles.systemSubtitle}>Por pasada (hoy, UTC)</Text>
+                {Object.entries(picksStatus.resueltas_por_pasada ?? {}).map(
+                  ([pasada, n]) => (
+                    <View key={pasada} style={styles.providerRow}>
+                      <Text style={styles.statSubFlex}>{pasada.slice(5)}</Text>
+                      <Text style={styles.statValue}>{n}</Text>
+                    </View>
+                  )
+                )}
+              </>
+            )}
+            {Object.keys(picksStatus.rechecks_por_dia ?? {}).length > 0 && (
+              <>
+                <Text style={styles.systemSubtitle}>
+                  Barrido de anuladas (diario)
+                </Text>
+                {Object.entries(picksStatus.rechecks_por_dia ?? {}).map(
+                  ([dia, r]) => (
+                    <View key={dia} style={styles.providerRow}>
+                      <Text style={styles.statSubFlex}>{dia.slice(5)}</Text>
+                      <Text style={styles.statValue}>
+                        {r.procesadas ?? 0} proc.
+                        {(r.corregidas ?? 0) > 0
+                          ? ` · ${r.corregidas} corregida${
+                              r.corregidas !== 1 ? "s" : ""
+                            }`
+                          : ""}
+                        {(r.confirmadas ?? 0) > 0
+                          ? ` · ${r.confirmadas} siguen anuladas`
+                          : ""}
+                      </Text>
+                    </View>
+                  )
+                )}
+              </>
+            )}
+          </View>
+        )}
+
+        {isAdmin && dupPicks.length > 0 && (
+          <View style={styles.systemCard}>
+            <TouchableOpacity onPress={() => setDupsOpen((v) => !v)}>
+              <Text style={styles.systemTitle}>
+                Duplicadas detectadas · {dupPicks.length} {dupsOpen ? "▲" : "▼"}
+              </Text>
+            </TouchableOpacity>
+            {dupsOpen ? (
+              dupPicks.map((p) => (
+                <View key={p.id} style={styles.providerItem}>
+                  <Text style={styles.providerName} numberOfLines={2}>
+                    #{p.id} {p.seleccion || p.apuesta || "(sin selección)"}
+                  </Text>
+                  <Text style={styles.providerMeta}>
+                    {cleanChannel(p.informante)} ·{" "}
+                    {formatDate(p.fecha_evento ?? p.created_at)}
+                    {p.cuota != null ? ` · cuota ${p.cuota}` : ""}
+                    {p.es_combinada
+                      ? ` · combinada (${p.patas?.length ?? 0} patas)`
+                      : ""}
+                  </Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.statSub}>
+                Reposteos del mismo pick/boleto anulados por dedup: fuera de
+                stats y del listado. Pulsa para verlas.
+              </Text>
+            )}
+          </View>
+        )}
+
+        {loading && <ActivityIndicator size="large" color="#ff9f1c" />}
+        {error && <Text style={styles.error}>Error: {error}</Text>}
+
+        {channelGroups.length > 0 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.channelList}
+          >
+            <TouchableOpacity
+              onPress={() => handleSelectChannel(null)}
+              style={[
+                styles.channelChip,
+                selectedChannel === null && styles.channelChipActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.channelChipText,
+                  selectedChannel === null && styles.channelChipTextActive,
+                ]}
+              >
+                Todos
+              </Text>
+            </TouchableOpacity>
+            {channelGroups
+              .filter((group) => group.informanteId !== null)
+              .map((group) => (
+                <TouchableOpacity
+                  key={group.key}
+                  onPress={() =>
+                    handleSelectChannel({
+                      id: group.informanteId as number,
+                      name: group.name,
+                    })
+                  }
+                  style={[
+                    styles.channelChip,
+                    selectedChannel?.id === group.informanteId &&
+                      styles.channelChipActive,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.channelChipText,
+                      selectedChannel?.id === group.informanteId &&
+                        styles.channelChipTextActive,
+                    ]}
+                  >
+                    {group.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+          </ScrollView>
+        )}
+
+        {selectedChannel === null ? (
+          <>
+            {channelGroups.length === 0 && !loading && (
+              <Text style={styles.emptyText}>
+                Todavía no hay picks extraídos.
+              </Text>
+            )}
+            {channelGroups.map((group) => (
+              <View key={group.key} style={styles.channelSection}>
+                <View style={styles.channelHeader}>
+                  <Text style={styles.channelTitle}>{group.name}</Text>
+                  {group.informanteId !== null && (
+                    <TouchableOpacity
+                      onPress={() =>
+                        handleSelectChannel({
+                          id: group.informanteId as number,
+                          name: group.name,
+                        })
+                      }
+                    >
+                      <Text style={styles.seeAll}>Ver todos →</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+                {group.picks.length === 0 ? (
+                  <Text style={styles.emptyChannel}>
+                    Sin picks extraídos con este filtro.
+                  </Text>
+                ) : (
+                  <>
+                    {group.picks
+                      .filter((p) => !p.es_reto && !p.es_combinada)
+                      .map(renderPickCard)}
+                    {group.picks.some((p) => p.es_combinada) && (
+                      <>
+                        <Text style={styles.retosTitle}>Combinadas</Text>
+                        {group.picks
+                          .filter((p) => p.es_combinada)
+                          .map(renderPickCard)}
+                      </>
+                    )}
+                    {group.picks.some((p) => p.es_reto) && (
+                      <>
+                        <Text style={styles.retosTitle}>Retos</Text>
+                        {group.picks
+                          .filter((p) => p.es_reto)
+                          .map(renderPickCard)}
+                      </>
+                    )}
+                  </>
+                )}
+              </View>
+            ))}
+          </>
+        ) : (
+          <>
+            <Text style={styles.count}>
+              {channelPicks.length} pick{channelPicks.length !== 1 ? "s" : ""}{" "}
+              de {selectedChannel.name}
+            </Text>
+            {channelPicks
+              .filter((p) => !p.es_reto && !p.es_combinada)
+              .map(renderPickCard)}
+            {channelPicks.some((p) => p.es_combinada) && (
+              <>
+                <Text style={styles.retosTitle}>Combinadas</Text>
+                {channelPicks.filter((p) => p.es_combinada).map(renderPickCard)}
+              </>
+            )}
+            {channelPicks.some((p) => p.es_reto) && (
+              <>
+                <Text style={styles.retosTitle}>Retos</Text>
+                {channelPicks.filter((p) => p.es_reto).map(renderPickCard)}
+              </>
+            )}
+            {hasMore && (
+              <TouchableOpacity
+                style={styles.loadMore}
+                onPress={handleLoadMore}
+                disabled={loadingMore}
+              >
+                {loadingMore ? (
+                  <ActivityIndicator size="small" color="#ff9f1c" />
+                ) : (
+                  <Text style={styles.loadMoreText}>Cargar más</Text>
+                )}
+              </TouchableOpacity>
+            )}
+          </>
+        )}
+      </ScrollView>
+      <BottomBar />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#0d0d0d",
+  },
+  scroll: {
+    paddingHorizontal: 16,
+  },
+  title: {
+    color: "#ff9f1c",
+    fontSize: 22,
+    fontWeight: "bold",
+    marginBottom: 16,
+  },
+  card: {
+    backgroundColor: "#1a1a1a",
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    borderColor: "#333",
+    borderWidth: 1,
+  },
+  cardTitle: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "bold",
+    marginBottom: 4,
+  },
+  cardDate: {
+    color: "#ff9f1c",
+    fontSize: 12,
+    marginBottom: 6,
+  },
+  cardMeta: {
+    color: "#aaa",
+    fontSize: 13,
+    marginBottom: 2,
+  },
+  explanation: {
+    color: "#ccc",
+    fontSize: 12,
+    marginTop: 8,
+  },
+  error: {
+    color: "red",
+    fontSize: 14,
+    marginBottom: 12,
+  },
+  emptyText: {
+    color: "#aaa",
+    fontSize: 14,
+    marginTop: 12,
+  },
+  emptyChannel: {
+    color: "#666",
+    fontSize: 13,
+    marginBottom: 12,
+    fontStyle: "italic",
+  },
+  channelList: {
+    paddingVertical: 8,
+    gap: 8,
+  },
+  channelChip: {
+    backgroundColor: "#1a1a1a",
+    borderColor: "#333",
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    marginRight: 8,
+  },
+  channelChipActive: {
+    backgroundColor: "#ff9f1c",
+    borderColor: "#ff9f1c",
+  },
+  channelChipText: {
+    color: "#aaa",
+    fontSize: 13,
+  },
+  channelChipTextActive: {
+    color: "#0d0d0d",
+    fontWeight: "bold",
+  },
+  channelSection: {
+    marginTop: 14,
+    marginBottom: 6,
+  },
+  channelHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#241a0d",
+    borderLeftWidth: 4,
+    borderLeftColor: "#ff9f1c",
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+  },
+  channelTitle: {
+    color: "#ff9f1c",
+    fontSize: 16,
+    fontWeight: "bold",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+    flexShrink: 1,
+  },
+  seeAll: {
+    color: "#ffcf8a",
+    fontSize: 13,
+    fontWeight: "bold",
+    marginLeft: 12,
+  },
+  retosTitle: {
+    color: "#b388ff",
+    fontSize: 15,
+    fontWeight: "bold",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginTop: 10,
+    marginBottom: 10,
+  },
+  count: {
+    color: "#aaa",
+    fontSize: 14,
+    marginBottom: 12,
+  },
+  loadMore: {
+    backgroundColor: "#1a1a1a",
+    borderColor: "#ff9f1c",
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  loadMoreText: {
+    color: "#ff9f1c",
+    fontSize: 14,
+    fontWeight: "bold",
+  },
+  toggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  checkbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: "#666",
+    marginRight: 8,
+  },
+  checkboxChecked: {
+    backgroundColor: "#ff9f1c",
+    borderColor: "#ff9f1c",
+  },
+  toggleLabel: {
+    color: "#aaa",
+    fontSize: 13,
+    flexShrink: 1,
+  },
+  systemCard: {
+    backgroundColor: "#141821",
+    borderColor: "#2d3a4f",
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 14,
+  },
+  systemTitle: {
+    color: "#7ab3ff",
+    fontSize: 13,
+    fontWeight: "bold",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  providerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 3,
+    gap: 8,
+  },
+  providerName: {
+    color: "#ddd",
+    fontSize: 13,
+    flex: 1,
+  },
+  providerOk: {
+    color: "#4caf50",
+    fontSize: 12,
+    fontWeight: "bold",
+  },
+  providerBad: {
+    color: "#f44336",
+    fontSize: 12,
+    fontWeight: "bold",
+  },
+  providerWarn: {
+    color: "#ff9800",
+    fontSize: 12,
+    fontWeight: "bold",
+  },
+  providerMisses: {
+    color: "#888",
+    fontSize: 11,
+  },
+  fueraVentana: {
+    color: "#ff9800",
+    fontSize: 11,
+    fontStyle: "italic",
+    marginTop: 2,
+  },
+  residuoButton: {
+    marginTop: 6,
+    backgroundColor: "rgba(244, 67, 54, 0.15)",
+    borderRadius: 8,
+    paddingVertical: 8,
+    alignItems: "center",
+  },
+  residuoButtonText: {
+    color: "#f44336",
+    fontSize: 12,
+    fontWeight: "bold",
+  },
+  systemSubtitle: {
+    color: "#6f8299",
+    fontSize: 11,
+    fontWeight: "bold",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginTop: 12,
+    marginBottom: 2,
+  },
+  providerItem: {
+    paddingVertical: 4,
+  },
+  providerBadge: {
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  providerBadgeOk: {
+    backgroundColor: "rgba(76, 175, 80, 0.15)",
+  },
+  providerBadgeBad: {
+    backgroundColor: "rgba(244, 67, 54, 0.15)",
+  },
+  providerBadgeWarn: {
+    backgroundColor: "rgba(255, 152, 0, 0.15)",
+  },
+  providerMeta: {
+    color: "#777",
+    fontSize: 11,
+    marginTop: 1,
+  },
+  statLabel: {
+    color: "#9aa4b2",
+    fontSize: 13,
+    flex: 1,
+  },
+  statSub: {
+    color: "#777",
+    fontSize: 11,
+    marginTop: 1,
+    marginBottom: 4,
+  },
+  statSubFlex: {
+    color: "#777",
+    fontSize: 11,
+    flex: 1,
+  },
+  statValue: {
+    color: "#ddd",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  funnel: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#333",
+  },
+  funnelHint: {
+    color: "#777",
+    fontSize: 10,
+    fontStyle: "italic",
+    marginBottom: 6,
+  },
+  acertoSection: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#333",
+  },
+  acertoTrue: {
+    color: "#4caf50",
+    fontWeight: "bold",
+  },
+  acertoFalse: {
+    color: "#f44336",
+    fontWeight: "bold",
+  },
+  acertoPending: {
+    color: "#ff9f1c",
+    fontWeight: "bold",
+  },
+  acertoAnulada: {
+    color: "#9e9e9e",
+    fontWeight: "bold",
+  },
+  acertoButtons: {
+    flexDirection: "row",
+    marginTop: 8,
+    gap: 8,
+  },
+  acertoButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    marginRight: 8,
+  },
+  pataRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 6,
+    borderTopWidth: 1,
+    borderTopColor: "#2a2a2a",
+  },
+  pataText: {
+    color: "#e5e5e5",
+    fontSize: 13,
+  },
+  pataMeta: {
+    color: "#888",
+    fontSize: 11,
+    marginTop: 2,
+  },
+  pataButtons: {
+    flexDirection: "row",
+    marginLeft: 8,
+  },
+  pataButton: {
+    fontSize: 16,
+    marginLeft: 6,
+  },
+  acertoButtonTrue: {
+    backgroundColor: "#1e3a24",
+    borderColor: "#4caf50",
+    borderWidth: 1,
+  },
+  acertoButtonFalse: {
+    backgroundColor: "#3a1e1e",
+    borderColor: "#f44336",
+    borderWidth: 1,
+  },
+  acertoButtonAnulada: {
+    backgroundColor: "#2a2a2a",
+    borderColor: "#9e9e9e",
+    borderWidth: 1,
+  },
+  acertoButtonPending: {
+    backgroundColor: "#332a1a",
+    borderColor: "#ff9f1c",
+    borderWidth: 1,
+  },
+  acertoButtonText: {
+    color: "#fff",
+    fontSize: 12,
+  },
+  channelLink: {
+    color: "#ff9f1c",
+    textDecorationLine: "underline",
+  },
+});

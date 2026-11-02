@@ -1,0 +1,35 @@
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+# Pin: sqlmodel>=0.0.44 mapea `datetime` a TIMESTAMP WITH TIME ZONE y
+# sqlalchemy>=2.0.50 rechaza datetimes naive en esas columnas; la BD del
+# proyecto es naive (`utc_now()` sin tz). No subir sin migrar esquema.
+sqlmodel==0.0.42
+sqlalchemy==2.0.52
+asyncpg>=0.29,<1.0
+alembic>=1.13,<2.0
+pydantic>=2.7,<3.0
+pydantic-settings>=2.4,<3.0
+email-validator>=2.1,<3.0
+python-jose[cryptography]>=3.3,<4.0
+passlib[bcrypt]>=1.7,<2.0
+# passlib 1.7.4 es incompatible con bcrypt>=4.1 (bug conocido: falla
+# "password cannot be longer than 72 bytes" al autodetectar el backend).
+bcrypt>=4.0.1,<4.1
+python-multipart>=0.0.9,<1.0
+
+# Logging estructurado: salida en consola (dev) o JSON (prod)
+structlog>=24.1,<25.0
+
+# OCR/LLM (solo se carga si OPENAI_API_KEY está configurado)
+openai>=1.0,<2.0
+
+# Telegram: cliente de usuario (Telethon) para escuchar canales, sustituye
+# a `node-telegram-bot-api` del backend Node retirado.
+telethon>=1.44,<2.0
+
+# API nativa de Sofascore: atraviesa el fingerprinting TLS de Cloudflare
+# (httpx/curl reciben 403). Usado por sofascore_native — cuota ilimitada.
+curl-cffi>=0.8,<1.0
+
+# XLSX de tennis-data.co.uk (backfill de cuotas ATP/WTA, gratis).
+openpyxl>=3.1,<4.0
