@@ -975,3 +975,25 @@ Spikes investigados (2026-10-14) — resultados:
    mandaba queries de totales — dirección equivocada.
 4. **Tarjetas de jugador**: ni The Odds API ni Sofascore las tienen —
    solo oddspapi/bet365 (o eventualmente mercado de intercambio).
+
+## Cosecha manual de cuotas — OddsPortal via userscript (2026-10-24)
+
+Canal nuevo para el backlog histórico: el comparador carga las cuotas
+por XHR cifrado tras la hidratación del SPA (FlareSolverr pasa CF y el
+muro de edad ES pero el HTML llega vacío — la vía server-side queda
+descartada tras verificarlo). El navegador del usuario hace todo eso
+gratis, así que la cosecha es push, no pull:
+
+- `GET  /api/v1/odds-harvest/queue` — eventos con picks pendientes.
+- `POST /api/v1/odds-harvest/event` — filas de cuotas del DOM.
+- Auth: `ODDS_HARVEST_TOKEN` en cabecera `X-Harvest-Key`.
+- Userscript: `userscripts/controlpick-oddsportal.user.js` (Tampermonkey
+  en el PC; recorre la cola solo, estado en localStorage).
+- Las filas se guardan `provider="oddsportal"` con el mismo contrato
+  que una fuente de backfill (cuenta en el embudo y `resueltos_por_fuente`).
+
+**Pendiente — port a la app**: el extractor JS es standalone y portable;
+la app puede abrir un WebView oculto (`react-native-webview`), inyectarlo
+con `injectedJavaScript` y recoger las filas por `onMessage` — botón
+"Cosechar backlog" que corre con la app abierta (~5-10 min para ~60
+partidos). Mismo backend, mismo token.

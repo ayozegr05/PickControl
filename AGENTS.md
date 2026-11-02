@@ -97,7 +97,13 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
   - `app/services/odds/` — snapshots de cuotas de mercado (auditoría del
     tipster): ESPN (`espn_odds.py`, pickcenter/DraftKings gratis) primero
     para fútbol/basket (solo ganador/total/hándicap), luego Sofascore
-    (allsportsapi2 dedicado, tennisapi1 scavenger). Espacios de ids por
+    (allsportsapi2 dedicado, tennisapi1 scavenger). Al final de la
+    cadena, `apihub.py` (key `APIHUB_KEY`): 1xBet vía APIHub con
+    mercados etiquetados profundos — "Corners → 3Way Total" es el
+    mercado EXACTO del tipster (líneas enteras Más/Exactamente/Menos,
+    ~1.50) — más FlashScore de respaldo vivo (~7 días); enriquece
+    eventos ya enlazados vía `_capture_apihub_odds` (cuota
+    100/mes/servicio, cooldown al 402). Espacios de ids por
     familia (`ID_PREFIX` "espn:"/"sofascore:"): el snapshotter solo pasa
     a capturar ids al provider que los emitió. Job periódico
     `snapshotter.py`, mapeo pick→mercado y comparación en `compare.py`.
@@ -108,7 +114,24 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     cuya `fecha_evento` es la del repost y el backfill les escribe la
     fecha real del fixture) → `tennisdata.py` (tennis-data.co.uk
     gratis) → `oddspapi` → `oddsfeed` → `gemini-odds` (último
-    recurso). Ver ROADMAP §5.
+    recurso). OddsPapi corre por el canal DIRECTO api.oddspapi.io
+    (`ODDSPAPI_DIRECT_KEY`, `direct=True` en `OddsPapiClient`):
+    `/v4/historical-odds` es GRATIS ilimitado (curva completa bet365,
+    ~244 mercados/partido); solo `/v4/fixtures`+`/v4/markets` gastan
+    las ~250 req/mes del plan free, con cooldown por endpoint (5 s
+    histórico, 2 s resto) — si la cuota billable llega a 0 el gratis
+    también da 429. RapidAPI bet36528 queda de respaldo latente.
+    Catálogo sin mercado "Exactly" 3-way (corners/tarjetas solo 2-way).
+    Props de jugador: el payload histórico trae las cuotas por jugador
+    bajo `outcomes.<id>.players["<playerId>"]` (sin nombre — el equipo
+    vive en `players["0"]`); `/v4/players` es el diccionario
+    id→nombre (billable, cacheable). En vivo, `/v4/odds` sí incluye
+    `playerName` por punto — vía futura de apoyo al snapshotter si
+    algún día sobra cuota (hoy las props en vivo ya las cubren
+    betsapi2 + theoddsapi + apihub). Además `fivedollar.py` (5DollarFootballAPI, key
+    `FIVEDOLLAR_KEY`, plan Free 60 req/h): apertura+cierre REALES de
+    bet365 en las 5 grandes ligas, ~3 meses de histórico — payload en
+    `fivedollar_data/` para re-traducción offline. Ver ROADMAP §5.
 - **Frontend** `Frontend/PickControl/` — Expo + React Native + TypeScript,
   Expo Router (`app/screens/`, `app/dynamic-routes/`), cliente en `src/api/`.
 
@@ -152,6 +175,12 @@ diario pg_dump a `backend/backups/` con retención 14 días, ignorado por git).
   pick del texto hacia adelante. Los picks emparejados llevan `metodo` con
   sufijo `+par`.
 - **Retos** (`parsed_picks.es_reto`): tabla y stats aparte.
+- **`sospecha_mercado='3way'`**: flag de auditoría (no cambia la
+  liquidación) en picks anulados `motivo_anulada='push'` con línea
+  entera de córners/tarjetas — el tipster probablemente juega el
+  mercado a 3 vías de 1xBet (línea exacta pierde, no devuelve). El
+  verifier lo marca solo al liquidar push; con snapshots 1xBet se
+  confirma por huella de precio (~1.5 vs ~1.25 del 2-way).
 - **Combinadas** (self-FK `parsed_picks.combinada_id`, ADR en la migración
   `f1a2b3c4d5e6`): padre `es_combinada=True` + patas como filas normales.
   Las patas se verifican solas pero NUNCA cuentan en stats/listados de
