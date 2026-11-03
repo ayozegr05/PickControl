@@ -9,6 +9,7 @@ import {
   Alert,
   ScrollView,
   Platform,
+  KeyboardAvoidingView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Formik } from "formik";
@@ -17,9 +18,19 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import TopBar from "@/src/components/top-bar";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/src/context/AuthContext";
-import { login as loginApi } from "@/src/api/auth.api";
+import { login as loginApi, refresh as refreshApi } from "@/src/api/auth.api";
 import { ApiError } from "@/src/api/client";
-import { getSecureItem, setSecureItem } from "@/src/storage/secure";
+import {
+  getSecureItem,
+  removeSecureItem,
+  setSecureItem,
+} from "@/src/storage/secure";
+import {
+  isLegacyCredential,
+  parseStoredCredential,
+  serializeCredential,
+  StoredCredential,
+} from "@/src/storage/biometric-credentials";
 
 const LoginSchema = Yup.object().shape({
   email: Yup.string().email("Email inválido").required("El email es requerido"),
@@ -49,7 +60,8 @@ const LoginScreen = () => {
   const { login } = useAuth(); // Obtener la función de login del contexto de autenticación
   const insets = useSafeAreaInsets();
   const [isBiometricSupported, setIsBiometricSupported] = useState(false);
-  const [savedCredentials, setSavedCredentials] = useState(null);
+  const [savedCredentials, setSavedCredentials] =
+    useState<StoredCredential | null>(null);
   const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
@@ -66,13 +78,25 @@ const LoginScreen = () => {
 
   const checkSavedCredentials = async () => {
     try {
-      const credentials = await getSecureItem("userCredentials");
-      if (credentials) {
-        setSavedCredentials(JSON.parse(credentials));
-      }
+      const raw = await getSecureItem("userCredentials");
+      setSavedCredentials(parseStoredCredential(raw));
     } catch (error) {
       console.error("Error checking saved credentials:", error);
     }
+  };
+
+  const saveBiometricCredential = async (data: {
+    refresh_token: string;
+    user: { name: string; role: string };
+  }) => {
+    await setSecureItem(
+      "userCredentials",
+      serializeCredential({
+        refreshToken: data.refresh_token,
+        userName: data.user.name,
+        role: data.user.role,
+      })
+    );
   };
 
   const handleBiometricAuth = async () => {
@@ -99,14 +123,36 @@ const LoginScreen = () => {
         cancelLabel: "Cancelar",
         disableDeviceFallback: true,
       });
+      if (!result.success) return;
 
-      if (result.success) {
-        // Usar las credenciales guardadas para hacer login
-        const data = await loginApi(savedCredentials);
-        console.log("Usuario logueado: ", data.user.name);
-
+      if (isLegacyCredential(savedCredentials)) {
+        // Formato antiguo {email,password}: un último login con
+        // contraseña y se sobreescribe con el refresh token —
+        // migración en caliente, la password deja de persistirse.
+        const data = await loginApi({
+          email: savedCredentials.email,
+          password: savedCredentials.password,
+        });
+        await saveBiometricCredential(data);
         await login(data.token, data.user.name, data.user.role);
         router.replace("/");
+        return;
+      }
+
+      try {
+        const data = await refreshApi(savedCredentials.refreshToken);
+        // Rotación: el refresh token nuevo reemplaza al consumido.
+        await saveBiometricCredential(data);
+        await login(data.token, data.user.name, data.user.role);
+        router.replace("/");
+      } catch {
+        // Refresh caducado/revocado: fuera la credencial y login manual.
+        await removeSecureItem("userCredentials");
+        setSavedCredentials(null);
+        Alert.alert(
+          "Sesión caducada",
+          "Inicia sesión con tu contraseña para reactivar la huella"
+        );
       }
     } catch (error) {
       console.error("Error en autenticación biométrica:", error);
@@ -122,15 +168,9 @@ const LoginScreen = () => {
       });
       console.log("Usuario logueado: ", data.user.name);
 
-      // Guardar credenciales para el login biométrico (SecureStore:
-      // Keychain/Keystore cifrado por el SO, no texto plano).
-      await setSecureItem(
-        "userCredentials",
-        JSON.stringify({
-          email: values.email,
-          password: values.password,
-        })
-      );
+      // Credencial biométrica: solo el refresh token de larga
+      // duración — la contraseña NUNCA se persiste.
+      await saveBiometricCredential(data);
 
       // Hacer login con token y nombre
       await login(data.token, data.user.name, data.user.role);
@@ -147,7 +187,15 @@ const LoginScreen = () => {
   return (
     <View style={styles.container}>
       <TopBar />
-      <ScrollView contentContainerStyle={{ paddingBottom: 24 }}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 60 : 0}
+      >
+        <ScrollView
+          contentContainerStyle={{ paddingBottom: 24 }}
+          keyboardShouldPersistTaps="handled"
+        >
         <View style={[styles.formContainer, { marginTop: 80 + insets.top }]}>
           <View style={styles.headerContainer}>
             <Text style={styles.title}>Bienvenido</Text>
@@ -247,8 +295,9 @@ const LoginScreen = () => {
               </View>
             )}
           </Formik>
-        </View>
-      </ScrollView>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 };
@@ -257,6 +306,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#1a1a1a",
+  },
+  flex: {
+    flex: 1,
   },
   formContainer: {
     flex: 1,

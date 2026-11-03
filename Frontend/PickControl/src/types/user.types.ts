@@ -25,4 +25,6 @@ export interface AuthResponse {
   message: string;
   token: string;
   user: Pick<User, "id" | "name" | "email" | "role">;
+  // JWT de larga duración para el login biométrico (canje en /auth/refresh).
+  refresh_token: string;
 }

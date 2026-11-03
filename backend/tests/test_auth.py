@@ -75,3 +75,44 @@ class TestLogin:
             json={"email": "no-existe@example.com", "password": "cualquiera"},
         )
         assert response.status_code == 401
+
+
+class TestRefresh:
+    """El login biométrico canjea refresh tokens en /refresh en vez de
+    reenviar la contraseña guardada en el móvil."""
+
+    async def test_register_devuelve_refresh_token(self, client: AsyncClient):
+        response = await client.post("/api/v1/auth/register", json=REGISTER_PAYLOAD)
+
+        assert response.status_code == 201
+        assert response.json()["refresh_token"]
+
+    async def test_refresh_canjea_por_token_nuevo(self, client: AsyncClient):
+        registered = await client.post("/api/v1/auth/register", json=REGISTER_PAYLOAD)
+        refresh = registered.json()["refresh_token"]
+
+        response = await client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": refresh}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["token"]
+        assert data["refresh_token"]
+        assert data["user"]["email"] == REGISTER_PAYLOAD["email"]
+
+    async def test_refresh_token_acceso_rechazado(self, client: AsyncClient):
+        """Un access token NO puede usarse como refresh token."""
+        registered = await client.post("/api/v1/auth/register", json=REGISTER_PAYLOAD)
+        access = registered.json()["token"]
+
+        response = await client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": access}
+        )
+        assert response.status_code == 401
+
+    async def test_refresh_token_basura_rechazado(self, client: AsyncClient):
+        response = await client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": "no-es-un-jwt"}
+        )
+        assert response.status_code == 401

@@ -21,3 +21,12 @@ export function login(payload: LoginPayload): Promise<AuthResponse> {
     body: payload,
   });
 }
+
+// Canje de refresh token (login biométrico): el móvil guarda este
+// token de larga duración en SecureStore en vez de la contraseña.
+export function refresh(refreshToken: string): Promise<AuthResponse> {
+  return apiRequest<AuthResponse>("/auth/refresh", {
+    method: "POST",
+    body: { refresh_token: refreshToken },
+  });
+}

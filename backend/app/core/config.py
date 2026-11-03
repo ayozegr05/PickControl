@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     jwt_secret: str
     jwt_algorithm: str = "HS256"
     jwt_expires_minutes: int = 1440
+    # Refresh token para login biométrico: 30 días.
+    jwt_refresh_expires_minutes: int = 30 * 24 * 60
 
     # Telegram (cliente de usuario vía Telethon, ver app/services/telegram/)
     telegram_api_id: str | None = None

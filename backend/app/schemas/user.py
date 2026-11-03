@@ -33,8 +33,16 @@ class UserRead(UserBase):
 
 
 class AuthResponse(SQLModel):
-    """Respuesta de /register y /login."""
+    """Respuesta de /register, /login y /refresh."""
 
     message: str
     token: str
     user: UserRead
+    # JWT de larga duración para el login biométrico (canje en /refresh).
+    refresh_token: str
+
+
+class TokenRefresh(SQLModel):
+    """Payload de POST /auth/refresh."""
+
+    refresh_token: str

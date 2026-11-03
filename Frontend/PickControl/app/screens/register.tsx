@@ -8,6 +8,8 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
+  Platform,
+  KeyboardAvoidingView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Formik } from "formik";
@@ -70,7 +72,15 @@ const RegisterScreen = () => {
   return (
     <View style={styles.container}>
       <TopBar />
-      <ScrollView contentContainerStyle={{ paddingBottom: 24 }}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 60 : 0}
+      >
+        <ScrollView
+          contentContainerStyle={{ paddingBottom: 24 }}
+          keyboardShouldPersistTaps="handled"
+        >
         <View style={[styles.formContainer, { marginTop: 80 + insets.top }]}>
           <View style={styles.headerContainer}>
             <Text style={styles.title}>Crear Cuenta</Text>
@@ -171,12 +181,16 @@ const RegisterScreen = () => {
             )}
           </Formik>
         </View>
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
+  flex: {
+    flex: 1,
+  },
   container: {
     flex: 1,
     backgroundColor: "#1a1a1a",

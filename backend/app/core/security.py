@@ -39,7 +39,19 @@ def create_access_token(data: dict[str, Any]) -> str:
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=settings.jwt_expires_minutes
     )
-    to_encode = {**data, "exp": expire}
+    to_encode = {**data, "exp": expire, "type": "access"}
+    return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def create_refresh_token(data: dict[str, Any]) -> str:
+    """JWT de larga duración para el login biométrico: el móvil lo
+    guarda en SecureStore y lo canjea por un access token nuevo en
+    POST /auth/refresh. El claim `type` lo distingue: un access token
+    NO vale para refrescar."""
+    expire = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.jwt_refresh_expires_minutes
+    )
+    to_encode = {**data, "exp": expire, "type": "refresh"}
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 

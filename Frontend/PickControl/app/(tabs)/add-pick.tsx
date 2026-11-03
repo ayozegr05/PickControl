@@ -9,6 +9,8 @@ import {
   Alert,
   TouchableOpacity,
   ActivityIndicator,
+  Platform,
+  KeyboardAvoidingView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import RNPickerSelect from "react-native-picker-select";
@@ -173,10 +175,16 @@ const AddPick = () => {
       <TopBar />
 
       {/* ScrollView para asegurar que todo el formulario sea accesible en dispositivos mas pequenos */}
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={{ paddingBottom: 24 }}
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 80 : 0}
       >
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={{ paddingBottom: 24 }}
+          keyboardShouldPersistTaps="handled"
+        >
         <Text style={styles.text}>Anade tu apuesta</Text>
         {/* Card que contiene el formulario */}
         <View style={styles.card}>
@@ -336,7 +344,8 @@ const AddPick = () => {
             <Text style={styles.buttonText}>Enviar Apuesta</Text>
           </TouchableOpacity>
         </View>
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Bottom Bar */}
     </View>
@@ -345,6 +354,10 @@ const AddPick = () => {
 
 // Estilos para los componentes
 const styles = StyleSheet.create({
+  flex: {
+    flex: 1,
+    width: "100%",
+  },
   container: {
     flex: 1,
     justifyContent: "flex-start",

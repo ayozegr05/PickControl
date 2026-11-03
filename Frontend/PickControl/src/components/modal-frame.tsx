@@ -4,7 +4,9 @@
 // duplicado en 4 modales de [informante].tsx.
 import React from "react";
 import {
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -30,7 +32,10 @@ export default function ModalFrame({
       visible={visible}
       onRequestClose={onClose}
     >
-      <View style={styles.modalContainer}>
+      <KeyboardAvoidingView
+        style={styles.modalContainer}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
         <View style={styles.modalContent}>
           <TouchableOpacity
             style={styles.closeButton}
@@ -43,7 +48,7 @@ export default function ModalFrame({
           </TouchableOpacity>
           {children}
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
