@@ -2,7 +2,6 @@ import React, { useCallback, useMemo, useState } from "react";
 import {
   View,
   Text,
-  ScrollView,
   FlatList,
   StyleSheet,
   ActivityIndicator,
@@ -26,19 +25,24 @@ import {
   ProvidersStatus,
   PicksStatus,
 } from "@/src/api/system.api";
-import {
-  formatDateTime as formatDate,
-  cleanChannel,
-} from "@/src/utils/format";
+import { cleanChannel } from "@/src/utils/format";
 import { useParsedPicks } from "@/src/hooks/useParsedPicks";
 import ParsedPickCard from "@/src/components/parsed-pick-card";
-
-type ChannelGroup = {
-  key: string;
-  informanteId: number | null;
-  name: string;
-  picks: ParsedPick[];
-};
+import {
+  ProvidersCard,
+  CuotasCard,
+  VerificacionCard,
+  DuplicadosCard,
+} from "@/src/components/admin-panels";
+import ChannelChips from "@/src/components/channel-chips";
+import ChannelSection, {
+  ChannelGroup,
+  PickCardProps,
+} from "@/src/components/channel-section";
+import {
+  buildProviderRows,
+  buildOddsProviderRows,
+} from "@/src/utils/providers";
 
 export default function ParsedPicksScreen() {
   const {
@@ -67,7 +71,6 @@ export default function ParsedPicksScreen() {
     useState<ProvidersStatus | null>(null);
   const [picksStatus, setPicksStatus] = useState<PicksStatus | null>(null);
   const [dupPicks, setDupPicks] = useState<ParsedPick[]>([]);
-  const [dupsOpen, setDupsOpen] = useState(false);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { isAdmin } = useAuth();
@@ -96,151 +99,16 @@ export default function ParsedPicksScreen() {
     }, [reload, loadAdminExtras])
   );
 
-  // Clasifica el bloqueo de rate_limited: timestamp con "T" cercano =
-  // cooldown por ritmo (minutos); fecha desnuda (quota del día) o
-  // timestamp lejano (>24h) = quota agotada (reset diario/mensual).
-  const clasificarBloqueo = (raw: string | null) => {
-    if (!raw) return { cooldownHasta: null, quotaHasta: null };
-    if (raw.includes("T")) {
-      const until = new Date(raw).getTime();
-      if (Number.isFinite(until) && until - Date.now() > 24 * 3600 * 1000) {
-        return { cooldownHasta: null, quotaHasta: raw };
-      }
-      return { cooldownHasta: raw, quotaHasta: null };
-    }
-    return { cooldownHasta: null, quotaHasta: raw };
-  };
-
-  const providerRows = useMemo(() => {
-    if (!providersStatus) return [];
-    const names = new Set<string>([
-      ...Object.keys(providersStatus.rate_limited),
-      ...Object.keys(providersStatus.missed_by_provider),
-      ...Object.keys(providersStatus.calls_today ?? {}),
-      ...Object.keys(providersStatus.resolved_by_provider ?? {}),
-    ]);
-    return [...names]
-      .sort((a, b) => {
-        const aLimited = a in providersStatus.rate_limited;
-        const bLimited = b in providersStatus.rate_limited;
-        if (aLimited !== bLimited) return aLimited ? -1 : 1;
-        return a.localeCompare(b);
-      })
-      .map((name) => {
-        const limitedSince = providersStatus.rate_limited[name] ?? null;
-        return {
-          name,
-          limitedSince,
-          ...clasificarBloqueo(limitedSince),
-          misses: providersStatus.missed_by_provider[name] ?? 0,
-          callsToday: providersStatus.calls_today?.[name] ?? 0,
-          dailyLimit: providersStatus.daily_limits?.[name] ?? null,
-          resolved: providersStatus.resolved_by_provider?.[name] ?? 0,
-        };
-      });
-  }, [providersStatus]);
-
-  // Providers de la capa de cuotas (snapshotter + backfill histórico).
-  // Los comparten nombre con los de resultados (espn...) — la sección
-  // separa por rol, no por proveedor físico.
-  const oddsProviderRows = useMemo(() => {
-    if (!providersStatus) return [];
-    const known = new Set([
-      "espn",
-      "allsportsapi2",
-      "tennisapi1",
-      "sportapi7",
-      "sofascore6",
-      "sofascore_direct",
-      "oddspapi",
-      "oddsfeed",
-    ]);
-    // Fuentes de datos puras: snapshots propios o actividad conocida.
-    const names = new Set<string>(
-      [
-        ...Object.keys(providersStatus.odds_snapshots_by_provider ?? {}),
-        ...[...known].filter(
-          (n) =>
-            n in providersStatus.rate_limited ||
-            (providersStatus.calls_today?.[n] ?? 0) > 0
-        ),
-      ].filter(
-        (n) => !/^[a-z0-9]+-odds$/.test(n) && !n.startsWith("llm-compat")
-      )
-    );
-    const generic = [...names].map((name) => {
-      const limitedSince = providersStatus.rate_limited[name] ?? null;
-      return {
-        name,
-        limitedSince,
-        ...clasificarBloqueo(limitedSince),
-        callsToday: providersStatus.calls_today?.[name] ?? 0,
-        dailyLimit: providersStatus.daily_limits?.[name] ?? null,
-        snapshots: providersStatus.odds_snapshots_by_provider?.[name] ?? 0,
-        purposeCalls: {} as Record<string, number>,
-        extractOk: null as number | null,
-        extractFail: null as number | null,
-      };
-    });
-    // Motores del pipeline web+LLM: una fila por extractor
-    // (`{motor}-odds`). Las llamadas de groq/cerebras/openrouter se
-    // cuentan como `llm-compat-{motor}`; las de Gemini como
-    // `gemini-odds` (su calls_as histórico).
-    const engines = new Set<string>();
-    for (const src of [
-      providersStatus.calls_today ?? {},
-      providersStatus.rate_limited ?? {},
-      providersStatus.calls_by_purpose ?? {},
-    ]) {
-      for (const n of Object.keys(src)) {
-        const m = n.match(/^llm-compat-(.+)$/);
-        if (m) engines.add(m[1]);
-      }
-    }
-    for (const n of Object.keys(
-      providersStatus.odds_snapshots_by_provider ?? {}
-    )) {
-      const m = n.match(/^([a-z0-9]+)-odds$/);
-      if (m) engines.add(m[1]);
-    }
-    for (const n of Object.keys(providersStatus.extract_stats ?? {})) {
-      engines.add(n);
-    }
-    if (
-      "gemini-odds" in providersStatus.rate_limited ||
-      (providersStatus.calls_today?.["gemini-odds"] ?? 0) > 0
-    ) {
-      engines.add("gemini");
-    }
-    const engineRows = [...engines].map((engine) => {
-      const callMark =
-        engine === "gemini" ? "gemini-odds" : `llm-compat-${engine}`;
-      const rowProvider = `${engine}-odds`;
-      const limitedSince =
-        providersStatus.rate_limited[callMark] ??
-        providersStatus.rate_limited[rowProvider] ??
-        null;
-      const stats = providersStatus.extract_stats?.[engine];
-      return {
-        name: rowProvider,
-        limitedSince,
-        ...clasificarBloqueo(limitedSince),
-        callsToday: providersStatus.calls_today?.[callMark] ?? 0,
-        dailyLimit: providersStatus.daily_limits?.[callMark] ?? null,
-        snapshots:
-          providersStatus.odds_snapshots_by_provider?.[rowProvider] ?? 0,
-        purposeCalls: providersStatus.calls_by_purpose?.[callMark] ?? {},
-        extractOk: stats?.ok ?? null,
-        extractFail: stats?.fail ?? null,
-      };
-    });
-    return [...generic, ...engineRows].sort((a, b) => {
-      const aLimited = a.limitedSince !== null;
-      const bLimited = b.limitedSince !== null;
-      if (aLimited !== bLimited) return aLimited ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
-  }, [providersStatus]);
+  // Filas de los paneles admin: la forma de cada fila la construyen
+  // las funciones puras de src/utils/providers.ts.
+  const providerRows = useMemo(
+    () => (providersStatus ? buildProviderRows(providersStatus) : []),
+    [providersStatus]
+  );
+  const oddsProviderRows = useMemo(
+    () => (providersStatus ? buildOddsProviderRows(providersStatus) : []),
+    [providersStatus]
+  );
 
   const applyUpdate = (list: ParsedPick[], updated: ParsedPick) =>
     list.map((p) => (p.id === updated.id ? updated : p));
@@ -353,20 +221,19 @@ export default function ParsedPicksScreen() {
     return rows;
   }, [channelPicks, selectedChannel]);
 
+  const pickCardProps: PickCardProps = {
+    showAll,
+    onCorregir: handleCorregirAcierto,
+    onCorregirPata: handleCorregirPata,
+    onChannelPress: (informante) =>
+      router.push({
+        pathname: "/dynamic-routes/[informante]",
+        params: { informante },
+      }),
+  };
+
   const renderPickCard = (pick: ParsedPick) => (
-    <ParsedPickCard
-      key={pick.id}
-      pick={pick}
-      showAll={showAll}
-      onCorregir={handleCorregirAcierto}
-      onCorregirPata={handleCorregirPata}
-      onChannelPress={(informante) =>
-        router.push({
-          pathname: "/dynamic-routes/[informante]",
-          params: { informante },
-        })
-      }
-    />
+    <ParsedPickCard key={pick.id} pick={pick} {...pickCardProps} />
   );
 
   return (
@@ -424,509 +291,33 @@ export default function ParsedPicksScreen() {
         </TouchableOpacity>
 
         {isAdmin && providersStatus !== null && (
-          <View style={styles.systemCard}>
-            <Text style={styles.systemTitle}>Sistema · providers</Text>
-            {providerRows.length === 0 ? (
-              <Text style={styles.providerOk}>Todos operativos</Text>
-            ) : (
-              providerRows.map((row) => (
-                <View key={row.name} style={styles.providerItem}>
-                  <View style={styles.providerRow}>
-                    <Text style={styles.providerName} numberOfLines={1}>
-                      {row.name}
-                    </Text>
-                    <View
-                      style={[
-                        styles.providerBadge,
-                        row.quotaHasta
-                          ? styles.providerBadgeBad
-                          : row.cooldownHasta
-                            ? styles.providerBadgeWarn
-                            : styles.providerBadgeOk,
-                      ]}
-                    >
-                      <Text
-                        style={
-                          row.quotaHasta
-                            ? styles.providerBad
-                            : row.cooldownHasta
-                              ? styles.providerWarn
-                              : styles.providerOk
-                        }
-                      >
-                        {row.quotaHasta
-                          ? row.quotaHasta.includes("T")
-                            ? `quota → ${row.quotaHasta.slice(8, 10)}/${row.quotaHasta.slice(5, 7)}`
-                            : "quota hoy"
-                          : row.cooldownHasta
-                            ? "cooldown"
-                            : "OK"}
-                      </Text>
-                    </View>
-                  </View>
-                  {(row.callsToday > 0 ||
-                    row.misses > 0 ||
-                    row.resolved > 0 ||
-                    row.cooldownHasta !== null) && (
-                    <Text style={styles.providerMeta}>
-                      {row.cooldownHasta
-                        ? `hasta ${row.cooldownHasta
-                            .slice(5, 16)
-                            .replace("T", " ")} UTC`
-                        : ""}
-                      {row.cooldownHasta && row.callsToday > 0 ? " · " : ""}
-                      {row.callsToday > 0
-                        ? `${row.callsToday}${
-                            row.dailyLimit ? `/${row.dailyLimit}` : ""
-                          } llamada${row.callsToday !== 1 ? "s" : ""} hoy`
-                        : ""}
-                      {(row.cooldownHasta || row.callsToday > 0) &&
-                      row.misses > 0
-                        ? " · "
-                        : ""}
-                      {row.misses > 0
-                        ? `${row.misses} no encontrado${
-                            row.misses !== 1 ? "s" : ""
-                          } (en caché)`
-                        : ""}
-                      {(row.callsToday > 0 ||
-                        row.misses > 0 ||
-                        row.cooldownHasta) &&
-                      row.resolved > 0
-                        ? " · "
-                        : ""}
-                      {row.resolved > 0
-                        ? `${row.resolved} liquidada${
-                            row.resolved !== 1 ? "s" : ""
-                          }`
-                        : ""}
-                    </Text>
-                  )}
-                </View>
-              ))
-            )}
-          </View>
+          <ProvidersCard rows={providerRows} />
         )}
 
         {isAdmin && providersStatus !== null && (
-          <View style={styles.systemCard}>
-            <Text style={styles.systemTitle}>Sistema · cuotas</Text>
-            {oddsProviderRows.length === 0 ? (
-              <Text style={styles.providerOk}>Sin actividad aún</Text>
-            ) : (
-              oddsProviderRows.map((row) => (
-                <View key={row.name} style={styles.providerItem}>
-                  <View style={styles.providerRow}>
-                    <Text style={styles.providerName} numberOfLines={1}>
-                      {row.name}
-                    </Text>
-                    <View
-                      style={[
-                        styles.providerBadge,
-                        row.quotaHasta
-                          ? styles.providerBadgeBad
-                          : row.cooldownHasta
-                            ? styles.providerBadgeWarn
-                            : styles.providerBadgeOk,
-                      ]}
-                    >
-                      <Text
-                        style={
-                          row.quotaHasta
-                            ? styles.providerBad
-                            : row.cooldownHasta
-                              ? styles.providerWarn
-                              : styles.providerOk
-                        }
-                      >
-                        {row.quotaHasta
-                          ? row.quotaHasta.includes("T")
-                            ? `quota → ${row.quotaHasta.slice(8, 10)}/${row.quotaHasta.slice(5, 7)}`
-                            : "quota hoy"
-                          : row.cooldownHasta
-                            ? `cooldown · ${row.cooldownHasta.slice(
-                                11,
-                                16
-                              )} UTC`
-                            : "OK"}
-                      </Text>
-                    </View>
-                  </View>
-                  {(row.callsToday > 0 || row.snapshots > 0) && (
-                    <Text style={styles.providerMeta}>
-                      {row.callsToday > 0
-                        ? `${row.callsToday}${
-                            row.dailyLimit ? `/${row.dailyLimit}` : ""
-                          } llamada${row.callsToday !== 1 ? "s" : ""} hoy`
-                        : ""}
-                      {row.callsToday > 0 && row.snapshots > 0 ? " · " : ""}
-                      {row.snapshots > 0
-                        ? `${row.snapshots} cuota${
-                            row.snapshots !== 1 ? "s" : ""
-                          } registrada${row.snapshots !== 1 ? "s" : ""}`
-                        : ""}
-                    </Text>
-                  )}
-                  {Object.keys(row.purposeCalls).length > 0 && (
-                    <Text style={styles.providerMeta}>
-                      {Object.entries(row.purposeCalls)
-                        .map(([p, n]) => `${n} ${p}`)
-                        .join(" · ")}
-                    </Text>
-                  )}
-                  {row.extractOk !== null || row.extractFail !== null ? (
-                    <Text style={styles.providerMeta}>
-                      extracciones: {row.extractOk ?? 0} ok
-                      {(row.extractFail ?? 0) > 0
-                        ? ` · ${row.extractFail} fallos`
-                        : ""}
-                    </Text>
-                  ) : null}
-                </View>
-              ))
-            )}
-            <Text style={styles.statSub}>
-              {providersStatus.odds_events_count ?? 0} eventos con cuota
-              registrada
-            </Text>
-            {Object.entries(providersStatus.odds_snapshots_por_dia ?? {}).map(
-              ([dia, n]) => (
-                <Text key={dia} style={styles.statSub}>
-                  {dia.slice(8, 10)}/{dia.slice(5, 7)} → {n} cuota
-                  {n !== 1 ? "s" : ""} guardada{n !== 1 ? "s" : ""}
-                </Text>
-              )
-            )}
-            {providersStatus.odds_backfill && (
-              <View style={styles.funnel}>
-                <Text style={styles.funnelHint}>
-                  Un pick sale de la cola cuando todos los providers vivos lo
-                  han intentado (o su cuota ya está registrada).
-                </Text>
-                <Text style={styles.funnelHint}>
-                  Fase A: listar partidos del día (~3 llamadas por día, más si
-                  hay muchas páginas) · Fase B: bajar la curva de cuotas (1
-                  llamada por partido) · tope 40 llamadas/pasada.
-                </Text>
-                <View style={styles.providerRow}>
-                  <Text style={styles.statLabel}>Por auditar</Text>
-                  <Text style={styles.providerWarn}>
-                    {providersStatus.odds_backfill.total}
-                  </Text>
-                </View>
-                <View style={styles.providerRow}>
-                  <Text style={styles.statLabel}>· En cola</Text>
-                  <Text style={styles.providerBad}>
-                    {providersStatus.odds_backfill.en_cola}
-                  </Text>
-                </View>
-                <View style={styles.providerRow}>
-                  <Text style={styles.statLabel}>· Aplazados</Text>
-                  <Text style={styles.providerWarn}>
-                    {providersStatus.odds_backfill.aplazados}
-                  </Text>
-                </View>
-                {Object.entries(
-                  providersStatus.odds_backfill.fuentes_en_pausa
-                ).map(([name, until]) => (
-                  <Text key={name} style={styles.statSub}>
-                    {"   "}
-                    {name} en quota →{" "}
-                    {until.includes("T")
-                      ? `${until.slice(8, 10)}/${until.slice(5, 7)}`
-                      : until}{" "}
-                    (vuelven solos)
-                  </Text>
-                ))}
-                <View style={styles.providerRow}>
-                  <Text style={styles.statLabel}>· Cuota registrada</Text>
-                  <Text style={styles.providerOk}>
-                    {providersStatus.odds_backfill.resueltos}
-                  </Text>
-                </View>
-                {(() => {
-                  const porFuente = Object.entries(
-                    providersStatus.odds_backfill?.resueltos_por_fuente ?? {}
-                  ).filter(([, n]) => n > 0);
-                  return porFuente.length > 0 ? (
-                    <Text style={styles.statSub}>
-                      {"   "}por fuente:{" "}
-                      {porFuente.map(([n, c]) => `${n} ${c}`).join(" · ")}
-                    </Text>
-                  ) : null;
-                })()}
-                {(providersStatus.odds_backfill.agotados ?? 0) > 0 && (
-                  <View style={styles.providerRow}>
-                    <Text style={styles.statLabel}>· Nadie los tenía</Text>
-                    <Text style={styles.statValue}>
-                      {providersStatus.odds_backfill.agotados}
-                    </Text>
-                  </View>
-                )}
-                {(() => {
-                  const deudas = [
-                    ...Object.entries(
-                      providersStatus.odds_backfill?.por_fuente ?? {}
-                    ).filter(([, n]) => n > 0),
-                    ...((providersStatus.odds_backfill?.llm_pendientes ?? 0) > 0
-                      ? ([
-                          [
-                            "llm-odds",
-                            providersStatus.odds_backfill?.llm_pendientes ?? 0,
-                          ],
-                        ] as [string, number][])
-                      : []),
-                  ];
-                  return deudas.length > 0 ? (
-                    <Text style={styles.statSub}>
-                      Providers que aún les deben el intento:{" "}
-                      {deudas.map(([n, c]) => `${n} ${c}`).join(" · ")}
-                    </Text>
-                  ) : null;
-                })()}
-                {(providersStatus.odds_backfill.llm_procesados ?? 0) > 0 && (
-                  <Text style={styles.statSub}>
-                    Pipeline web+LLM:{" "}
-                    {providersStatus.odds_backfill.llm_procesados} ya procesados
-                    (con cuota o sin encontrarla)
-                  </Text>
-                )}
-                {(() => {
-                  // Historial de pasadas (más reciente primero); si aún
-                  // no existe la lista, al menos la última suelta.
-                  const pasadas = (
-                    providersStatus.odds_backfill?.ultimas_pasadas ??
-                    (providersStatus.odds_backfill?.ultima_pasada
-                      ? [providersStatus.odds_backfill.ultima_pasada]
-                      : [])
-                  )
-                    .slice(-5)
-                    .reverse();
-                  return pasadas.map((p, i) => (
-                    <Text key={p.at ?? i} style={styles.statSub}>
-                      {i === 0 ? "Última pasada" : "Pasada anterior"}{" "}
-                      {(p.at ?? "").slice(5, 16).replace("T", " ")} UTC ·{" "}
-                      {p.revisados ?? 0} revisados · {p.con_fixture ?? 0} con
-                      partido · {p.filas ?? 0} cuotas registradas
-                      {Object.keys(p.filas_por_fuente ?? {}).length > 0
-                        ? ` (${Object.entries(p.filas_por_fuente ?? {})
-                            .filter(([, n]) => n > 0)
-                            .map(([n, c]) => `${n} ${c}`)
-                            .join(" · ")})`
-                        : ""}
-                      {(p.sin_revisar ?? 0) > 0
-                        ? ` · ${p.sin_revisar} sin revisar (paga diaria agotada)`
-                        : ""}
-                    </Text>
-                  ));
-                })()}
-              </View>
-            )}
-          </View>
+          <CuotasCard rows={oddsProviderRows} status={providersStatus} />
         )}
 
         {isAdmin && picksStatus !== null && (
-          <View style={styles.systemCard}>
-            <Text style={styles.systemTitle}>Sistema · verificación</Text>
-            <View style={styles.providerRow}>
-              <Text style={styles.statLabel}>Resueltas hoy</Text>
-              <Text style={styles.providerOk}>{picksStatus.resueltas_hoy}</Text>
-            </View>
-            <Text style={styles.statSub}>
-              {picksStatus.resueltas_hoy_evento_hoy} de eventos de hoy ·{" "}
-              {picksStatus.resueltas_hoy_evento_previo} backlog
-            </Text>
-            <View style={styles.providerRow}>
-              <Text style={styles.statLabel}>Pendientes</Text>
-              <Text style={styles.providerBad}>
-                {picksStatus.pendientes_simples +
-                  picksStatus.pendientes_patas +
-                  picksStatus.pendientes_combinadas}
-              </Text>
-            </View>
-            <Text style={styles.statSub}>
-              {picksStatus.pendientes_simples} simples ·{" "}
-              {picksStatus.pendientes_combinadas} combinadas (
-              {picksStatus.pendientes_patas} patas)
-            </Text>
-            <Text style={styles.statSub}>
-              {picksStatus.pendientes_jugados_ventana ?? 0} jugadas &lt;14d
-              {" · "}
-              {picksStatus.pendientes_futuros ?? 0} futuras / en juego
-              {(picksStatus.pendientes_sin_fecha ?? 0) > 0
-                ? ` · ${picksStatus.pendientes_sin_fecha} sin fecha`
-                : ""}
-            </Text>
-            <View style={styles.providerRow}>
-              <Text style={styles.statLabel}>· backlog &gt;14d</Text>
-              <Text
-                style={
-                  (picksStatus.pendientes_backlog ?? 0) > 0
-                    ? styles.providerBad
-                    : styles.statValue
-                }
-              >
-                {picksStatus.pendientes_backlog ?? 0}
-              </Text>
-            </View>
-            {(picksStatus.pendientes_backlog ?? 0) > 0 && (
-              <TouchableOpacity
-                style={styles.residuoButton}
-                onPress={handleAnularResiduo}
-              >
-                <Text style={styles.residuoButtonText}>
-                  Anular residuo &gt;14d ({picksStatus.pendientes_backlog})
-                </Text>
-              </TouchableOpacity>
-            )}
-            {Object.keys(picksStatus.pendientes_por_deporte ?? {}).length >
-              0 && (
-              <Text style={styles.statSub}>
-                {Object.entries(picksStatus.pendientes_por_deporte ?? {})
-                  .map(([dep, n]) => `${n} ${dep}`)
-                  .join(" · ")}
-              </Text>
-            )}
-            <View style={styles.providerRow}>
-              <Text style={styles.statLabel}>Resueltas total</Text>
-              <Text style={styles.providerOk}>
-                {picksStatus.resueltas_total}
-              </Text>
-            </View>
-            <Text style={styles.systemSubtitle}>Por día</Text>
-            {Object.entries(picksStatus.resueltas_por_dia).map(([dia, n]) => (
-              <View key={dia} style={styles.providerRow}>
-                <Text style={styles.statSubFlex}>{dia}</Text>
-                <Text style={styles.statValue}>{n}</Text>
-              </View>
-            ))}
-            {Object.keys(picksStatus.resueltas_por_pasada ?? {}).length > 0 && (
-              <>
-                <Text style={styles.systemSubtitle}>Por pasada (hoy, UTC)</Text>
-                {Object.entries(picksStatus.resueltas_por_pasada ?? {}).map(
-                  ([pasada, n]) => (
-                    <View key={pasada} style={styles.providerRow}>
-                      <Text style={styles.statSubFlex}>{pasada.slice(5)}</Text>
-                      <Text style={styles.statValue}>{n}</Text>
-                    </View>
-                  )
-                )}
-              </>
-            )}
-            {Object.keys(picksStatus.rechecks_por_dia ?? {}).length > 0 && (
-              <>
-                <Text style={styles.systemSubtitle}>
-                  Barrido de anuladas (diario)
-                </Text>
-                {Object.entries(picksStatus.rechecks_por_dia ?? {}).map(
-                  ([dia, r]) => (
-                    <View key={dia} style={styles.providerRow}>
-                      <Text style={styles.statSubFlex}>{dia.slice(5)}</Text>
-                      <Text style={styles.statValue}>
-                        {r.procesadas ?? 0} proc.
-                        {(r.corregidas ?? 0) > 0
-                          ? ` · ${r.corregidas} corregida${
-                              r.corregidas !== 1 ? "s" : ""
-                            }`
-                          : ""}
-                        {(r.confirmadas ?? 0) > 0
-                          ? ` · ${r.confirmadas} siguen anuladas`
-                          : ""}
-                      </Text>
-                    </View>
-                  )
-                )}
-              </>
-            )}
-          </View>
+          <VerificacionCard
+            status={picksStatus}
+            onAnularResiduo={handleAnularResiduo}
+          />
         )}
 
         {isAdmin && dupPicks.length > 0 && (
-          <View style={styles.systemCard}>
-            <TouchableOpacity onPress={() => setDupsOpen((v) => !v)}>
-              <Text style={styles.systemTitle}>
-                Duplicadas detectadas · {dupPicks.length} {dupsOpen ? "▲" : "▼"}
-              </Text>
-            </TouchableOpacity>
-            {dupsOpen ? (
-              dupPicks.map((p) => (
-                <View key={p.id} style={styles.providerItem}>
-                  <Text style={styles.providerName} numberOfLines={2}>
-                    #{p.id} {p.seleccion || p.apuesta || "(sin selección)"}
-                  </Text>
-                  <Text style={styles.providerMeta}>
-                    {cleanChannel(p.informante)} ·{" "}
-                    {formatDate(p.fecha_evento ?? p.created_at)}
-                    {p.cuota != null ? ` · cuota ${p.cuota}` : ""}
-                    {p.es_combinada
-                      ? ` · combinada (${p.patas?.length ?? 0} patas)`
-                      : ""}
-                  </Text>
-                </View>
-              ))
-            ) : (
-              <Text style={styles.statSub}>
-                Reposteos del mismo pick/boleto anulados por dedup: fuera de
-                stats y del listado. Pulsa para verlas.
-              </Text>
-            )}
-          </View>
+          <DuplicadosCard picks={dupPicks} />
         )}
 
         {loading && <ActivityIndicator size="large" color="#ff9f1c" />}
         {error && <Text style={styles.error}>Error: {error}</Text>}
 
         {channelGroups.length > 0 && (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.channelList}
-          >
-            <TouchableOpacity
-              onPress={() => selectChannel(null)}
-              style={[
-                styles.channelChip,
-                selectedChannel === null && styles.channelChipActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.channelChipText,
-                  selectedChannel === null && styles.channelChipTextActive,
-                ]}
-              >
-                Todos
-              </Text>
-            </TouchableOpacity>
-            {channelGroups
-              .filter((group) => group.informanteId !== null)
-              .map((group) => (
-                <TouchableOpacity
-                  key={group.key}
-                  onPress={() =>
-                    selectChannel({
-                      id: group.informanteId as number,
-                      name: group.name,
-                    })
-                  }
-                  style={[
-                    styles.channelChip,
-                    selectedChannel?.id === group.informanteId &&
-                      styles.channelChipActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.channelChipText,
-                      selectedChannel?.id === group.informanteId &&
-                        styles.channelChipTextActive,
-                    ]}
-                  >
-                    {group.name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-          </ScrollView>
+          <ChannelChips
+            groups={channelGroups}
+            selectedId={selectedChannel?.id ?? null}
+            onSelect={selectChannel}
+          />
         )}
 
         {selectedChannel === null ? (
@@ -937,50 +328,18 @@ export default function ParsedPicksScreen() {
               </Text>
             )}
             {channelGroups.map((group) => (
-              <View key={group.key} style={styles.channelSection}>
-                <View style={styles.channelHeader}>
-                  <Text style={styles.channelTitle}>{group.name}</Text>
-                  {group.informanteId !== null && (
-                    <TouchableOpacity
-                      onPress={() =>
-                        selectChannel({
-                          id: group.informanteId as number,
-                          name: group.name,
-                        })
-                      }
-                    >
-                      <Text style={styles.seeAll}>Ver todos →</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-                {group.picks.length === 0 ? (
-                  <Text style={styles.emptyChannel}>
-                    Sin picks extraídos con este filtro.
-                  </Text>
-                ) : (
-                  <>
-                    {group.picks
-                      .filter((p) => !p.es_reto && !p.es_combinada)
-                      .map(renderPickCard)}
-                    {group.picks.some((p) => p.es_combinada) && (
-                      <>
-                        <Text style={styles.retosTitle}>Combinadas</Text>
-                        {group.picks
-                          .filter((p) => p.es_combinada)
-                          .map(renderPickCard)}
-                      </>
-                    )}
-                    {group.picks.some((p) => p.es_reto) && (
-                      <>
-                        <Text style={styles.retosTitle}>Retos</Text>
-                        {group.picks
-                          .filter((p) => p.es_reto)
-                          .map(renderPickCard)}
-                      </>
-                    )}
-                  </>
-                )}
-              </View>
+              <ChannelSection
+                key={group.key}
+                group={group}
+                cardProps={pickCardProps}
+                onVerTodos={() =>
+                  group.informanteId !== null &&
+                  selectChannel({
+                    id: group.informanteId,
+                    name: group.name,
+                  })
+                }
+              />
             ))}
           </>
         ) : (
@@ -1035,67 +394,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 12,
   },
-  emptyChannel: {
-    color: "#666",
-    fontSize: 13,
-    marginBottom: 12,
-    fontStyle: "italic",
-  },
-  channelList: {
-    paddingVertical: 8,
-    gap: 8,
-  },
-  channelChip: {
-    backgroundColor: "#1a1a1a",
-    borderColor: "#333",
-    borderWidth: 1,
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    marginRight: 8,
-  },
-  channelChipActive: {
-    backgroundColor: "#ff9f1c",
-    borderColor: "#ff9f1c",
-  },
-  channelChipText: {
-    color: "#aaa",
-    fontSize: 13,
-  },
-  channelChipTextActive: {
-    color: "#0d0d0d",
-    fontWeight: "bold",
-  },
-  channelSection: {
-    marginTop: 14,
-    marginBottom: 6,
-  },
-  channelHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    backgroundColor: "#241a0d",
-    borderLeftWidth: 4,
-    borderLeftColor: "#ff9f1c",
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 12,
-  },
-  channelTitle: {
-    color: "#ff9f1c",
-    fontSize: 16,
-    fontWeight: "bold",
-    letterSpacing: 0.5,
-    textTransform: "uppercase",
-    flexShrink: 1,
-  },
-  seeAll: {
-    color: "#ffcf8a",
-    fontSize: 13,
-    fontWeight: "bold",
-    marginLeft: 12,
-  },
   retosTitle: {
     color: "#b388ff",
     fontSize: 15,
@@ -1145,147 +443,5 @@ const styles = StyleSheet.create({
     color: "#aaa",
     fontSize: 13,
     flexShrink: 1,
-  },
-  systemCard: {
-    backgroundColor: "#141821",
-    borderColor: "#2d3a4f",
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 14,
-  },
-  systemTitle: {
-    color: "#7ab3ff",
-    fontSize: 13,
-    fontWeight: "bold",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 8,
-  },
-  providerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 3,
-    gap: 8,
-  },
-  providerName: {
-    color: "#ddd",
-    fontSize: 13,
-    flex: 1,
-  },
-  providerOk: {
-    color: "#4caf50",
-    fontSize: 12,
-    fontWeight: "bold",
-  },
-  providerBad: {
-    color: "#f44336",
-    fontSize: 12,
-    fontWeight: "bold",
-  },
-  providerWarn: {
-    color: "#ff9800",
-    fontSize: 12,
-    fontWeight: "bold",
-  },
-  providerMisses: {
-    color: "#888",
-    fontSize: 11,
-  },
-  residuoButton: {
-    marginTop: 6,
-    backgroundColor: "rgba(244, 67, 54, 0.15)",
-    borderRadius: 8,
-    paddingVertical: 8,
-    alignItems: "center",
-  },
-  residuoButtonText: {
-    color: "#f44336",
-    fontSize: 12,
-    fontWeight: "bold",
-  },
-  systemSubtitle: {
-    color: "#6f8299",
-    fontSize: 11,
-    fontWeight: "bold",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginTop: 12,
-    marginBottom: 2,
-  },
-  providerItem: {
-    paddingVertical: 4,
-  },
-  providerBadge: {
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  providerBadgeOk: {
-    backgroundColor: "rgba(76, 175, 80, 0.15)",
-  },
-  providerBadgeBad: {
-    backgroundColor: "rgba(244, 67, 54, 0.15)",
-  },
-  providerBadgeWarn: {
-    backgroundColor: "rgba(255, 152, 0, 0.15)",
-  },
-  providerMeta: {
-    color: "#777",
-    fontSize: 11,
-    marginTop: 1,
-  },
-  statLabel: {
-    color: "#9aa4b2",
-    fontSize: 13,
-    flex: 1,
-  },
-  statSub: {
-    color: "#777",
-    fontSize: 11,
-    marginTop: 1,
-    marginBottom: 4,
-  },
-  statSubFlex: {
-    color: "#777",
-    fontSize: 11,
-    flex: 1,
-  },
-  statValue: {
-    color: "#ddd",
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  funnel: {
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#333",
-  },
-  funnelHint: {
-    color: "#777",
-    fontSize: 10,
-    fontStyle: "italic",
-    marginBottom: 6,
-  },
-  acertoButtonTrue: {
-    backgroundColor: "#1e3a24",
-    borderColor: "#4caf50",
-    borderWidth: 1,
-  },
-  acertoButtonFalse: {
-    backgroundColor: "#3a1e1e",
-    borderColor: "#f44336",
-    borderWidth: 1,
-  },
-  acertoButtonAnulada: {
-    backgroundColor: "#2a2a2a",
-    borderColor: "#9e9e9e",
-    borderWidth: 1,
-  },
-  acertoButtonPending: {
-    backgroundColor: "#332a1a",
-    borderColor: "#ff9f1c",
-    borderWidth: 1,
   },
 });
