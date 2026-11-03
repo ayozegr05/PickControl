@@ -105,14 +105,15 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   → ahora 403 sin rol ADMIN. Frontend: prop `canCorrect` oculta los
   botones en `ParsedPickCard` y `PickDetailModal`. **Pendiente deploy
   al VM** para que el gate aplique en prod.
-- [ ] 🟡 **Accesibilidad** (progreso parcial 2026-11): labels en
-  `ModalFrame` ("Cerrar"), `DeletePickModal`, `UpdatePickModal`,
-  chevron de combinadas, **y ahora también** checkboxes de filtros
-  en parsed-picks (`role="checkbox"` + `accessibilityState`), los 4
-  iconos de corrección de patas y los botones Acertó/Falló/Anulada/
-  Pendiente (`ParsedPickCard`), ojo de password en login y Switch +
-  papelera de canales. **Sigue abierto**: contraste flojo
-  (`#777/#888` a 11-13px sobre `#1a1a1a` ≈ 3.5:1, el WCAG pide 4.5:1).
+- [x] 🟡 **Accesibilidad**: labels en `ModalFrame` ("Cerrar"),
+  `DeletePickModal`, `UpdatePickModal`, chevron de combinadas,
+  checkboxes de filtros en parsed-picks (`role="checkbox"` +
+  `accessibilityState`), los 4 iconos de corrección de patas y los
+  botones Acertó/Falló/Anulada/Pendiente (`ParsedPickCard`), ojo de
+  password en login y Switch + papelera de canales. **Contraste**:
+  textos secundarios subidos a `#9a9a9a` (~5.8:1 sobre `#1a1a1a`,
+  cumple AA) — solo quedaban flojos los `#777`/`#666`; los `#888`
+  (~4.9:1) ya pasaban.
 - [x] ✅ `expo-status-bar` instalado pero **nunca usado** — resuelto:
   `<StatusBar style="light" />` en `app/_layout.tsx`.
 - [x] ✅ **Estados error/vacío inconsistentes** — resuelto
@@ -186,10 +187,14 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   `parsed-picks:988`).
 - [ ] 🟡 Sin estado `isInitializing` en AuthContext → la landing con
   vídeo parpadea un frame en cada cold start.
-- [ ] 🟡 `isAdmin` leído de AsyncStorage manipulable; mejor derivarlo
-  del JWT o de un endpoint `/me`.
-- [ ] 🟡 `unregisterDeviceToken` existe pero nunca se llama → tras
-  logout el dispositivo sigue recibiendo pushes.
+- [x] 🟡 `isAdmin` leído de AsyncStorage manipulable → **derivado del
+  payload del JWT firmado** (`src/utils/jwt.ts`, decoder propio sin
+  `atob` compatible con Hermes); `AuthContext` calcula el rol del token
+  al hidratar y tras login; `userRole` de AsyncStorage eliminado.
+- [x] 🟡 `unregisterDeviceToken` existe pero nunca se llama →
+  **`unregisterForPushNotifications()`** en `push.ts` (DELETE idempotente
+  del token Expo en el logout, best-effort con guarda anti-recursión
+  del handler 401).
 - [ ] 🟡 `login()`/`logout()` tragan errores de storage.
 - [ ] 🔵 Sin guard de auth centralizado (solo my-picks usa Redirect);
   rutas `/screens/…` y `/dynamic-routes/…` feas en URL; `scheme:"myapp"`.

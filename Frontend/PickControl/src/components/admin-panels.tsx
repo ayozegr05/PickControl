@@ -540,7 +540,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
   providerMeta: {
-    color: "#777",
+    color: "#9a9a9a",
     fontSize: 11,
     marginTop: 1,
   },
@@ -550,13 +550,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   statSub: {
-    color: "#777",
+    color: "#9a9a9a",
     fontSize: 11,
     marginTop: 1,
     marginBottom: 4,
   },
   statSubFlex: {
-    color: "#777",
+    color: "#9a9a9a",
     fontSize: 11,
     flex: 1,
   },
@@ -584,7 +584,7 @@ const styles = StyleSheet.create({
     borderTopColor: "#333",
   },
   funnelHint: {
-    color: "#777",
+    color: "#9a9a9a",
     fontSize: 10,
     fontStyle: "italic",
     marginBottom: 6,

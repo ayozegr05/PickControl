@@ -150,7 +150,7 @@ const styles = StyleSheet.create({
   },
   compareNote: {
     fontSize: 11,
-    color: "#777",
+    color: "#9a9a9a",
     textAlign: "center",
     marginTop: 10,
     fontStyle: "italic",

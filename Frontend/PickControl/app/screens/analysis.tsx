@@ -388,7 +388,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
   windowCaption: {
-    color: "#777",
+    color: "#9a9a9a",
     fontSize: 11,
     fontStyle: "italic",
     textAlign: "right",

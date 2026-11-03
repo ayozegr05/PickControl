@@ -120,7 +120,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   emptyChannel: {
-    color: "#666",
+    color: "#9a9a9a",
     fontSize: 13,
     marginBottom: 12,
     fontStyle: "italic",

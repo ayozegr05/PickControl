@@ -7,7 +7,7 @@ import { Platform } from "react-native";
 
 import Constants from "expo-constants";
 
-import { registerDeviceToken } from "@/src/api/devices.api";
+import { registerDeviceToken, unregisterDeviceToken } from "@/src/api/devices.api";
 
 type NotificationsModule = typeof import("expo-notifications");
 
@@ -79,5 +79,26 @@ export async function registerForPushNotifications(): Promise<void> {
   } catch (error) {
     // Entornos sin soporte (Expo Go, emulador) o backend caído.
     console.warn("Registro de notificaciones omitido:", error);
+  }
+}
+
+// Simétrico al register: se llama en logout para que el backend
+// desactive el token del dispositivo — antes seguían llegando
+// pushes tras cerrar sesión. Best-effort igual que el register:
+// si falla (sin token en el dispositivo, backend caído, Expo Go)
+// el logout local sigue adelante.
+export async function unregisterForPushNotifications(): Promise<void> {
+  try {
+    const Notifications = await loadNotifications();
+    if (!Notifications) return;
+
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId as
+      string | undefined;
+    const { data: token } = await Notifications.getExpoPushTokenAsync({
+      projectId,
+    });
+    await unregisterDeviceToken(token, Platform.OS);
+  } catch (error) {
+    console.warn("Baja de notificaciones omitida:", error);
   }
 }
