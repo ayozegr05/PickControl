@@ -201,8 +201,13 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   sesión sin persistencia; `logout` limpia el estado en memoria
   SIEMPRE en `finally` (antes un fallo de storage dejaba sesión
   zombie autenticada).
-- [ ] 🔵 Sin guard de auth centralizado (solo my-picks usa Redirect);
-  rutas `/screens/…` y `/dynamic-routes/…` feas en URL; `scheme:"myapp"`.
+- [x] 🔵 Guard de auth centralizado — `src/utils/auth-guard.ts`
+  (función pura `redirectTarget`, 8 contratos testeados) +
+  `src/components/auth-guard.tsx` envolviendo el Stack del root
+  `_layout`: sin sesión solo son públicas landing/login/register y el
+  resto → `/`; con sesión, login/register → `/`. La pantalla protegida
+  ni se renderiza (cero flash). Queda abierto solo lo cosmético:
+  rutas `/screens/…`/`/dynamic-routes/…` feas en URL; `scheme:"myapp"`.
 - [ ] 🔵 Tipos repartidos entre `src/types/` y los `.api.ts`;
   `PUT /apuesta/{id}` singular vs `/apuestas` plural.
 

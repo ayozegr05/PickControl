@@ -152,12 +152,13 @@ describe("my-picks screen", () => {
     expect(screen.getByText("2. Tipster B")).toBeTruthy();
   });
 
-  it("sin sesión hace Redirect y no pide apuestas", async () => {
+  it("sin sesión no pide apuestas (el Redirect lo hace el AuthGuard)", async () => {
     mockAuth.isAuthenticated = false;
 
-    const screen = await render(<MyPicksScreen />);
+    await render(<MyPicksScreen />);
 
-    expect(screen.queryByText("Mis Apuestas")).toBeNull();
+    // La redirección la hace el guard centralizado del root layout;
+    // el contrato de ESTA pantalla es no llamar a la API sin sesión.
     expect(mockListPicks).not.toHaveBeenCalled();
   });
 
