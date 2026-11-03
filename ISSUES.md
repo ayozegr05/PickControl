@@ -50,10 +50,18 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   `useFocusEffect` → `reload()` con guard de primer foco y reset del
   flag de agregación; al volver a la pestaña refetchea y re-anima con
   datos frescos.
-- [ ] 🔴 **Contraseña en claro en SecureStore** (`userCredentials`) para
-  el login biométrico (`login.tsx:127-133`). SecureStore cifra, pero
-  persistir la password es anti-patrón; si el usuario la cambia, el
-  biométrico falla sin feedback. Guardar token de larga duración.
+- [x] ✅ **Contraseña en claro en SecureStore** — resuelto
+  (2026-11-03, `1e31c7c`): el backend emite un refresh token de 30
+  días (`type="refresh"`, `jwt_refresh_expires_minutes`) y
+  `POST /auth/refresh` lo canjea por un access token con rotación;
+  un access token NO vale para refrescar (test dedicado). En
+  `login.tsx` solo se persiste `{refreshToken, userName, role}` y
+  las credenciales legacy `{email,password}` migran en caliente en
+  el primer uso. Si el refresh caduca se borra y se pide login
+  manual — antes el fallo era silencioso. Pendiente conocida: los
+  refresh tokens no son revocables (JWT sin tabla) — si hace falta
+  revocar (cambio de password, robo de móvil) habría que añadir
+  tabla/claim de versión.
 - [x] ✅ **Sin manejo global de 401 ni timeout** (`client.ts`):
   fetch sin `AbortSignal` → petición colgada cuelga la pantalla; JWT
   caducado = sesión "zombie" (autenticado pero todo falla).
@@ -77,10 +85,11 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
 - [ ] 🟡 **Tabla de historial recortada a la derecha** (`[informante]`,
   `my-picks`): columnas cortadas dentro de scroll horizontal, fechas en
   formato US (`7/28/2026`) mientras el resto usa `17/10/2026`.
-- [ ] 🟡 **El teclado tapa el CTA** (confirmado: "Registrarse" quedó
-  oculto y hubo que cerrar el teclado para enviar). Sin
-  `KeyboardAvoidingView` ni `keyboardShouldPersistTaps` en
-  login/register/add-pick/modal "Yo también la jugué".
+- [x] ✅ **El teclado tapa el CTA** — resuelto (2026-11-03,
+  `1e31c7c`): `KeyboardAvoidingView` (iOS padding + offset) +
+  `keyboardShouldPersistTaps="handled"` en login, register y
+  add-pick, y dentro de `ModalFrame` (cubre JugarModal y el resto
+  de modales de `[informante]`).
 - [x] ✅ **BottomBar visible en login/register** — resuelto: sin
   sesión la barra de tabs se oculta entera (`display: none` + tabs
   con `href: null`). Estado activo (naranja/gris), labels y tamaños
