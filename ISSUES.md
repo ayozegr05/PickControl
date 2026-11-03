@@ -46,9 +46,10 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   "Dm7 || GRATUITO || ⚡🔞" verificada en vivo.
 - [x] ✅ **`pick.informante` puede ser `null`** → genera la ruta literal
   `/dynamic-routes/null` (`parsed-picks.tsx:563`). Guard añadido. `c0d088c`
-- [ ] 🔴 **`earns` nunca refresca**: `dataLoaded` bloquea el refetch de
-  por vida del componente (`earns.tsx:30,45,93`) — datos obsoletos tras
-  añadir/liquidar apuestas. Usar `useFocusEffect` como el resto.
+- [x] ✅ **`earns` nunca refresca** — resuelto (2026-11-03, `2c1e1c8`):
+  `useFocusEffect` → `reload()` con guard de primer foco y reset del
+  flag de agregación; al volver a la pestaña refetchea y re-anima con
+  datos frescos.
 - [ ] 🔴 **Contraseña en claro en SecureStore** (`userCredentials`) para
   el login biométrico (`login.tsx:127-133`). SecureStore cifra, pero
   persistir la password es anti-patrón; si el usuario la cambia, el
@@ -59,10 +60,10 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   **Resuelto en `c0d088c`**: `AbortSignal.timeout(15s)` +
   `setUnauthorizedHandler` → AuthContext cierra sesión y
   `router.replace("/screens/login")`.
-- [ ] 🔴 **Datos mal etiquetados en `analysis`**: `slice(-30)` etiquetado
-  "Último mes" son las últimas 30 apuestas, no un mes
-  (`analysis.tsx:106`); "2 semanas"/"anteriores" son 14 picks
-  (`127-128`) → la "tendencia" mostrada mide otra cosa de lo que dice.
+- [x] ✅ **Datos mal etiquetados en `analysis`** — resuelto
+  (2026-11-03, `2c1e1c8`): `calcularEstadisticas` filtra una ventana
+  real de 30 días por `fecha` (tendencia = ROI 0–14d vs 15–28d);
+  apuestas sin fecha quedan fuera. La UI muestra "Últimos 30 días".
 
 ## 2. UI / UX (verificado visualmente en emulador)
 
@@ -84,10 +85,12 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   sesión la barra de tabs se oculta entera (`display: none` + tabs
   con `href: null`). Estado activo (naranja/gris), labels y tamaños
   uniformes ya vienen del Tabs nativo.
-- [ ] 🟡 **Controles admin/liquidación visibles para cualquier usuario**:
-  botones Acertó/Falló/Anulada/Pendiente por pick en parsed-picks y
-  "Corregir picks de Telegram" en el detalle. Verificar que el backend
-  valida rol (y ocultarlos si no eres admin).
+- [x] ✅ **Controles admin/liquidación visibles para cualquier usuario**
+  — resuelto (2026-11-03, `2c1e1c8`): el backend era el agujero real
+  (`PATCH /telegram/parsed-picks/{id}` aceptaba cualquier autenticado)
+  → ahora 403 sin rol ADMIN. Frontend: prop `canCorrect` oculta los
+  botones en `ParsedPickCard` y `PickDetailModal`. **Pendiente deploy
+  al VM** para que el gate aplique en prod.
 - [ ] 🟡 **Accesibilidad** (progreso parcial 2026-11): añadidos
   `accessibilityLabel` en `ModalFrame` ("Cerrar"), `DeletePickModal`
   (papelera), botones icon-only de `UpdatePickModal` (✓/✗) y chevron
