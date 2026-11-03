@@ -88,10 +88,12 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   botones Acertó/Falló/Anulada/Pendiente por pick en parsed-picks y
   "Corregir picks de Telegram" en el detalle. Verificar que el backend
   valida rol (y ocultarlos si no eres admin).
-- [ ] 🟡 **Accesibilidad inexistente**: 0 `accessibilityLabel/Role` —
-  checkboxes custom, iconos-botón (papelera, corrección de patas, ojo
-  de password) invisibles para TalkBack. Contraste flojo
-  (`#777/#888` a 11-13px sobre `#1a1a1a` ≈ 3.5:1, bajo WCAG AA).
+- [ ] 🟡 **Accesibilidad** (progreso parcial 2026-11): añadidos
+  `accessibilityLabel` en `ModalFrame` ("Cerrar"), `DeletePickModal`
+  (papelera), botones icon-only de `UpdatePickModal` (✓/✗) y chevron
+  de combinadas en `TipsterPicksCard`. Siguen sin etiqueta:
+  checkboxes custom, corrección de patas, ojo de password, toggles.
+  Contraste flojo (`#777/#888` a 11-13px sobre `#1a1a1a` ≈ 3.5:1).
 - [x] ✅ `expo-status-bar` instalado pero **nunca usado** — resuelto:
   `<StatusBar style="light" />` en `app/_layout.tsx`.
 - [ ] 🟡 **Estados error/vacío inconsistentes**: `my-picks` traga el
@@ -117,36 +119,45 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
 
 ## 3. Arquitectura / mantenibilidad
 
-- [ ] 🔴 **Archivos gigantes**: `[informante].tsx` 2046 líneas,
-  `parsed-picks.tsx` 1687, `my-picks.tsx` 911, `analysis.tsx` 586 —
-  lógica de dominio (ROI, filtros, formato, iconos) dentro de los
-  componentes. Extraer `utils/`, `hooks/`, subcomponentes.
-- [ ] 🔴 **Cero `FlatList`/`SectionList`** en todo el proyecto:
-  `ScrollView + map` incluso en tablas con cientos de filas; my-picks
-  anida 3 ScrollViews. Cuello de botella real con el backlog actual.
+- [x] ✅ **Archivos gigantes** — resuelto en la Fase D (2026-11-03):
+  `[informante].tsx` 2046 → 756, `parsed-picks.tsx` 1687 → 447
+  (11 componentes extraídos a `src/components/`: `ParsedPickCard`,
+  `PickDetailModal`, `JugarModal`, `UpdatePickModal`, `DeletePickModal`,
+  `ModalFrame`, `ApuestasTable`, `TipsterVsYouCard`, `TipsterPicksCard`,
+  `admin-panels` ×4, `ChannelChips`, `ChannelSection`), más
+  `src/utils/providers.ts` con las filas del panel admin como funciones
+  puras. `my-picks.tsx` 853 y `analysis.tsx` 477 tras las fases A-C.
+- [x] ✅ **`FlatList`/`SectionList`** — resuelto en la Fase C (2026-11-03):
+  lista de canal de parsed-picks virtualizada con `onEndReached`,
+  tablas de my-picks e `[informante]` (simples + "Mis apuestas") con
+  `FlatList` en contenedor acotado.
 - [ ] 🟡 **Sin tema centralizado**: `#ff9f1c` hardcodeado ~50 veces +
   variantes (`"orange"`, `#ffba57`, `#f3b02b`, `#FF4500`); verdes en
   ≥7 valores; fondos `"black"`/`#000`/`#0d0d0d`/`#1a1a1a`/`#2d2d2d`.
   Cada pantalla repite `container/card/input/title` casi idénticos.
-- [ ] 🟡 **Duplicación de utilidades** (mientras `src/utils/` y
-  `src/hooks/` están vacíos): `colorForYield`×3, `cleanChannel`×2,
-  `calcularGanancia`×3, `formatearFecha`×2, iconos de estado×3.
-- [ ] 🟡 **Dead code**: `index.js` raíz (Stack sin providers),
-  ~~`src/components/piechart.tsx`~~ (borrado con `victory-native` —
-  su copia anidada de react-native-svg causaba el crash
-  "Tried to register two views RNSVG*"),
-  `calcularGananciaAcumulada`/`agruparDatos` (`[informante]:222,374`),
-  `screenWidth`/`Dimensions` sin uso, estado `apuestas` en `earns`,
-  `loadingRef`, `scrollY`/`visible` en top-bar (listener de un
-  Animated.Value nunca conectado a un scroll), `handleScroll`/`showTopBar`
-  entero en my-picks, estilos copiados de index en my-picks sin uso.
+- [x] ✅ **Duplicación de utilidades** — resuelto en Fase A/B
+  (2026-11): `src/utils/format.ts` (`cleanChannel`, `formatDate*`),
+  `picks.ts` (`gananciaApuesta`, `iconoAnulada`), `estadisticas.ts`
+  (`metricColor`/`nivelRiesgo`/agregaciones), `providers.ts`; hooks
+  `useApiData`/`usePicks`/`useInformantes`/`useInformanteStats`/
+  `useParsedPicks` en `src/hooks/` — todas las pantallas cableadas.
+- [ ] 🟡 **Dead code** (parcialmente resuelto 2026-11): quitados
+  `calcularGananciaAcumulada`/`agruparDatos`/`screenWidth`/`Dimensions`
+  y los estilos de chart de `[informante]` (el LineChart ya no
+  existía en el JSX), `renderPronostico`, ~90 estilos huérfanos de
+  los dos monstruos y el `console.log` de render de my-picks.
+  Quedan: `index.js` raíz, `scrollY`/`visible` en top-bar,
+  `handleScroll`/`showTopBar` en my-picks, estilos copiados de index.
 - [ ] 🟡 **`try/catch` alrededor de JSX** (`index.tsx:71-164`) — no
   captura errores de render; el `catch` es inalcanzable.
 - [ ] 🟡 ~40 `console.log` (alguno en cada render), `any`×28,
   `as any` en 5 `router.push` pese a `typedRoutes: true`.
-- [ ] 🟡 **Fetchs sin cancelación** en la mayoría de pantallas
-  (`setTimeout(500)` sin clear en `analysis.tsx:89`); solo
-  `[informante]` usa flag `cancelled` — generalizarlo en un hook.
+- [x] ✅ **Fetchs sin cancelación** — resuelto en Fase B: `useApiData`
+  cancela updates al desmontar y refetchea si cambia el fetcher;
+  todas las pantallas lo usan. Además `usePicks`/`useInformantes`
+  devuelven referencia estable (bug real: array nuevo por render
+  causaba render-storm en el `useEffect([apuestas])` de my-picks —
+  pillado por los tests).
 - [ ] 🟡 Keys inseguras `key={index}` en listas (`my-picks:307,326,427,471`,
   `parsed-picks:988`).
 - [ ] 🟡 Sin estado `isInitializing` en AuthContext → la landing con
@@ -184,11 +195,12 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
 
 ## 5. Tests
 
-- [ ] 🟡 **Cero tests** en el frontend. `jest-expo` configurado pero sin
-  `moduleNameMapper` para el alias `@/` → cualquier test que toque
-  `@/src/...` falla al importar. Script `"test"` entra en modo watch
-  (malo para CI). Empezar por mappers puros (`toPickItem`, `toCanal`),
-  `extractErrorMessage` y las utils cuando se extraigan.
+- [x] ✅ **Tests** (2026-11): 153 tests en 22 suites —
+  utils/hooks/api/componentes/pantallas (RNTL 14). Alias `@/`
+  mapeado; `@react-native/jest-preset` instalado como peer de
+  jest-expo; `IS_REACT_ACT_ENVIRONMENT` en setup y `fireEvent`
+  awaited (RNTL 14 los hace async — sin await corrumpían el
+  render del test siguiente). Pendiente: script no-watch para CI.
 
 ## 6. Lo que está bien (mantener)
 
@@ -213,10 +225,14 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
 2. ✅ **Auth/navegación**: post-registro `replace("/")`, interceptor
    401→logout+login, timeout 15s, params en ruta dinámica + guard null.
    Hecho en `c0d088c`.
-3. `theme.ts` + componentes `Screen/Card/Input/PrimaryButton` +
-   retirar paleta verde/beige + StatusBar.
-4. `Tabs` de expo-router + quitar BottomBar de auth + estados activos.
-5. `FlatList` + extraer utils/hooks + adelgazar los >1500-liner.
-6. KeyboardAvoiding + a11y labels + contraste + formatos de fecha.
-7. Limpieza deps/dead code/console.log + smoke tests + eslint flat.
+3. ✅ `theme.ts` + componentes base + retirar paleta verde/beige +
+   StatusBar.
+4. ✅ `Tabs` de expo-router + quitar BottomBar de auth + estados activos.
+5. ✅ `FlatList` + extraer utils/hooks + adelgazar los >1500-liner —
+   hecho en las fases A–D (2026-11): utils, hooks `useApiData`,
+   virtualización y 11 componentes extraídos, todo test-first.
+6. KeyboardAvoiding + a11y labels (parcial: modales) + contraste +
+   formatos de fecha.
+7. Limpieza deps/dead code/console.log (parcial) + smoke tests
+   (hecho: 153 tests) + eslint flat.
 8. Revisar rol admin en UI (ocultar liquidación manual a no-admins).

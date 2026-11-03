@@ -11,6 +11,10 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 > secciones originales del documento (columna "Ver"); lo de abajo es
 > historial. Al cerrar un pendiente, actualizar aquí y marcar el [x]
 > correspondiente en su sección.
+>
+> La deuda de **frontend** (UX, a11y, deps, tests) vive en `ISSUES.md` —
+> el refactor test-first de nov-2026 cerró los críticos de
+> arquitectura; quedan los ítems UI/UX marcados allí.
 
 ### A. Operativa en prod (ejecuciones puntuales, sin código nuevo)
 
@@ -112,6 +116,20 @@ resultados de fútbol contra APIs de mercado y permite corrección manual.
 - **Fase 6: Despliegue y Hardening a producción.** (COMPLETADA 2026-09-24:
   Oracle VM ARM + Postgres en Docker + Caddy/HTTPS + backups diarios +
   cuenta Telegram dedicada. Runbook en `deploy/OPERACIONES.md`)
+- **Refactor frontend test-first** (COMPLETADO 2026-11-03, commits
+  `0a2a1c0`..`f1ec6e5`): del plan de `ISSUES.md`, en 4 fases —
+  - **A. Utils compartidas**: `src/utils/format.ts`, `picks.ts`,
+    `estadisticas.ts` — eliminadas las copias ×3 de color/fecha/ganancia.
+  - **B. Hooks de datos**: `useApiData` + `usePicks`/`useInformantes`/
+    `useInformanteStats`/`useParsedPicks` (paginación, filtros,
+    refetch por foco) — todas las pantallas cableadas.
+  - **C. Virtualización**: `FlatList` en parsed-picks (paginación
+    automática) y tablas de my-picks / `[informante]`.
+  - **D. Split de monolitos**: 11 componentes + `utils/providers.ts`;
+    `[informante]` 2050→756 líneas, `parsed-picks` 1291→447.
+  Cobertura resultante: **153 tests en 22 suites** (jest-expo + RNTL 14),
+  `tsc`/`lint` 0 errores. Los tests cazaron 2 bugs reales: render-storm
+  por `data ?? []` no memoizado y `act()` solapados de `fireEvent`.
 
 ## Próximos hitos
 
