@@ -58,10 +58,15 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   `login.tsx` solo se persiste `{refreshToken, userName, role}` y
   las credenciales legacy `{email,password}` migran en caliente en
   el primer uso. Si el refresh caduca se borra y se pide login
-  manual — antes el fallo era silencioso. Pendiente conocida: los
-  refresh tokens no son revocables (JWT sin tabla) — si hace falta
-  revocar (cambio de password, robo de móvil) habría que añadir
-  tabla/claim de versión.
+  manual — antes el fallo era silencioso.
+  **Ampliado (mismo día)**: los refresh YA son revocables — tabla
+  `refresh_tokens` (una fila por `jti`, familia = sesión de
+  dispositivo) con rotación y detección de reuso: un token ya
+  consumido que reaparece revoca la familia entera (robo).
+  `POST /auth/logout` mata la familia de la credencial presentada;
+  `logoutSession` queda en `auth.api.ts` para un futuro "cerrar
+  sesión en este dispositivo" — el logout normal de la app NO la
+  llama a propósito para no romper el biométrico.
 - [x] ✅ **Sin manejo global de 401 ni timeout** (`client.ts`):
   fetch sin `AbortSignal` → petición colgada cuelga la pantalla; JWT
   caducado = sesión "zombie" (autenticado pero todo falla).

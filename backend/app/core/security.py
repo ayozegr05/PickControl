@@ -43,15 +43,26 @@ def create_access_token(data: dict[str, Any]) -> str:
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def create_refresh_token(data: dict[str, Any]) -> str:
+def create_refresh_token(data: dict[str, Any], jti: str, family_id: str) -> str:
     """JWT de larga duración para el login biométrico: el móvil lo
     guarda en SecureStore y lo canjea por un access token nuevo en
     POST /auth/refresh. El claim `type` lo distingue: un access token
-    NO vale para refrescar."""
+    NO vale para refrescar.
+
+    `jti` es el id único del token (hay una fila en `refresh_tokens`
+    por cada uno emitido — el servidor solo confía en sesiones que
+    registró él) y `family_id` encadena las rotaciones: revocar una
+    familia mata todos los tokens de esa sesión/dispositivo."""
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=settings.jwt_refresh_expires_minutes
     )
-    to_encode = {**data, "exp": expire, "type": "refresh"}
+    to_encode = {
+        **data,
+        "exp": expire,
+        "type": "refresh",
+        "jti": jti,
+        "fam": family_id,
+    }
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 

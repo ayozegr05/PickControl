@@ -79,17 +79,21 @@ class TestLogin:
 
 class TestRefresh:
     """El login biométrico canjea refresh tokens en /refresh en vez de
-    reenviar la contraseña guardada en el móvil."""
+    reenviar la contraseña guardada en el móvil. Cada canje ROTA el
+    token (el viejo muere) y un reuso implica robo → se revoca toda
+    la familia de sesión."""
+
+    async def _register(self, client: AsyncClient) -> dict:
+        response = await client.post("/api/v1/auth/register", json=REGISTER_PAYLOAD)
+        assert response.status_code == 201
+        return response.json()
 
     async def test_register_devuelve_refresh_token(self, client: AsyncClient):
-        response = await client.post("/api/v1/auth/register", json=REGISTER_PAYLOAD)
-
-        assert response.status_code == 201
-        assert response.json()["refresh_token"]
+        data = await self._register(client)
+        assert data["refresh_token"]
 
     async def test_refresh_canjea_por_token_nuevo(self, client: AsyncClient):
-        registered = await client.post("/api/v1/auth/register", json=REGISTER_PAYLOAD)
-        refresh = registered.json()["refresh_token"]
+        refresh = (await self._register(client))["refresh_token"]
 
         response = await client.post(
             "/api/v1/auth/refresh", json={"refresh_token": refresh}
@@ -98,13 +102,63 @@ class TestRefresh:
         assert response.status_code == 200
         data = response.json()
         assert data["token"]
-        assert data["refresh_token"]
+        assert data["refresh_token"] != refresh  # rotado
         assert data["user"]["email"] == REGISTER_PAYLOAD["email"]
+
+    async def test_refresh_rota_el_token_anterior(self, client: AsyncClient):
+        """El token consumido por un canje queda muerto."""
+        t1 = (await self._register(client))["refresh_token"]
+        rotated = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1})
+        assert rotated.status_code == 200
+
+        reuse = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1})
+        assert reuse.status_code == 401
+
+    async def test_refresh_reuso_revoca_la_familia(self, client: AsyncClient):
+        """Si un token YA rotado vuelve a presentarse, es robo probable:
+        se revoca la sesión entera — el refresh nuevo (el que tiene el
+        usuario legítimo) también muere."""
+        t1 = (await self._register(client))["refresh_token"]
+        rotated = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1})
+        t2 = rotated.json()["refresh_token"]
+
+        # El "ladrón" reusa el token viejo → familia entera revocada.
+        reuse = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1})
+        assert reuse.status_code == 401
+
+        legit = await client.post("/api/v1/auth/refresh", json={"refresh_token": t2})
+        assert legit.status_code == 401
+
+    async def test_refresh_jti_desconocido_rechazado(self, client: AsyncClient):
+        """Un JWT bien firmado con type=refresh pero cuyo jti no está
+        en la tabla no vale: el servidor solo confía en sesiones que
+        emitió él."""
+        from jose import jwt as jose_jwt
+
+        from app.core.config import get_settings
+        from app.core.dates import utc_now
+
+        settings = get_settings()
+        fake = jose_jwt.encode(
+            {
+                "sub": "1",
+                "type": "refresh",
+                "jti": "jti-inventado",
+                "fam": "fam-inventada",
+                "exp": utc_now().timestamp() + 3600,
+            },
+            settings.jwt_secret,
+            algorithm=settings.jwt_algorithm,
+        )
+
+        response = await client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": fake}
+        )
+        assert response.status_code == 401
 
     async def test_refresh_token_acceso_rechazado(self, client: AsyncClient):
         """Un access token NO puede usarse como refresh token."""
-        registered = await client.post("/api/v1/auth/register", json=REGISTER_PAYLOAD)
-        access = registered.json()["token"]
+        access = (await self._register(client))["token"]
 
         response = await client.post(
             "/api/v1/auth/refresh", json={"refresh_token": access}
@@ -114,5 +168,30 @@ class TestRefresh:
     async def test_refresh_token_basura_rechazado(self, client: AsyncClient):
         response = await client.post(
             "/api/v1/auth/refresh", json={"refresh_token": "no-es-un-jwt"}
+        )
+        assert response.status_code == 401
+
+
+class TestLogout:
+    """POST /auth/logout revoca la familia de sesión del refresh token
+    presentado — cerrar sesión mata la credencial del dispositivo."""
+
+    async def test_logout_revoca_la_sesion(self, client: AsyncClient):
+        registered = await client.post("/api/v1/auth/register", json=REGISTER_PAYLOAD)
+        refresh = registered.json()["refresh_token"]
+
+        logout = await client.post(
+            "/api/v1/auth/logout", json={"refresh_token": refresh}
+        )
+        assert logout.status_code == 200
+
+        response = await client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": refresh}
+        )
+        assert response.status_code == 401
+
+    async def test_logout_token_basura_rechazado(self, client: AsyncClient):
+        response = await client.post(
+            "/api/v1/auth/logout", json={"refresh_token": "no-es-un-jwt"}
         )
         assert response.status_code == 401

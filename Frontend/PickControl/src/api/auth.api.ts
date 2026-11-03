@@ -30,3 +30,17 @@ export function refresh(refreshToken: string): Promise<AuthResponse> {
     body: { refresh_token: refreshToken },
   });
 }
+
+// Revoca la familia de sesión del refresh token en el servidor —
+// la credencial biométrica del dispositivo queda muerta de verdad
+// (no solo borrada en local). Pensado para "cerrar sesión en este
+// dispositivo" desde ajustes; el logout normal NO lo llama para no
+// romper el re-login biométrico.
+export function logoutSession(
+  refreshToken: string
+): Promise<{ message: string; revoked: number }> {
+  return apiRequest("/auth/logout", {
+    method: "POST",
+    body: { refresh_token: refreshToken },
+  });
+}
