@@ -13,7 +13,7 @@ from app.models.informante import Informante
 from app.models.parsed_pick import ParsedPick
 from app.models.pick import Acierto, Pick, PickSource
 from app.models.telegram_raw_message import TelegramRawMessage
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.odds import PickOddsRead
 from app.schemas.pick import ParsedPickRead, PickRead
 from app.services.odds.compare import compare_pick
@@ -266,13 +266,19 @@ async def corregir_acierto_pick(
     pick_id: int,
     payload: ParsedPickAciertoUpdate,
     session: AsyncSession = Depends(get_session),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> ParsedPick:
     """Corrige manualmente el resultado de un pick (Acertó/Falló/Anulada/Pendiente).
 
     Útil cuando la verificación automática no puede resolverlo (deporte
-    o mercado no soportado) o si se ha equivocado.
+    o mercado no soportado) o si se ha equivocado. Solo admins: una
+    liquidación manual altera las stats auditadas del tipster.
     """
+    if user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo administradores",
+        )
     pick = await session.get(ParsedPick, pick_id)
     if pick is None:
         raise HTTPException(

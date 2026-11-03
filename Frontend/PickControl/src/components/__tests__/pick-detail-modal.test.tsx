@@ -42,6 +42,7 @@ const baseProps = () => ({
   odds: null,
   oddsLoading: false,
   yaRegistrada: false,
+  canCorrect: true,
   onClose: jest.fn(),
   onJugar: jest.fn(),
   onCorregir: jest.fn(),
@@ -163,5 +164,15 @@ describe("PickDetailModal", () => {
     expect(props.onCorregir).toHaveBeenCalledWith(expect.anything(), {
       anulada: true,
     });
+  });
+
+  it("sin canCorrect no muestra la sección 'Corregir resultado'", async () => {
+    const screen = await render(
+      <PickDetailModal pick={makePick()} {...baseProps()} canCorrect={false} />
+    );
+    expect(screen.queryByText("Corregir resultado:")).toBeNull();
+    expect(screen.queryByText("✅ Acertó")).toBeNull();
+    // El resto del modal sigue visible.
+    expect(screen.getByText("Yo también la jugué")).toBeTruthy();
   });
 });

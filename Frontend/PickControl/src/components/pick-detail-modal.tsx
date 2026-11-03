@@ -27,6 +27,8 @@ interface PickDetailModalProps {
   odds: PickOdds | null;
   oddsLoading: boolean;
   yaRegistrada: boolean;
+  /** Solo admin: la corrección liquida picks del tipster. */
+  canCorrect?: boolean;
   onClose: () => void;
   onJugar: (pick: PickItem) => void;
   onCorregir: (pick: PickItem, payload: CorrecionPickPayload) => void;
@@ -37,6 +39,7 @@ export default function PickDetailModal({
   odds,
   oddsLoading,
   yaRegistrada,
+  canCorrect = false,
   onClose,
   onJugar,
   onCorregir,
@@ -146,6 +149,8 @@ export default function PickDetailModal({
                 </TouchableOpacity>
               )}
 
+              {canCorrect && (
+                <>
               <Text style={styles.modalText}>Corregir resultado:</Text>
               <View style={styles.detailButtons}>
                 <TouchableOpacity
@@ -171,6 +176,8 @@ export default function PickDetailModal({
                   <Text style={styles.detailButtonText}>Anulada</Text>
                 </TouchableOpacity>
               </View>
+                </>
+              )}
             </>
           )}
     </ModalFrame>

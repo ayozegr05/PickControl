@@ -34,9 +34,11 @@ import DeletePickModal from "@/src/components/delete-pick-modal";
 import ApuestasTable from "@/src/components/apuestas-table";
 import TipsterVsYouCard from "@/src/components/tipster-vs-you-card";
 import TipsterPicksCard from "@/src/components/tipster-picks-card";
+import { useAuth } from "@/src/context/AuthContext";
 
 export default function InformantDetail() {
   const { informante } = useLocalSearchParams(); // Obtener el parámetro dinámico
+  const { isAdmin } = useAuth();
   const { data, loading, reload, setData } = useInformanteStats(
     String(informante)
   );
@@ -606,6 +608,7 @@ export default function InformantDetail() {
             selectedTelegramPick !== null &&
             apuestas.some((a) => a.parsedPickId === selectedTelegramPick.id)
           }
+          canCorrect={isAdmin}
           onClose={() => setSelectedTelegramPick(null)}
           onJugar={abrirModalJugar}
           onCorregir={corregirPickTelegram}

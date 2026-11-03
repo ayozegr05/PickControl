@@ -223,6 +223,7 @@ export default function ParsedPicksScreen() {
 
   const pickCardProps: PickCardProps = {
     showAll,
+    canCorrect: isAdmin,
     onCorregir: handleCorregirAcierto,
     onCorregirPata: handleCorregirPata,
     onChannelPress: (informante) =>

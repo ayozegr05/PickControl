@@ -25,6 +25,9 @@ type Props = {
   pick: ParsedPick;
   /** Modo "Ver todos": muestra si el filtro lo marcó como apuesta. */
   showAll?: boolean;
+  /** Solo admin: los botones de corrección liquidan picks del tipster
+   * (el backend exige rol admin desde el hardening). */
+  canCorrect?: boolean;
   onCorregir: (pick: ParsedPick, update: CorregirUpdate) => void;
   onCorregirPata: (pata: ParsedPick, update: CorregirUpdate) => void;
   onChannelPress: (informante: string) => void;
@@ -42,6 +45,7 @@ const estadoPata = (pata: ParsedPick): string => {
 export default function ParsedPickCard({
   pick,
   showAll = false,
+  canCorrect = false,
   onCorregir,
   onCorregirPata,
   onChannelPress,
@@ -62,28 +66,32 @@ export default function ParsedPickCard({
           {pata.fuera_ventana ? " · fuera de ventana" : ""}
         </Text>
       </View>
-      <View style={styles.pataButtons}>
-        <TouchableOpacity
-          onPress={() => onCorregirPata(pata, { acierto: true })}
-        >
-          <Text style={styles.pataButton}>✅</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={() => onCorregirPata(pata, { acierto: false })}
-        >
-          <Text style={styles.pataButton}>❌</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={() => onCorregirPata(pata, { anulada: true })}
-        >
-          <Text style={styles.pataButton}>↩️</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={() => onCorregirPata(pata, { acierto: null, anulada: false })}
-        >
-          <Text style={styles.pataButton}>❓</Text>
-        </TouchableOpacity>
-      </View>
+      {canCorrect && (
+        <View style={styles.pataButtons}>
+          <TouchableOpacity
+            onPress={() => onCorregirPata(pata, { acierto: true })}
+          >
+            <Text style={styles.pataButton}>✅</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => onCorregirPata(pata, { acierto: false })}
+          >
+            <Text style={styles.pataButton}>❌</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => onCorregirPata(pata, { anulada: true })}
+          >
+            <Text style={styles.pataButton}>↩️</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() =>
+              onCorregirPata(pata, { acierto: null, anulada: false })
+            }
+          >
+            <Text style={styles.pataButton}>❓</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 
@@ -158,6 +166,7 @@ export default function ParsedPickCard({
             </Text>
           )}
 
+          {canCorrect && (
           <View style={styles.acertoButtons}>
             <TouchableOpacity
               style={[styles.acertoButton, styles.acertoButtonTrue]}
@@ -189,6 +198,7 @@ export default function ParsedPickCard({
               <Text style={styles.acertoButtonText}>Pendiente</Text>
             </TouchableOpacity>
           </View>
+          )}
         </View>
       )}
 

@@ -42,6 +42,7 @@ const makePick = (over: Partial<ParsedPick> = {}): ParsedPick => ({
 });
 
 const baseProps = () => ({
+  canCorrect: true,
   onCorregir: jest.fn(),
   onCorregirPata: jest.fn(),
   onChannelPress: jest.fn(),
@@ -191,5 +192,26 @@ describe("ParsedPickCard", () => {
     );
 
     expect(screen.getByText(/Es apuesta: Sí/)).toBeTruthy();
+  });
+
+  it("sin canCorrect oculta botones de corrección (pick y patas)", async () => {
+    const pata = makePick({ id: 20, seleccion: "Madrid gana", orden: 0 });
+    const screen = await render(
+      <ParsedPickCard
+        pick={makePick({ es_combinada: true, patas: [pata] })}
+        {...baseProps()}
+        canCorrect={false}
+      />
+    );
+
+    // El estado "Pendiente" sigue visible (padre + pata), sin botones.
+    expect(screen.getAllByText("Pendiente").length).toBe(2);
+    expect(screen.queryByText("Acertó")).toBeNull();
+    expect(screen.queryByText("Falló")).toBeNull();
+    expect(screen.queryByText("Anulada")).toBeNull();
+    expect(screen.queryByText("✅")).toBeNull();
+    expect(screen.queryByText("❌")).toBeNull();
+    expect(screen.queryByText("↩️")).toBeNull();
+    expect(screen.queryByText("❓")).toBeNull();
   });
 });

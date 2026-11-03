@@ -22,6 +22,7 @@ export interface ChannelGroup {
 
 export interface PickCardProps {
   showAll: boolean;
+  canCorrect: boolean;
   onCorregir: (pick: ParsedPick, update: CorregirUpdate) => void;
   onCorregirPata: (pata: ParsedPick, update: CorregirUpdate) => void;
   onChannelPress: (informante: string) => void;

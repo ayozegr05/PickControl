@@ -702,8 +702,22 @@ class TestApiCombinadas:
         assert len(picks[0]["patas"]) == 2
         assert picks[0]["patas"][0]["seleccion"] == "A gana"
 
-    async def test_patch_pata_reliquida_padre(
+    async def test_patch_no_admin_devuelve_403(
         self, client, session, auth_headers, crear_canal
+    ):
+        """La corrección manual de picks de Telegram es solo-admin: un
+        usuario normal no puede alterar las stats auditadas."""
+        canal = await crear_canal("Canal403")
+        parent = await _seed_combinada(session, canal)
+        resp = await client.patch(
+            f"/api/v1/telegram/parsed-picks/{parent.id}",
+            json={"acierto": True},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 403
+
+    async def test_patch_pata_reliquida_padre(
+        self, client, session, admin_headers, crear_canal
     ):
         canal = await crear_canal("CanalCombo2")
         parent = await _seed_combinada(session, canal)
@@ -722,7 +736,7 @@ class TestApiCombinadas:
             resp = await client.patch(
                 f"/api/v1/telegram/parsed-picks/{leg.id}",
                 json={"acierto": True},
-                headers=auth_headers,
+                headers=admin_headers,
             )
             assert resp.status_code == 200
 
@@ -731,7 +745,7 @@ class TestApiCombinadas:
         assert parent.verificado_por == "auto"
 
     async def test_patch_anula_pata_recalcula_padre(
-        self, client, session, auth_headers, crear_canal
+        self, client, session, admin_headers, crear_canal
     ):
         canal = await crear_canal("CanalCombo3")
         parent = await _seed_combinada(session, canal)
@@ -748,12 +762,12 @@ class TestApiCombinadas:
         await client.patch(
             f"/api/v1/telegram/parsed-picks/{legs[0].id}",
             json={"acierto": True},
-            headers=auth_headers,
+            headers=admin_headers,
         )
         resp = await client.patch(
             f"/api/v1/telegram/parsed-picks/{legs[1].id}",
             json={"anulada": True},
-            headers=auth_headers,
+            headers=admin_headers,
         )
         assert resp.status_code == 200
 

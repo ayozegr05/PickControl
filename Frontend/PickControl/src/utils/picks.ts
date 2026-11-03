@@ -38,11 +38,13 @@ export function gananciaNeta(
 }
 
 /** Forma mínima que necesitan las métricas agregadas (analysis mapea
- * su `Apuesta` local a esto en el call site). */
+ * su `Apuesta` local a esto en el call site). `fecha` es opcional:
+ * las métricas por ventana temporal la necesitan, las globales no. */
 export type EstadisticaInput = {
   cantidad: number;
   cuota: number;
   acierto: boolean;
+  fecha?: string | null;
 };
 
 /** ROI % = ganancias/inversión·100; 0 si no hay inversión. */
@@ -64,14 +66,27 @@ export type Estadisticas = {
   aciertos: number;
 };
 
-/** Stats del bloque "Análisis": opera sobre las últimas 30 apuestas
- * (la UI lo etiqueta "último mes" — etiqueta incorrecta documentada
- * en ISSUES; la función calcula lo que calcula).
- * Tendencia = ROI(últimas 14) − ROI(14 anteriores). */
+const DIA_MS = 24 * 3600 * 1000;
+
+const dentroDe = (a: EstadisticaInput, desde: number, hasta: number) => {
+  if (!a.fecha) return false;
+  const t = new Date(a.fecha).getTime();
+  return Number.isFinite(t) && t >= desde && t <= hasta;
+};
+
+/** Stats del bloque "Análisis": ventana real de los últimos 30 días
+ * por `fecha` de la apuesta (no las últimas 30 apuestas — la etiqueta
+ * era incorrecta). Apuestas sin fecha no entran: no se les puede
+ * asignar un día sin inventarlo. `hoy` inyectable para tests.
+ * Tendencia = ROI(0–14d) − ROI(15–28d). null si la ventana está vacía. */
 export function calcularEstadisticas(
-  apuestas: EstadisticaInput[]
+  apuestas: EstadisticaInput[],
+  hoy: Date = new Date()
 ): Estadisticas | null {
-  const apuestasRecientes = apuestas.slice(-30);
+  const fin = hoy.getTime();
+  const apuestasRecientes = apuestas.filter((a) =>
+    dentroDe(a, fin - 30 * DIA_MS, fin)
+  );
   if (apuestasRecientes.length === 0) return null;
 
   const totalApuestas = apuestasRecientes.length;
@@ -79,8 +94,14 @@ export function calcularEstadisticas(
   const porcentajeAciertos = (aciertos / totalApuestas) * 100;
   const roi = calcularROI(apuestasRecientes);
 
-  const roi2Semanas = calcularROI(apuestasRecientes.slice(-14));
-  const roiAnterior = calcularROI(apuestasRecientes.slice(-28, -14));
+  const roi2Semanas = calcularROI(
+    apuestasRecientes.filter((a) => dentroDe(a, fin - 14 * DIA_MS, fin))
+  );
+  const roiAnterior = calcularROI(
+    apuestasRecientes.filter((a) =>
+      dentroDe(a, fin - 28 * DIA_MS, fin - 14 * DIA_MS)
+    )
+  );
   const tendencia = roi2Semanas - roiAnterior;
 
   return {

@@ -81,6 +81,7 @@ export default function Analysis() {
     cantidad: a.CantidadApostada,
     cuota: a.Cuota,
     acierto: a.Acierto,
+    fecha: a.Fecha,
   });
 
   const calcularEstadisticas = (informante: string) =>
@@ -246,6 +247,7 @@ export default function Analysis() {
                       </Text>
                     </View>
                   </View>
+                  <Text style={styles.windowCaption}>Últimos 30 días</Text>
 
                   <View style={styles.projectionContainer}>
                     <Text style={styles.projectionTitle}>
@@ -384,6 +386,13 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 18,
     fontWeight: "bold",
+  },
+  windowCaption: {
+    color: "#777",
+    fontSize: 11,
+    fontStyle: "italic",
+    textAlign: "right",
+    marginTop: 4,
   },
   statDetail: {
     color: "#888888",

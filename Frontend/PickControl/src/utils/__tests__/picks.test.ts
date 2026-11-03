@@ -18,6 +18,11 @@ import {
   totalGanancias,
 } from "../picks";
 
+// Referencia fija para las ventanas por fecha de calcularEstadisticas.
+const HOY = new Date("2026-11-03T12:00:00Z");
+const daysAgo = (n: number) =>
+  new Date(HOY.getTime() - n * 24 * 3600 * 1000).toISOString();
+
 const pick = (over: Partial<PickItem>): PickItem =>
   ({
     id: 1,
@@ -95,31 +100,73 @@ describe("calcularEstadisticas", () => {
   it("null con lista vacía", () => {
     expect(calcularEstadisticas([])).toBeNull();
   });
-  it("opera sobre las últimas 30 (no un mes natural)", () => {
-    const apuestas = Array.from({ length: 40 }, (_, i) => ({
-      cantidad: 10,
-      cuota: 2,
-      acierto: i >= 30, // solo las últimas 10 aciertan
-    }));
-    const stats = calcularEstadisticas(apuestas)!;
-    expect(stats.totalApuestas).toBe(30);
-    expect(stats.aciertos).toBe(10); // solo las del tramo final cuentan
-  });
-  it("tendencia = ROI(últimas 14) − ROI(14 previas)", () => {
-    // 16 fallos + 14 aciertos al final: últimas 14 → +100%, previas → -100%
+  it("filtra a los últimos 30 días por fecha (no las últimas 30 apuestas)", () => {
     const apuestas = [
-      ...Array.from({ length: 16 }, () => ({
+      // 40 apuestas antiguas que aciertan todas
+      ...Array.from({ length: 40 }, () => ({
+        cantidad: 10,
+        cuota: 2,
+        acierto: true,
+        fecha: daysAgo(40),
+      })),
+      // 5 recientes que fallan todas
+      ...Array.from({ length: 5 }, () => ({
         cantidad: 10,
         cuota: 2,
         acierto: false,
+        fecha: daysAgo(3),
+      })),
+    ];
+    const stats = calcularEstadisticas(apuestas, HOY)!;
+    expect(stats.totalApuestas).toBe(5);
+    expect(stats.aciertos).toBe(0);
+  });
+  it("apuestas sin fecha quedan fuera de la ventana", () => {
+    const stats = calcularEstadisticas(
+      [
+        { cantidad: 10, cuota: 2, acierto: true }, // sin fecha
+        { cantidad: 10, cuota: 2, acierto: false, fecha: daysAgo(2) },
+      ],
+      HOY
+    )!;
+    expect(stats.totalApuestas).toBe(1);
+    expect(stats.aciertos).toBe(0);
+  });
+  it("null si ninguna apuesta cae en la ventana", () => {
+    expect(
+      calcularEstadisticas(
+        [{ cantidad: 10, cuota: 2, acierto: true, fecha: daysAgo(60) }],
+        HOY
+      )
+    ).toBeNull();
+  });
+  it("tendencia = ROI(0–14d) − ROI(15–28d)", () => {
+    // 14 fallos hace 20 días + 14 aciertos hace 5 días:
+    // recientes → +100%, previas → −100% → tendencia 200
+    const apuestas = [
+      ...Array.from({ length: 14 }, () => ({
+        cantidad: 10,
+        cuota: 2,
+        acierto: false,
+        fecha: daysAgo(20),
       })),
       ...Array.from({ length: 14 }, () => ({
         cantidad: 10,
         cuota: 2,
         acierto: true,
+        fecha: daysAgo(5),
       })),
     ];
-    expect(calcularEstadisticas(apuestas)!.tendencia).toBe(200);
+    expect(calcularEstadisticas(apuestas, HOY)!.tendencia).toBe(200);
+  });
+  it("apuestasDiarias = total/30 de la ventana", () => {
+    const apuestas = Array.from({ length: 15 }, () => ({
+      cantidad: 10,
+      cuota: 2,
+      acierto: true,
+      fecha: daysAgo(10),
+    }));
+    expect(calcularEstadisticas(apuestas, HOY)!.apuestasDiarias).toBe(0.5);
   });
 });
 

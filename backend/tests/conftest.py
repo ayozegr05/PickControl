@@ -25,9 +25,11 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 import app.services.results.base as results_base
 import app.services.results.compat_llm as compat_llm
 import app.services.results.response_cache as response_cache
+from app.core.security import create_access_token, hash_password
 from app.db.postgres import get_session
 from app.main import app
 from app.models.informante import Informante
+from app.models.user import User, UserRole
 
 
 @pytest.fixture(autouse=True)
@@ -95,6 +97,28 @@ async def auth_headers(client: AsyncClient) -> dict[str, str]:
     response = await client.post("/api/v1/auth/register", json=payload)
     assert response.status_code == 201
     token = response.json()["token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest_asyncio.fixture
+async def admin_headers(session: AsyncSession) -> dict[str, str]:
+    """Cabeceras de un usuario con rol ADMIN insertado directamente.
+
+    El registro público solo crea usuarios USER, así que para probar
+    endpoints admin-only el usuario se siembra en BD y se firma el
+    JWT igual que en login (`sub`/`email`/`role`)."""
+    admin = User(
+        name="Admin",
+        email="admin@example.com",
+        password_hash=hash_password("password123"),
+        role=UserRole.ADMIN,
+    )
+    session.add(admin)
+    await session.commit()
+    await session.refresh(admin)
+    token = create_access_token(
+        {"sub": str(admin.id), "email": admin.email, "role": admin.role}
+    )
     return {"Authorization": f"Bearer {token}"}
 
 

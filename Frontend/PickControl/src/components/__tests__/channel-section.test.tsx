@@ -42,6 +42,7 @@ const pick = (over: Partial<ParsedPick> = {}): ParsedPick => ({
 
 const cardProps = {
   showAll: false,
+  canCorrect: true,
   onCorregir: jest.fn(),
   onCorregirPata: jest.fn(),
   onChannelPress: jest.fn(),

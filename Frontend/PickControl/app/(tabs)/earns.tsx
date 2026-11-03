@@ -1,6 +1,7 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useCallback, useEffect, useState, useRef } from "react";
 import { View, Text, StyleSheet, ScrollView, Animated } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import LottieView from "lottie-react-native";
 import TopBar from "@/src/components/top-bar";
@@ -11,7 +12,7 @@ import {
 } from "@/src/utils/picks";
 
 const GananciasPage = () => {
-  const { apuestas, loading: fetching } = usePicks();
+  const { apuestas, loading: fetching, reload } = usePicks();
   const [totalGanancias, setTotalGanancias] = useState(0);
   const [gananciasInformante, setGananciasInformante] = useState<
     Record<string, number>
@@ -32,6 +33,23 @@ const GananciasPage = () => {
   // arranca la animación (equivalente al antiguo `dataLoaded` guard:
   // el proceso solo ocurre la primera vez).
   const processed = useRef(false);
+
+  // Refetch al volver a la pestaña: antes `dataLoaded` bloqueaba el
+  // refetch de por vida y los datos quedaban obsoletos tras añadir o
+  // liquidar apuestas. El primer foco se salta porque la carga de
+  // montaje ya la hace el hook.
+  const firstFocus = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (firstFocus.current) {
+        firstFocus.current = false;
+        return;
+      }
+      processed.current = false; // reagregar y re-animar con datos frescos
+      reload();
+    }, [reload])
+  );
+
   useEffect(() => {
     if (fetching || processed.current) return;
     processed.current = true;
