@@ -70,16 +70,22 @@ export default function ParsedPickCard({
         <View style={styles.pataButtons}>
           <TouchableOpacity
             onPress={() => onCorregirPata(pata, { acierto: true })}
+            accessibilityRole="button"
+            accessibilityLabel={`Marcar pata ${pata.orden != null ? pata.orden + 1 : ""} como acertada`}
           >
             <Text style={styles.pataButton}>✅</Text>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => onCorregirPata(pata, { acierto: false })}
+            accessibilityRole="button"
+            accessibilityLabel={`Marcar pata ${pata.orden != null ? pata.orden + 1 : ""} como fallada`}
           >
             <Text style={styles.pataButton}>❌</Text>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => onCorregirPata(pata, { anulada: true })}
+            accessibilityRole="button"
+            accessibilityLabel={`Marcar pata ${pata.orden != null ? pata.orden + 1 : ""} como anulada`}
           >
             <Text style={styles.pataButton}>↩️</Text>
           </TouchableOpacity>
@@ -87,6 +93,8 @@ export default function ParsedPickCard({
             onPress={() =>
               onCorregirPata(pata, { acierto: null, anulada: false })
             }
+            accessibilityRole="button"
+            accessibilityLabel={`Marcar pata ${pata.orden != null ? pata.orden + 1 : ""} como pendiente`}
           >
             <Text style={styles.pataButton}>❓</Text>
           </TouchableOpacity>
@@ -171,18 +179,24 @@ export default function ParsedPickCard({
             <TouchableOpacity
               style={[styles.acertoButton, styles.acertoButtonTrue]}
               onPress={() => onCorregir(pick, { acierto: true })}
+              accessibilityRole="button"
+              accessibilityLabel="Marcar pick como acertado"
             >
               <Text style={styles.acertoButtonText}>Acertó</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.acertoButton, styles.acertoButtonFalse]}
               onPress={() => onCorregir(pick, { acierto: false })}
+              accessibilityRole="button"
+              accessibilityLabel="Marcar pick como fallado"
             >
               <Text style={styles.acertoButtonText}>Falló</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.acertoButton, styles.acertoButtonAnulada]}
               onPress={() => onCorregir(pick, { anulada: true })}
+              accessibilityRole="button"
+              accessibilityLabel="Marcar pick como anulado"
             >
               <Text style={styles.acertoButtonText}>Anulada</Text>
             </TouchableOpacity>
@@ -194,6 +208,8 @@ export default function ParsedPickCard({
                   anulada: false,
                 })
               }
+              accessibilityRole="button"
+              accessibilityLabel="Marcar pick como pendiente"
             >
               <Text style={styles.acertoButtonText}>Pendiente</Text>
             </TouchableOpacity>

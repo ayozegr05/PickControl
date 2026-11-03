@@ -260,6 +260,12 @@ const LoginScreen = () => {
                       style={styles.eyeButton}
                       onPress={() => setShowPassword((prev) => !prev)}
                       hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        showPassword
+                          ? "Ocultar contraseña"
+                          : "Mostrar contraseña"
+                      }
                     >
                       <MaterialCommunityIcons
                         name={showPassword ? "eye-off" : "eye"}

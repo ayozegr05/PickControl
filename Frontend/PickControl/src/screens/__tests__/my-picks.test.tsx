@@ -160,4 +160,22 @@ describe("my-picks screen", () => {
     expect(screen.queryByText("Mis Apuestas")).toBeNull();
     expect(mockListPicks).not.toHaveBeenCalled();
   });
+
+  it("muestra ErrorState con Reintentar cuando la API falla", async () => {
+    mockListPicks.mockRejectedValue(new Error("boom"));
+
+    const screen = await render(<MyPicksScreen />);
+
+    await waitFor(() =>
+      expect(screen.getByText("Error al cargar los datos")).toBeTruthy()
+    );
+    // No finge una tabla vacía: el error es explícito.
+    expect(screen.queryByText("Mis Apuestas")).toBeNull();
+
+    mockListPicks.mockResolvedValue([]);
+    await fireEvent.press(screen.getByLabelText("Reintentar"));
+    await waitFor(() =>
+      expect(screen.getByText("Mis Apuestas")).toBeTruthy()
+    );
+  });
 });

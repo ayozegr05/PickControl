@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams } from "expo-router"; // Obtener los parámetros de búsqueda
 import { useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
+import { ErrorState } from "@/src/components/inline-error";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useInformanteStats } from "@/src/hooks/useInformanteStats";
 import { deletePick, updatePick } from "@/src/api/picks.api";
@@ -39,7 +40,7 @@ import { useAuth } from "@/src/context/AuthContext";
 export default function InformantDetail() {
   const { informante } = useLocalSearchParams(); // Obtener el parámetro dinámico
   const { isAdmin } = useAuth();
-  const { data, loading, reload, setData } = useInformanteStats(
+  const { data, loading, error, reload, setData } = useInformanteStats(
     String(informante)
   );
   const [apuestas, setApuestas] = useState<PickItem[]>([]);
@@ -190,6 +191,16 @@ export default function InformantDetail() {
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#4CAF50" />
         <Text style={styles.loadingText}>Cargando información...</Text>
+      </View>
+    );
+  }
+  // Error de red ≠ canal vacío: antes ambos decían "No se
+  // encontraron datos" y un fallo era indistinguible de un canal
+  // sin stats.
+  if (error && !data) {
+    return (
+      <View style={styles.container}>
+        <ErrorState onRetry={reload} />
       </View>
     );
   }

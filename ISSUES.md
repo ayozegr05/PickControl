@@ -105,18 +105,25 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   → ahora 403 sin rol ADMIN. Frontend: prop `canCorrect` oculta los
   botones en `ParsedPickCard` y `PickDetailModal`. **Pendiente deploy
   al VM** para que el gate aplique en prod.
-- [ ] 🟡 **Accesibilidad** (progreso parcial 2026-11): añadidos
-  `accessibilityLabel` en `ModalFrame` ("Cerrar"), `DeletePickModal`
-  (papelera), botones icon-only de `UpdatePickModal` (✓/✗) y chevron
-  de combinadas en `TipsterPicksCard`. Siguen sin etiqueta:
-  checkboxes custom, corrección de patas, ojo de password, toggles.
-  Contraste flojo (`#777/#888` a 11-13px sobre `#1a1a1a` ≈ 3.5:1).
+- [ ] 🟡 **Accesibilidad** (progreso parcial 2026-11): labels en
+  `ModalFrame` ("Cerrar"), `DeletePickModal`, `UpdatePickModal`,
+  chevron de combinadas, **y ahora también** checkboxes de filtros
+  en parsed-picks (`role="checkbox"` + `accessibilityState`), los 4
+  iconos de corrección de patas y los botones Acertó/Falló/Anulada/
+  Pendiente (`ParsedPickCard`), ojo de password en login y Switch +
+  papelera de canales. **Sigue abierto**: contraste flojo
+  (`#777/#888` a 11-13px sobre `#1a1a1a` ≈ 3.5:1, el WCAG pide 4.5:1).
 - [x] ✅ `expo-status-bar` instalado pero **nunca usado** — resuelto:
   `<StatusBar style="light" />` en `app/_layout.tsx`.
-- [ ] 🟡 **Estados error/vacío inconsistentes**: `my-picks` traga el
-  error (`catch → console.error`, sin UI); `earns` muestra `0.00€`
-  como dato real si falla; `[informante]` muestra "No se encontraron
-  datos" también para errores de red.
+- [x] ✅ **Estados error/vacío inconsistentes** — resuelto
+  (2026-11-03): componente compartido `src/components/inline-error.tsx`
+  (`ErrorState`: icono + mensaje + Reintentar). `my-picks` ya no
+  traga el error en silencio; `earns` muestra el ErrorState en vez
+  del 0.00€ falso (y la animación no corre — `setIsLoading` ya no
+  espera al timer); `[informante]` distingue error de red
+  (`ErrorState`) de canal realmente vacío ("No se encontraron
+  datos"). Bonus: la animación de earns se para al desmontar — el
+  timer de 1500ms hacía setState sobre el componente muerto.
 - [ ] 🟡 `useVideoPlayer` se instancia siempre aunque el usuario esté
   autenticado y no vea la landing (`index.tsx:36-43`) — vídeo en loop
   innecesario; además `marginBottom: 655` mágico + `position:absolute`

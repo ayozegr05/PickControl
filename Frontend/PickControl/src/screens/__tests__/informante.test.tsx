@@ -199,4 +199,24 @@ describe("[informante] screen", () => {
       ).toBeTruthy()
     );
   });
+
+  it("error de red muestra ErrorState, no 'No se encontraron datos'", async () => {
+    mockGetStats.mockRejectedValue(new Error("boom"));
+
+    const screen = await render(<InformantDetail />);
+
+    await waitFor(() =>
+      expect(screen.getByText("Error al cargar los datos")).toBeTruthy()
+    );
+    // El mensaje de "sin datos" solo es para el canal realmente vacío.
+    expect(
+      screen.queryByText("No se encontraron datos para este informante.")
+    ).toBeNull();
+
+    mockGetStats.mockResolvedValue(makeStats());
+    await fireEvent.press(screen.getByLabelText("Reintentar"));
+    await waitFor(() =>
+      expect(screen.getByText("Tipster vs. tú")).toBeTruthy()
+    );
+  });
 });

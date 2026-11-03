@@ -5,6 +5,7 @@ import { useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import LottieView from "lottie-react-native";
 import TopBar from "@/src/components/top-bar";
+import { ErrorState } from "@/src/components/inline-error";
 import { usePicks } from "@/src/hooks/usePicks";
 import {
   gananciasPor,
@@ -12,7 +13,7 @@ import {
 } from "@/src/utils/picks";
 
 const GananciasPage = () => {
-  const { apuestas, loading: fetching, reload } = usePicks();
+  const { apuestas, loading: fetching, error, reload } = usePicks();
   const [totalGanancias, setTotalGanancias] = useState(0);
   const [gananciasInformante, setGananciasInformante] = useState<
     Record<string, number>
@@ -34,6 +35,18 @@ const GananciasPage = () => {
   // el proceso solo ocurre la primera vez).
   const processed = useRef(false);
 
+  // La animación en curso: se para al desmontar. Antes el timer de
+  // 1500ms quedaba vivo tras salir de la pestaña y su callback hacía
+  // setState sobre el componente muerto (y en tests envenenaba el
+  // render del componente siguiente).
+  const currentAnim = useRef<Animated.CompositeAnimation | null>(null);
+  useEffect(
+    () => () => {
+      currentAnim.current?.stop();
+    },
+    []
+  );
+
   // Refetch al volver a la pestaña: antes `dataLoaded` bloqueaba el
   // refetch de por vida y los datos quedaban obsoletos tras añadir o
   // liquidar apuestas. El primer foco se salta porque la carga de
@@ -54,6 +67,13 @@ const GananciasPage = () => {
     if (fetching || processed.current) return;
     processed.current = true;
 
+    // Con error no hay animación ni agregación de un array vacío:
+    // directo al ErrorState (evita el 0.00€ falso).
+    if (error) {
+      setIsLoading(false);
+      return;
+    }
+
     const ganancias = sumarGanancias(apuestas);
     setTotalGanancias(ganancias);
     setGananciasInformante(gananciasPor(apuestas, "informante"));
@@ -61,14 +81,15 @@ const GananciasPage = () => {
     setDataLoaded(true);
 
     // Iniciar la animación después de que los datos estén listos
-    Animated.timing(animatedValue, {
+    currentAnim.current = Animated.timing(animatedValue, {
       toValue: ganancias,
       duration: 1500,
       useNativeDriver: false,
-    }).start(() => {
+    });
+    currentAnim.current.start(() => {
       setIsLoading(false);
     });
-  }, [fetching]);
+  }, [fetching, error]);
 
   useEffect(() => {
     const listener = animatedValue.addListener(({ value }) => {
@@ -86,11 +107,12 @@ const GananciasPage = () => {
     if (!isLoading && dataLoaded) {
       // Iniciar la animación de las ganancias
       animatedValue.setValue(0);
-      Animated.timing(animatedValue, {
+      currentAnim.current = Animated.timing(animatedValue, {
         toValue: totalGanancias,
         duration: 1500,
         useNativeDriver: false,
-      }).start(() => {
+      });
+      currentAnim.current.start(() => {
         // Una vez terminada la animación, reproducir la animación de rocket o lose
         if (totalGanancias > 0 && rocketRef.current) {
           rocketRef.current.play();
@@ -129,6 +151,11 @@ const GananciasPage = () => {
               loop
             />
           </View>
+        ) : error ? (
+          // Antes un fallo de red dejaba un 0.00€ falso presentado
+          // como ganancia real — el peor dato posible para una app
+          // de auditoría. Error explícito con reintento.
+          <ErrorState onRetry={reload} />
         ) : (
           <>
             <Text style={styles.subtitle}>Tus ganancias totales son:</Text>

@@ -13,6 +13,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Redirect, useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
+import { ErrorState } from "@/src/components/inline-error";
 import { useAuth } from "@/src/context/AuthContext";
 import { updatePick } from "@/src/api/picks.api";
 import { PickItem, Acierto } from "@/src/types/pick.types";
@@ -57,7 +58,7 @@ const MyPicksScreen = () => {
     return <Text>-</Text>;
   };
 
-  const { apuestas, reload } = usePicks(isAuthenticated);
+  const { apuestas, error, reload } = usePicks(isAuthenticated);
 
   // Ordena por fecha y agrupa por informante cuando llega la lista.
   useEffect(() => {
@@ -200,6 +201,17 @@ const MyPicksScreen = () => {
 
   if (!isAuthenticated) {
     return <Redirect href="/" />;
+  }
+
+  // Antes el fallo de red se tragaba (catch → console.error) y la
+  // pantalla enseñaba secciones vacías como si no hubiera apuestas.
+  if (error && apuestas.length === 0) {
+    return (
+      <View style={styles.container}>
+        <TopBar />
+        <ErrorState onRetry={reload} />
+      </View>
+    );
   }
 
   return (

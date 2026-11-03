@@ -274,6 +274,9 @@ export default function ParsedPicksScreen() {
         <TouchableOpacity
           style={styles.toggleRow}
           onPress={toggleShowAll}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: showAll }}
+          accessibilityLabel="Ver todos, incluye mensajes descartados por el filtro"
         >
           <View style={[styles.checkbox, showAll && styles.checkboxChecked]} />
           <Text style={styles.toggleLabel}>
@@ -284,6 +287,9 @@ export default function ParsedPicksScreen() {
         <TouchableOpacity
           style={styles.toggleRow}
           onPress={togglePendientes}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: soloPendientes }}
+          accessibilityLabel="Solo pendientes de liquidar"
         >
           <View
             style={[styles.checkbox, soloPendientes && styles.checkboxChecked]}

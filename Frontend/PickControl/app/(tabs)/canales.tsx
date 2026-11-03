@@ -156,10 +156,14 @@ const Canales = () => {
                 onValueChange={(v) => handleToggle(canal, v)}
                 trackColor={{ false: "#555", true: "#ff9f1c" }}
                 thumbColor="#fff"
+                accessibilityLabel={`Activar canal ${canal.name || canal.target}`}
+                accessibilityState={{ checked: canal.activo }}
               />
               <TouchableOpacity
                 onPress={() => handleDelete(canal)}
                 style={styles.deleteButton}
+                accessibilityRole="button"
+                accessibilityLabel={`Eliminar canal ${canal.name || canal.target}`}
               >
                 <Ionicons name="trash-outline" size={20} color="#f44336" />
               </TouchableOpacity>

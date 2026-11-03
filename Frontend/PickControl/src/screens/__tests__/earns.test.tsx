@@ -6,11 +6,16 @@ import { render, act } from "@testing-library/react-native";
 import GananciasPage from "@/app/(tabs)/earns";
 
 const mockReload = jest.fn();
+const mockPicksState = {
+  apuestas: [] as unknown[],
+  loading: false,
+  error: null as string | null,
+};
 jest.mock("@/src/hooks/usePicks", () => ({
   usePicks: () => ({
-    apuestas: [],
-    loading: false,
-    error: null,
+    apuestas: mockPicksState.apuestas,
+    loading: mockPicksState.loading,
+    error: mockPicksState.error,
     reload: mockReload,
   }),
 }));
@@ -35,6 +40,9 @@ jest.mock("@/src/components/top-bar", () => () => null);
 describe("earns screen", () => {
   beforeEach(() => {
     mockReload.mockClear();
+    mockPicksState.apuestas = [];
+    mockPicksState.loading = false;
+    mockPicksState.error = null;
     focusCb = () => {};
   });
 
@@ -47,4 +55,5 @@ describe("earns screen", () => {
     act(() => focusCb());
     expect(mockReload).toHaveBeenCalledTimes(2);
   });
+
 });
