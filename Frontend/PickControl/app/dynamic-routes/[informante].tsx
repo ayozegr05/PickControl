@@ -1,11 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { colors, metricColor } from "@/src/theme";
+import { colors } from "@/src/theme";
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
-  FlatList,
   ActivityIndicator,
   TouchableOpacity,
   Alert,
@@ -13,10 +12,8 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams } from "expo-router"; // Obtener los parámetros de búsqueda
-import { Dimensions } from "react-native";
 import { useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
-import { MaterialCommunityIcons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useInformanteStats } from "@/src/hooks/useInformanteStats";
 import { deletePick, updatePick } from "@/src/api/picks.api";
@@ -29,16 +26,14 @@ import {
 import { ApiError } from "@/src/api/client";
 import { InformanteStats } from "@/src/types/informante.types";
 import { PickItem, Acierto } from "@/src/types/pick.types";
-import {
-  gananciaApuesta,
-  iconoAnulada,
-} from "@/src/utils/picks";
-import { formatDateShort } from "@/src/utils/format";
+import { gananciaApuesta } from "@/src/utils/picks";
 import PickDetailModal from "@/src/components/pick-detail-modal";
 import JugarModal, { JugarFormValues } from "@/src/components/jugar-modal";
 import UpdatePickModal from "@/src/components/update-pick-modal";
 import DeletePickModal from "@/src/components/delete-pick-modal";
 import ApuestasTable from "@/src/components/apuestas-table";
+import TipsterVsYouCard from "@/src/components/tipster-vs-you-card";
+import TipsterPicksCard from "@/src/components/tipster-picks-card";
 
 export default function InformantDetail() {
   const { informante } = useLocalSearchParams(); // Obtener el parámetro dinámico
@@ -66,14 +61,9 @@ export default function InformantDetail() {
   );
   const [jugando, setJugando] = useState(false);
   const [periodoSeleccionado, setPeriodoSeleccionado] = useState("semana");
-  // Combinadas expandidas: id del padre -> true si se muestran sus patas.
-  const [combinadasAbiertas, setCombinadasAbiertas] = useState<
-    Record<number, boolean>
-  >({});
 
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const screenWidth = Dimensions.get("window").width; // Usado para hacer el gráfico responsivo
 
   // El hook fetcha al montar y refetchea si cambia `informante`.
 
@@ -85,6 +75,27 @@ export default function InformantDetail() {
         .filter((p) => !p.esReto && !p.esCombinada)
         .sort(
           (a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime()
+        ),
+    [data?.parsedPicks]
+  );
+
+  // Retos y combinadas van en secciones propias de la card, fuera de
+  // las stats de simples, ordenados de más reciente a más antiguo.
+  const retosOrdenados = useMemo(
+    () =>
+      [...(data?.parsedPicks ?? [])]
+        .filter((p) => p.esReto)
+        .sort(
+          (a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime()
+        ),
+    [data?.parsedPicks]
+  );
+  const combinadasOrdenadas = useMemo(
+    () =>
+      [...(data?.parsedPicks ?? [])]
+        .filter((p) => p.esCombinada)
+        .sort(
+          (a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime()
         ),
     [data?.parsedPicks]
   );
@@ -199,52 +210,10 @@ export default function InformantDetail() {
     apuestas: apuestasData,
   } = data;
 
-  // Función para calcular las ganancias acumuladas
-  const calcularGananciaAcumulada = (apuestas: PickItem[]) => {
-    if (!apuestas || apuestas.length === 0) {
-      return [0];
-    }
-    let acumulado = 0;
-    return apuestas.map((apuesta) => {
-      const ganancia = gananciaApuesta(
-        apuesta.cantidadApostada,
-        apuesta.cuota,
-        apuesta.acierto
-      );
-      acumulado += ganancia;
-      return Number(acumulado.toFixed(2)); // Aseguramos que devolvemos un número con 2 decimales
-    });
-  };
-
   // Picks de Telegram: solo lectura, sin tocar el modal de edición.
-  // Anulada (void) es un estado cerrado distinto de pendiente: sin la
-  // flag la pintábamos con "❓" igual que una no verificada. El icono
-  // distingue el motivo cuando consta: ↩️ push (devuelta por línea
-  // entera), 📅 aplazado/cancelado, 👤 jugador sin minutos, ⏰
-  // expirada por barrido; ⊘ genérico en históricas sin motivo.
-  const renderPronosticoTelegram = (
-    acierto: Acierto,
-    anulada?: boolean,
-    motivoAnulada?: string | null
-  ) => {
-    if (anulada) {
-      return (
-        <Text style={[styles.icon, { color: "gray" }]}>
-          {iconoAnulada(motivoAnulada)}
-        </Text>
-      );
-    }
-    if (acierto === "True") {
-      return (
-        <Text style={[styles.icon, { color: colors.success, fontSize: 18 }]}>
-          ✅
-        </Text>
-      );
-    } else if (acierto === "False") {
-      return <Text style={[styles.icon, { color: "red" }]}>❌</Text>;
-    }
-    return <Text style={[styles.icon, { color: "gray" }]}>❓</Text>;
-  };
+  // Anulada (void) es un estado cerrado distinto de pendiente: los
+  // iconos de motivo viven en `iconoAnulada` y el renderizado en
+  // TipsterPicksCard.
 
   // Función para calcular las ganancias totales
   const calcularGananciasTotales = () => {
@@ -310,44 +279,6 @@ export default function InformantDetail() {
           : "No se pudo actualizar la apuesta.";
       Alert.alert("Error", message);
     }
-  };
-
-  // Función para agrupar datos por mes si es necesario
-  const agruparDatos = (apuestas: PickItem[]) => {
-    if (periodoSeleccionado === "año") {
-      const datosPorMes: Record<number, { ganancias: number[]; fecha: Date }> =
-        {};
-
-      // Agrupar datos por mes
-      apuestas.forEach((apuesta) => {
-        const fecha = new Date(apuesta.fecha);
-        const mes = fecha.getMonth();
-        if (!datosPorMes[mes]) {
-          datosPorMes[mes] = {
-            ganancias: [],
-            fecha: new Date(fecha.getFullYear(), mes, 1), // Primer día del mes
-          };
-        }
-        datosPorMes[mes].ganancias.push(
-          gananciaApuesta(
-            apuesta.cantidadApostada,
-            apuesta.cuota,
-            apuesta.acierto
-          )
-        );
-      });
-
-      // Calcular media por mes
-      return Object.entries(datosPorMes)
-        .map(([mes, datos]) => ({
-          Fecha: datos.fecha,
-          gananciaMedia:
-            datos.ganancias.reduce((a, b) => a + b, 0) / datos.ganancias.length,
-        }))
-        .sort((a, b) => a.Fecha.getTime() - b.Fecha.getTime());
-    }
-
-    return apuestas;
   };
 
   const apuestasFiltradas = () => {
@@ -510,93 +441,25 @@ export default function InformantDetail() {
           <Text style={styles.title}>{informante}</Text>
 
           {/* Comparativa: lo que publica el tipster vs tu resultado real */}
-          <View style={styles.card}>
-            <Text style={[styles.cardTitle, { marginBottom: 12 }]}>
-              Tipster vs. tú
-            </Text>
-            <View style={styles.compareRow}>
-              <Text style={styles.compareLabel} />
-              <Text style={styles.compareColTitle}>El tipster</Text>
-              <Text style={styles.compareColTitle}>Tú</Text>
-            </View>
-            <View style={styles.compareRow}>
-              <Text style={styles.compareLabel}>Yield</Text>
-              <Text
-                style={[
-                  styles.compareValue,
-                  { color: metricColor(data.parsedYieldPct) },
-                ]}
-              >
-                {data.parsedTotalApuestas > 0
-                  ? `${data.parsedYieldPct.toFixed(2)}%`
-                  : "—"}
-              </Text>
-              <Text
-                style={[
-                  styles.compareValue,
-                  { color: metricColor(data.yieldPct) },
-                ]}
-              >
-                {totalApuestas > 0 ? `${data.yieldPct.toFixed(2)}%` : "—"}
-              </Text>
-            </View>
-            <View style={styles.compareRow}>
-              <Text style={styles.compareLabel}>% acierto</Text>
-              <Text style={styles.compareValue}>
-                {data.parsedTotalApuestas > 0
-                  ? `${data.parsedPorcentajeAciertos.toFixed(1)}%`
-                  : "—"}
-              </Text>
-              <Text style={styles.compareValue}>
-                {totalApuestas > 0 ? `${porcentajeAciertos.toFixed(1)}%` : "—"}
-              </Text>
-            </View>
-            <View style={styles.compareRow}>
-              <Text style={styles.compareLabel}>Picks</Text>
-              <Text style={styles.compareValue}>
-                {data.parsedTotalApuestas}
-              </Text>
-              <Text style={styles.compareValue}>{totalApuestas}</Text>
-            </View>
-            <View style={styles.compareRow}>
-              <Text style={styles.compareLabel}>Pendientes</Text>
-              <Text style={styles.compareValue}>
-                {
-                  data.parsedPicks.filter(
-                    (p) => p.acierto === "Pending" && !p.anulada
-                  ).length
-                }
-              </Text>
-              <Text style={styles.compareValue}>
-                {apuestas.filter((a) => a.acierto === "Pending").length}
-              </Text>
-            </View>
-            <View style={styles.compareRow}>
-              <Text style={styles.compareLabel}>Ganancia</Text>
-              <Text
-                style={[
-                  styles.compareValue,
-                  { color: metricColor(data.parsedGanancias) },
-                ]}
-              >
-                {data.parsedTotalApuestas > 0
-                  ? `${data.parsedGanancias.toFixed(2)}u`
-                  : "—"}
-              </Text>
-              <Text
-                style={[
-                  styles.compareValue,
-                  { color: metricColor(totalGananciasNum) },
-                ]}
-              >
-                {totalApuestas > 0 ? `${totalGananciasNum.toFixed(2)}€` : "—"}
-              </Text>
-            </View>
-            <Text style={styles.compareNote}>
-              El tipster: unidades (u) según su stake · Tú: euros que has
-              apostado
-            </Text>
-          </View>
+          <TipsterVsYouCard
+            tipster={{
+              yieldPct: data.parsedYieldPct,
+              totalApuestas: data.parsedTotalApuestas,
+              porcentajeAciertos: data.parsedPorcentajeAciertos,
+              ganancias: data.parsedGanancias,
+              pendientes: data.parsedPicks.filter(
+                (p) => p.acierto === "Pending" && !p.anulada
+              ).length,
+            }}
+            usuario={{
+              yieldPct: data.yieldPct,
+              totalApuestas,
+              porcentajeAciertos,
+              ganancias: totalGananciasNum,
+              pendientes: apuestas.filter((a) => a.acierto === "Pending")
+                .length,
+            }}
+          />
           <UpdatePickModal
             visible={modalUpdateVisible}
             onClose={() => setModalUpdateVisible(false)}
@@ -606,309 +469,25 @@ export default function InformantDetail() {
           />
 
           {/* Picks publicados por el tipster (extraídos de Telegram) */}
-          <View style={styles.card}>
-            <Text style={[styles.cardTitle, { color: "#ff9f1c" }]}>
-              Picks del tipster
-            </Text>
-            <Text style={styles.cardSubtitle}>
-              Lo que ha publicado en su canal, verificado automáticamente
-            </Text>
-            <View style={styles.row}>
-              <Text style={styles.label}>Total Picks:</Text>
-              <Text style={styles.value}>{data.parsedTotalApuestas}</Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>Aciertos:</Text>
-              <Text style={styles.value}>{data.parsedTotalAciertos}</Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>Porcentaje de Aciertos:</Text>
-              <Text style={styles.value}>
-                {data.parsedPorcentajeAciertos.toFixed(2)}%
-              </Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>Ganancias (unidades):</Text>
-              <Text style={styles.value}>
-                {data.parsedGanancias.toFixed(2)}u
-              </Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>Yield:</Text>
-              <Text style={styles.value}>
-                {data.parsedYieldPct.toFixed(2)}%
-              </Text>
-            </View>
-
-            <TouchableOpacity
-              style={styles.telegramButton}
-              onPress={() => router.push("/parsed-picks")}
-            >
-              <Text style={styles.telegramButtonText}>
-                Corregir picks de Telegram
-              </Text>
-            </TouchableOpacity>
-
-            {data.parsedPicks.length === 0 ? (
-              <Text style={styles.emptyText}>
-                Todavía no hay picks extraídos de este canal.
-              </Text>
-            ) : (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                <View style={styles.table}>
-                  <View style={styles.tableRow}>
-                    <View style={[styles.tableHeaderCell, styles.border]}>
-                      <Text style={styles.tableHeaderText}>Apuesta</Text>
-                    </View>
-                    <View style={[styles.tableHeaderCell, styles.border]}>
-                      <Text style={styles.tableHeaderText}>Acierto</Text>
-                    </View>
-                    <View style={[styles.tableHeaderCell, styles.border]}>
-                      <Text style={styles.tableHeaderText}>Fecha</Text>
-                    </View>
-                    <View style={[styles.tableHeaderCell, styles.border]}>
-                      <Text style={styles.tableHeaderText}>Mercado</Text>
-                    </View>
-                    <View style={[styles.tableHeaderCell, styles.border]}>
-                      <Text style={styles.tableHeaderText}>Cuota</Text>
-                    </View>
-                    <View style={[styles.tableHeaderCell, styles.border]}>
-                      <Text style={styles.tableHeaderText}>Stake</Text>
-                    </View>
-                    <View style={[styles.tableHeaderCell, styles.border]}>
-                      <Text style={styles.tableHeaderText}>Ganancia</Text>
-                    </View>
-                  </View>
-
-                  <FlatList
-                    style={styles.tableRows}
-                    nestedScrollEnabled={true}
-                    data={parsedTableRows}
-                    keyExtractor={(apuesta) => String(apuesta.id)}
-                    renderItem={({ item: apuesta, index }) => (
-                      <TouchableOpacity
-                        onPress={() => setSelectedTelegramPick(apuesta)}
-                        style={[
-                          styles.tableRow,
-                          index % 2 === 0 ? styles.evenRow : styles.oddRow,
-                        ]}
-                      >
-                        <View style={[styles.tableCell, styles.border]}>
-                          <Text
-                            style={[styles.cellText, { fontWeight: "bold" }]}
-                          >
-                            {apuesta.apuesta || "(sin nombre)"}
-                          </Text>
-                          {apuesta.evento ? (
-                            <Text style={styles.eventoText}>
-                              {apuesta.evento}
-                            </Text>
-                          ) : null}
-                        </View>
-                        <View style={[styles.tableCell, styles.border]}>
-                          <Text>
-                            {renderPronosticoTelegram(
-                              apuesta.acierto,
-                              apuesta.anulada,
-                              apuesta.motivoAnulada
-                            )}
-                          </Text>
-                        </View>
-                        <View style={[styles.tableCell, styles.border]}>
-                          <Text
-                            style={[styles.cellText, { fontWeight: "bold" }]}
-                          >
-                            {formatDateShort(apuesta.fecha)}
-                          </Text>
-                        </View>
-                        <View style={[styles.tableCell, styles.border]}>
-                          <Text
-                            style={[styles.cellText, { fontWeight: "bold" }]}
-                          >
-                            {apuesta.tipoDeApuesta}
-                          </Text>
-                        </View>
-                        <View style={[styles.tableCell, styles.border]}>
-                          <Text
-                            style={[styles.cellText, { fontWeight: "bold" }]}
-                          >
-                            {apuesta.cuota != null
-                              ? Number(apuesta.cuota).toFixed(2)
-                              : "—"}
-                          </Text>
-                        </View>
-                        <View style={[styles.tableCell, styles.border]}>
-                          <Text
-                            style={[styles.cellText, { fontWeight: "bold" }]}
-                          >
-                            {apuesta.cantidadApostada != null
-                              ? Number(apuesta.cantidadApostada).toFixed(2)
-                              : "—"}
-                          </Text>
-                        </View>
-                        <View style={[styles.tableCell, styles.border]}>
-                          <Text
-                            style={[styles.cellText, { fontWeight: "bold" }]}
-                          >
-                            {Number(
-                              apuesta.ganancia ??
-                                gananciaApuesta(
-                                  apuesta.cantidadApostada,
-                                  apuesta.cuota,
-                                  apuesta.acierto
-                                )
-                            ).toFixed(2)}
-                            <Text>u</Text>
-                          </Text>
-                        </View>
-                      </TouchableOpacity>
-                    )}
-                  />
-                </View>
-              </ScrollView>
-            )}
-
-            {/* Retos del tipster: van aparte de las apuestas diarias */}
-            {data.parsedPicks.some((p) => p.esReto) && (
-              <View style={styles.retosSection}>
-                <Text style={styles.retosTitle}>Retos</Text>
-                {data.parsedPicks
-                  .filter((p) => p.esReto)
-                  .sort(
-                    (a, b) =>
-                      new Date(b.fecha).getTime() - new Date(a.fecha).getTime()
-                  )
-                  .map((reto) => (
-                    <TouchableOpacity
-                      key={reto.id}
-                      onPress={() => setSelectedTelegramPick(reto)}
-                      style={styles.retoRow}
-                    >
-                      <Text style={styles.retoText}>
-                        {reto.apuesta || "(sin nombre)"}
-                        {reto.evento ? ` · ${reto.evento}` : ""}
-                      </Text>
-                      <Text style={styles.retoMeta}>
-                        {formatDateShort(reto.fecha)} · cuota{" "}
-                        {reto.cuota != null
-                          ? Number(reto.cuota).toFixed(2)
-                          : "—"}{" "}
-                        ·{" "}
-                        {renderPronosticoTelegram(
-                          reto.acierto,
-                          reto.anulada,
-                          reto.motivoAnulada
-                        )}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-              </View>
-            )}
-
-            {/* Combinadas del tipster: sección propia, fuera de las
-                stats de simples. Cada padre se expande para ver las
-                patas con su resultado individual. */}
-            {data.parsedPicks.some((p) => p.esCombinada) && (
-              <View style={styles.retosSection}>
-                <Text style={styles.retosTitle}>Combinadas</Text>
-                {data.combinadasTotal > 0 && (
-                  <Text style={styles.retoMeta}>
-                    {data.combinadasTotal} combinadas ·{" "}
-                    {data.combinadasAciertos} aciertos ·{" "}
-                    {data.combinadasGanancias.toFixed(2)}u · yield{" "}
-                    {data.combinadasYieldPct.toFixed(2)}%
-                  </Text>
-                )}
-                {data.parsedPicks
-                  .filter((p) => p.esCombinada)
-                  .sort(
-                    (a, b) =>
-                      new Date(b.fecha).getTime() - new Date(a.fecha).getTime()
-                  )
-                  .map((comb) => {
-                    const abierta = !!combinadasAbiertas[comb.id];
-                    const numPatas = comb.patas?.length ?? 0;
-                    return (
-                      <View key={comb.id} style={styles.retoRow}>
-                        <View style={styles.combinadaHeader}>
-                          <TouchableOpacity
-                            style={{ flex: 1 }}
-                            onPress={() => setSelectedTelegramPick(comb)}
-                          >
-                            <Text style={styles.retoText}>
-                              {comb.apuesta || "(combinada)"}
-                              {comb.evento ? ` · ${comb.evento}` : ""}
-                            </Text>
-                            <Text style={styles.retoMeta}>
-                              {formatDateShort(comb.fecha)} · cuota{" "}
-                              {Number(comb.cuotaEfectiva ?? comb.cuota).toFixed(
-                                2
-                              )}
-                              {comb.cuotaEfectiva != null &&
-                              comb.cuotaEfectiva !== comb.cuota
-                                ? ` (declarada ${Number(comb.cuota).toFixed(2)})`
-                                : ""}
-                              {" · "}
-                              {numPatas} patas ·{" "}
-                              {renderPronosticoTelegram(
-                                comb.acierto,
-                                comb.anulada,
-                                comb.motivoAnulada
-                              )}
-                            </Text>
-                          </TouchableOpacity>
-                          {numPatas > 0 && (
-                            <TouchableOpacity
-                              style={styles.combinadaChevron}
-                              onPress={() =>
-                                setCombinadasAbiertas((prev) => ({
-                                  ...prev,
-                                  [comb.id]: !abierta,
-                                }))
-                              }
-                            >
-                              <MaterialCommunityIcons
-                                name={abierta ? "chevron-up" : "chevron-down"}
-                                size={22}
-                                color="#b388ff"
-                              />
-                            </TouchableOpacity>
-                          )}
-                        </View>
-                        {abierta &&
-                          (comb.patas ?? []).map((pata) => (
-                            <View key={pata.id} style={styles.pataRow}>
-                              <Text style={styles.pataIcono}>
-                                {pata.anulada
-                                  ? iconoAnulada(pata.motivo_anulada)
-                                  : pata.acierto === true
-                                    ? "✅"
-                                    : pata.acierto === false
-                                      ? "❌"
-                                      : "❓"}
-                              </Text>
-                              <View style={{ flex: 1 }}>
-                                <Text style={styles.pataText}>
-                                  {pata.seleccion || "(pata)"}
-                                </Text>
-                                <Text style={styles.pataMeta}>
-                                  {[
-                                    pata.evento,
-                                    pata.mercado,
-                                    pata.anulada ? "anulada" : null,
-                                  ]
-                                    .filter(Boolean)
-                                    .join(" · ")}
-                                </Text>
-                              </View>
-                            </View>
-                          ))}
-                      </View>
-                    );
-                  })}
-              </View>
-            )}
-          </View>
+          {/* Picks publicados por el tipster (extraídos de Telegram) */}
+          <TipsterPicksCard
+            totalApuestas={data.parsedTotalApuestas}
+            totalAciertos={data.parsedTotalAciertos}
+            porcentajeAciertos={data.parsedPorcentajeAciertos}
+            ganancias={data.parsedGanancias}
+            yieldPct={data.parsedYieldPct}
+            rows={parsedTableRows}
+            retos={retosOrdenados}
+            combinadas={combinadasOrdenadas}
+            combinadasStats={{
+              total: data.combinadasTotal,
+              aciertos: data.combinadasAciertos,
+              ganancias: data.combinadasGanancias,
+              yieldPct: data.combinadasYieldPct,
+            }}
+            onCorregir={() => router.push("/parsed-picks")}
+            onPickPress={setSelectedTelegramPick}
+          />
 
           {/* Tus apuestas manuales siguiendo a este tipster */}
           <View style={styles.card}>
@@ -1086,11 +665,6 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginVertical: 20,
   },
-  eventoText: {
-    fontSize: 11,
-    color: "#999",
-    marginTop: 2,
-  },
   botbarcontainer: {
     height: "100%",
   },
@@ -1134,102 +708,6 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: "white",
   },
-  table: {
-    backgroundColor: "#2e2e2e",
-    borderRadius: 10,
-    borderColor: "white",
-    padding: 15,
-    marginBottom: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  // Altura acotada para que la FlatList virtualice (mismo patrón que
-  // rowsContainer de my-picks): la tabla scrollea dentro de la página.
-  tableRows: {
-    maxHeight: 500,
-  },
-  tableRow: {
-    flexDirection: "row",
-    borderBottomWidth: 1,
-    borderBottomColor: "#444",
-  },
-  tableHeaderCell: {
-    width: 150, // Ajusta el tamaño de cada celda
-    paddingVertical: 12,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: colors.primary,
-    borderBottomWidth: 2,
-    borderBottomColor: colors.background,
-  },
-  tableHeaderText: {
-    fontSize: 16,
-    fontWeight: "bold",
-    textAlign: "center",
-    color: colors.onPrimary,
-  },
-  tableCell: {
-    width: 150, // Ajusta el tamaño de cada celda
-    paddingVertical: 10,
-    paddingHorizontal: 15, // Añadido más espacio horizontal
-    justifyContent: "center",
-    alignItems: "center",
-    textAlign: "center",
-    backgroundColor: colors.surface,
-  },
-  cellText: {
-    fontSize: 16,
-    fontWeight: "bold",
-    textAlign: "center",
-    color: colors.text,
-  },
-  icon: {
-    fontSize: 17,
-    textAlign: "center",
-  },
-  border: {
-    borderWidth: 1,
-    borderColor: "#555",
-  },
-  evenRow: {
-    backgroundColor: colors.surfaceAlt,
-  },
-  oddRow: {
-    backgroundColor: colors.surface,
-  },
-  chartContainer: {
-    backgroundColor: "#303030",
-    borderRadius: 15,
-    padding: 15,
-    marginVertical: 10,
-    width: "100%",
-    alignItems: "center",
-  },
-  chartScrollContainer: {
-    marginTop: 10,
-    width: "100%",
-  },
-  chartScrollContainerSmall: {
-    alignSelf: "center",
-  },
-  chartContentCentered: {
-    flexGrow: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  lineChart: {
-    marginVertical: 8,
-    borderRadius: 16,
-  },
-  graphicTitle: {
-    color: "white",
-    fontSize: 23,
-    marginBottom: 20,
-    fontWeight: "bold",
-  },
   filterButtons: {
     flexDirection: "row",
     justifyContent: "space-around",
@@ -1261,20 +739,6 @@ const styles = StyleSheet.create({
     color: "white",
     fontWeight: "bold",
   },
-  telegramButton: {
-    backgroundColor: "#ff9f1c",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    alignSelf: "center",
-    marginVertical: 12,
-    alignItems: "center",
-  },
-  telegramButtonText: {
-    color: "#1a1a1a",
-    fontWeight: "bold",
-    fontSize: 14,
-  },
   cardSubtitle: {
     fontSize: 13,
     color: "#999",
@@ -1288,100 +752,5 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginVertical: 15,
     fontStyle: "italic",
-  },
-  compareRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: "#3a3a3a",
-  },
-  compareLabel: {
-    flex: 1.2,
-    fontSize: 15,
-    color: "#ccc",
-  },
-  compareColTitle: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: "bold",
-    color: "#ff9f1c",
-    textAlign: "center",
-  },
-  compareValue: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: "bold",
-    color: "white",
-    textAlign: "center",
-  },
-  compareNote: {
-    fontSize: 11,
-    color: "#777",
-    textAlign: "center",
-    marginTop: 10,
-    fontStyle: "italic",
-  },
-  retosSection: {
-    marginTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: "#333",
-    paddingTop: 12,
-  },
-  retosTitle: {
-    color: "#b388ff",
-    fontSize: 16,
-    fontWeight: "bold",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 8,
-  },
-  retoRow: {
-    backgroundColor: "#1a1425",
-    borderColor: "#3a2d55",
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 8,
-  },
-  retoText: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "bold",
-  },
-  retoMeta: {
-    color: "#aaa",
-    fontSize: 12,
-    marginTop: 4,
-  },
-  combinadaHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  combinadaChevron: {
-    padding: 4,
-    marginLeft: 8,
-  },
-  pataRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#2a2140",
-    paddingLeft: 8,
-  },
-  pataIcono: {
-    fontSize: 14,
-    marginRight: 8,
-  },
-  pataText: {
-    color: "#e8e0f5",
-    fontSize: 13,
-  },
-  pataMeta: {
-    color: "#888",
-    fontSize: 11,
-    marginTop: 2,
   },
 });
