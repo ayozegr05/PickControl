@@ -185,8 +185,9 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   pillado por los tests).
 - [ ] 🟡 Keys inseguras `key={index}` en listas (`my-picks:307,326,427,471`,
   `parsed-picks:988`).
-- [ ] 🟡 Sin estado `isInitializing` en AuthContext → la landing con
-  vídeo parpadea un frame en cada cold start.
+- [x] 🟡 `isInitializing` en AuthContext — la landing ya no pinta un
+  frame en cold start: `(tabs)/index` muestra el spinner hasta que
+  `checkAuth` resuelve.
 - [x] 🟡 `isAdmin` leído de AsyncStorage manipulable → **derivado del
   payload del JWT firmado** (`src/utils/jwt.ts`, decoder propio sin
   `atob` compatible con Hermes); `AuthContext` calcula el rol del token
@@ -195,7 +196,11 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   **`unregisterForPushNotifications()`** en `push.ts` (DELETE idempotente
   del token Expo en el logout, best-effort con guarda anti-recursión
   del handler 401).
-- [ ] 🟡 `login()`/`logout()` tragan errores de storage.
+- [x] 🟡 `login()`/`logout()` tragan errores de storage — `login`
+  propaga el fallo al caller (que ya muestra su alerta) y no marca
+  sesión sin persistencia; `logout` limpia el estado en memoria
+  SIEMPRE en `finally` (antes un fallo de storage dejaba sesión
+  zombie autenticada).
 - [ ] 🔵 Sin guard de auth centralizado (solo my-picks usa Redirect);
   rutas `/screens/…` y `/dynamic-routes/…` feas en URL; `scheme:"myapp"`.
 - [ ] 🔵 Tipos repartidos entre `src/types/` y los `.api.ts`;

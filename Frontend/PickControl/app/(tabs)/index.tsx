@@ -19,7 +19,7 @@ import { metricColor } from "@/src/theme";
 
 const Main = () => {
   const router = useRouter();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isInitializing } = useAuth();
   const insets = useSafeAreaInsets();
   const {
     informantes: tipsters,
@@ -56,6 +56,20 @@ const Main = () => {
       params: { informante: nombre },
     });
   };
+
+  // Mientras el contexto hidrata la sesión no pintamos la landing:
+  // sin este guard el usuario logueado veía un frame de la vista
+  // pública (vídeo + "Start") en cada cold start.
+  if (isInitializing) {
+    return (
+      <View style={styles.container}>
+        <TopBar />
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color="#ff9f1c" />
+        </View>
+      </View>
+    );
+  }
 
   if (!isAuthenticated) {
     console.log("Renderizando vista no autenticada");

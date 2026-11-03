@@ -19,6 +19,9 @@ import { decodeJwtPayload } from "@/src/utils/jwt";
 
 type AuthContextType = {
   isAuthenticated: boolean;
+  // true hasta que checkAuth termina de hidratar la sesión: sin él la
+  // landing pintaba un frame en el cold start de un usuario logueado.
+  isInitializing: boolean;
   isAdmin: boolean;
   userName: string | null;
   login: (token: string, userName: string, role?: string) => Promise<void>;
@@ -29,6 +32,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
   const [userName, setUserName] = useState<string | null>(null);
 
@@ -75,22 +79,23 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       }
     } catch (error) {
       console.error("Error checking auth:", error);
+    } finally {
+      setIsInitializing(false);
     }
   };
 
+  // Si la persistencia falla el error SUBE al caller (que muestra su
+  // alerta): tragarlo dejaba un botón de login que "no hacía nada" y
+  // una sesión que se perdía al reiniciar sin explicación.
   const login = async (token: string, name: string, role?: string) => {
-    try {
-      await setSecureItem("userToken", token);
-      await AsyncStorage.setItem("userName", name);
-      setIsAuthenticated(true);
-      setUserName(name);
-      // Primero el claim firmado; si el token no decodifica (raro),
-      // caemos al rol que pasó el caller como antes.
-      setIsAdmin((roleFromToken(token) ?? role) === "admin");
-      void registerForPushNotifications();
-    } catch (error) {
-      console.error("Error storing token:", error);
-    }
+    await setSecureItem("userToken", token);
+    await AsyncStorage.setItem("userName", name);
+    setIsAuthenticated(true);
+    setUserName(name);
+    // Primero el claim firmado; si el token no decodifica (raro),
+    // caemos al rol que pasó el caller como antes.
+    setIsAdmin((roleFromToken(token) ?? role) === "admin");
+    void registerForPushNotifications();
   };
 
   // Guarda anti-recursión: si el unregister devuelve 401 (token ya
@@ -107,19 +112,28 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       await unregisterForPushNotifications();
       await removeSecureItem("userToken");
       await AsyncStorage.removeItem("userName");
-      setIsAuthenticated(false);
-      setUserName(null);
-      setIsAdmin(false);
     } catch (error) {
       console.error("Error removing token:", error);
     } finally {
+      // El estado en memoria se limpia SIEMPRE: si el storage falla y
+      // no lo hacemos, la UI queda "logueada" sobre una sesión zombie.
+      setIsAuthenticated(false);
+      setUserName(null);
+      setIsAdmin(false);
       loggingOut.current = false;
     }
   };
 
   return (
     <AuthContext.Provider
-      value={{ isAuthenticated, isAdmin, userName, login, logout }}
+      value={{
+        isAuthenticated,
+        isInitializing,
+        isAdmin,
+        userName,
+        login,
+        logout,
+      }}
     >
       {children}
     </AuthContext.Provider>
