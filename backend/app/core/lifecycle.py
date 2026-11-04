@@ -48,7 +48,7 @@ _BACKLOG_INTERVAL_SECONDS = 24 * 3600
 # Goteo de cuotas históricas: esperar al backfill diario dejaba el
 # grifo cerrado todo el día. Sin candidatos o en cooldown la pasada
 # sale gratis (early-exit, ni una llamada al modelo).
-# Con un extractor compat vivo (Groq/Cerebras/OpenRouter) el goteo
+# Con un extractor compat vivo (Groq/Cerebras) el goteo
 # corre cada 3 min — sus cooldowns duran segundos-minutos. Cuando
 # solo queda Gemini, la cadencia vuelve a ~20 min: su free tier no
 # da para más y así no se machaca el fallback.

@@ -66,7 +66,7 @@ _GEMINI_429_DEFAULT = timedelta(minutes=20)
 # visión. La cuota DIARIA de Gemini la comparten OCR y
 # gemini_research (verificación de resultados) — cuando research la
 # agota, los 3 modelos quedan aparcados hasta el reset y el OCR
-# moría horas. Estos endpoints usan keys distintas (Groq/OpenRouter)
+# moría horas. Estos endpoints usan keys distintas (Groq)
 # y no compiten por ese presupuesto.
 _VISION_ENDPOINTS = (
     # name, base_url, model, env_key
@@ -81,12 +81,6 @@ _VISION_ENDPOINTS = (
         "https://api.groq.com/openai/v1",
         "meta-llama/llama-4-maverick-17b-128e-instruct",
         "groq_api_key",
-    ),
-    (
-        "openrouter-vision",
-        "https://openrouter.ai/api/v1",
-        "google/gemma-3-27b-it:free",
-        "openrouter_api_key",
     ),
 )
 _VISION_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
@@ -190,7 +184,7 @@ async def _ocr_gemini(image_path: str, api_key: str) -> str | None:
 
 async def _ocr_compat_vision(image_path: str) -> str | None:
     """OCR vía endpoints OpenAI-compatible con visión (Groq llama-4,
-    OpenRouter :free). Mismo patrón de cooldown que compat_llm: un
+    Groq). Mismo patrón de cooldown que compat_llm: un
     429 aparca solo ese endpoint hasta el hint del retry."""
     b64 = _encode_image(image_path)
     settings = get_settings()

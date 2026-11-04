@@ -759,7 +759,7 @@ class GeminiResearchProvider:
 
         Con un endpoint compat vivo la extracción no depende de la
         cuota de Gemini: la búsqueda va por fetch propio y extraer
-        sale por Groq/Cerebras/OpenRouter, así que el cooldown del
+        sale por Groq/Cerebras, así que el cooldown del
         free tier no debe parar el pipeline."""
         if compat_llm.has_live_endpoint():
             return False
@@ -863,7 +863,7 @@ class GeminiResearchProvider:
         self, prompt: str, purpose: str = ""
     ) -> Optional[tuple[str, list[str], str]]:
         """Extracción texto→JSON: primero los endpoints OpenAI-compat
-        gratuitos (Groq/Cerebras/OpenRouter — cuota diaria grande y
+        gratuitos (Groq/Cerebras — cuota diaria grande y
         modelos 70B); Gemini solo si ninguno responde — su cuota es la
         más pequeña. Devuelve (texto, urls_leídas_por_el_modelo,
         motor) — las urls solo vienen cuando respondió Gemini con

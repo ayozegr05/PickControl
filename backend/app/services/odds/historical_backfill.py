@@ -23,7 +23,7 @@ Fuentes en cascada (orden = prioridad, no volumen):
 3. `oddsfeed` (odds-feed): solo mercados principales (1X2, O/U,
    hándicap, BTTS) pero 500 req/mes y histórico real validado.
 4. `llm-odds`: último recurso por pick — búsqueda web + extracción
-   LLM (cascada Groq→Cerebras→OpenRouter, Gemini de respaldo)
+   LLM (cascada Groq→Cerebras, Gemini de respaldo)
    lee la página del partido en un comparador (oddspedia, oddsportal,
    betexplorer) y extrae la cuota de cierre del mercado del pick.
    Doble validación: la cuota tiene que aparecer literal en el HTML y
@@ -184,7 +184,7 @@ _LLM_EXTRACTOR_PROVIDERS = tuple(
 
 def _llm_odds_configured(settings) -> bool:
     """Extractor de cuotas configurado: Gemini o la cascada compat
-    (Groq/Cerebras/OpenRouter — los endpoints gratis dan más cuota
+    (Groq/Cerebras — los endpoints gratis dan más cuota
     que el free tier de Google)."""
     return bool(settings.google_api_key) or compat_llm.configured(settings)
 

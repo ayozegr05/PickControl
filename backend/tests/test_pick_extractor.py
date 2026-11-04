@@ -1452,7 +1452,7 @@ class TestCompoundSelection:
 
 class TestLlmExtractFallback:
     """`_llm_extract`: OpenAI primero; si falla (o no hay key) la cascada
-    gratuita Groq->Cerebras->OpenRouter cubre la ingesta, y el pick lleva
+    gratuita Groq->Cerebras cubre la ingesta, y el pick lleva
     el motor en `metodo` para poder auditar quién extrajo qué."""
 
     async def test_openai_cae_a_cascada(self, monkeypatch):
@@ -1516,7 +1516,7 @@ class TestLlmExtractFallback:
             return (
                 '```json\n{"es_apuesta": true, "mercado": "ganador",'
                 ' "seleccion": "X gana"}\n```',
-                "openrouter",
+                "cerebras",
             )
 
         monkeypatch.setattr(compat_llm, "extract_text", fake_extract)
@@ -1524,7 +1524,7 @@ class TestLlmExtractFallback:
         pick = await pe._llm_extract("X gana", None)
         assert pick is not None
         assert pick.es_apuesta is True
-        assert pick.metodo == "llm-openrouter"
+        assert pick.metodo == "llm-cerebras"
 
     async def test_todo_muerto_devuelve_none(self, monkeypatch):
         from app.services.results import compat_llm

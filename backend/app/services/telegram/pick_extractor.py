@@ -1331,7 +1331,7 @@ async def _llm_extract(
     fecha_referencia: Optional[datetime] = None,
 ) -> Optional[ExtractedPick]:
     """Extracción por LLM: OpenAI si hay key y responde; si falla (o no
-    hay key) cae a la cascada gratuita Groq→Cerebras→OpenRouter. El pick
+    hay key) cae a la cascada gratuita Groq→Cerebras. El pick
     lleva `metodo="llm"` con OpenAI y `llm-{motor}` con la cascada, así
     se puede comparar quién extrajo qué en BD.
     """

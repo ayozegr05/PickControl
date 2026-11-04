@@ -150,7 +150,7 @@ async def retry_pending_ocr(
 
 def _hay_via_llm(settings) -> bool:
     """Algún camino de extracción LLM: OpenAI o la cascada gratuita
-    (Groq/Cerebras/OpenRouter). La puerta vieja a `openai_api_key` solo
+    (Groq/Cerebras). La puerta vieja a `openai_api_key` solo
     se quedó obsoleta cuando entró la cascada — caso real nov-2026: key
     revocada y TODO el rescate se saltaba mientras la extracción en
     vivo podía seguir por compat/Gemini."""
