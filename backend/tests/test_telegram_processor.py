@@ -225,6 +225,40 @@ class TestProcessIncomingMessage:
         assert parsed.informante_id is not None
         assert parsed.informante == "Test Channel"
 
+    async def test_sin_openai_key_la_extraccion_sigue_corriendo(
+        self, session, monkeypatch
+    ):
+        """Caso real nov-2026: al revocar OPENAI_API_KEY la puerta
+        `settings.openai_api_key and source_text` saltaba TODA la
+        extracción en vivo — el ruido quedaba processed=False para
+        siempre y el healthcheck avisaba cada 6h. La extracción debe
+        correr igual: extract_pick resuelve los rechazos por reglas
+        sin LLM y cae a la cascada gratuita para el resto."""
+        monkeypatch.setattr(
+            "app.services.telegram.processor.get_settings",
+            lambda: SimpleNamespace(openai_api_key=None),
+        )
+        extract = AsyncMock(
+            return_value=ExtractedPick(
+                es_apuesta=False, metodo="rejected", confianza=0.9
+            )
+        )
+        monkeypatch.setattr("app.services.telegram.processor.extract_pick", extract)
+
+        await process_incoming_message(
+            session=session,
+            channel="Test Channel",
+            channel_id=123456,
+            message_id=4,
+            text="Promoción VIP del canal premium",
+        )
+
+        extract.assert_called_once()
+        raw_result = await session.exec(
+            select(TelegramRawMessage).where(TelegramRawMessage.message_id == 4)
+        )
+        assert raw_result.scalars().one().processed is True
+
 
 # OCR típico de un slip abierto de bet365 (caso real Lady Bets 13610):
 # trae rival y cuota, pero no stake ni "cuota"/"stake" explícitos.

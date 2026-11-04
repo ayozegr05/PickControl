@@ -1699,7 +1699,7 @@ def _is_premium_urgency(text: str) -> bool:
 
 async def extract_pick(
     text: str,
-    api_key: str,
+    api_key: Optional[str],
     informante: Optional[str] = None,
     fecha_referencia: Optional[datetime] = None,
 ) -> Optional[ExtractedPick]:

@@ -541,7 +541,12 @@ async def process_incoming_message(
         pair_pick = None
         forward_pick = None
         extraction_text = source_text
-        if settings.openai_api_key and source_text:
+        # La extracción corre siempre que haya texto: con api_key vacía
+        # extract_pick salta OpenAI y usa la cascada gratuita (los
+        # rechazos por reglas ni siquiera necesitan LLM). Antes la
+        # puerta a openai_api_key congelaba TODA la ingesta sin la key
+        # (caso real nov-2026: ruido acumulado + alerta cada 6h).
+        if source_text:
             if not media_path and text and _looks_like_bet(text):
                 slip_raw = await _find_pair_slip(
                     db_session, channel_id, naive_message_date, message_id

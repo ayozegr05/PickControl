@@ -99,7 +99,11 @@ async def retry_pending_ocr(
     """
     settings = get_settings()
     empty = {"pendientes": 0, "sin_fichero": 0, "hechos": 0, "fallos": 0}
-    if not settings.openai_api_key:
+    # El OCR corre por OpenAI O por Gemini — cualquiera vale.
+    if not (
+        getattr(settings, "openai_api_key", None)
+        or getattr(settings, "google_api_key", None)
+    ):
         return empty
 
     cutoff = _rescue_cutoff(settings, max_age_days)
@@ -144,6 +148,19 @@ async def retry_pending_ocr(
     }
 
 
+def _hay_via_llm(settings) -> bool:
+    """Algún camino de extracción LLM: OpenAI o la cascada gratuita
+    (Groq/Cerebras/OpenRouter). La puerta vieja a `openai_api_key` solo
+    se quedó obsoleta cuando entró la cascada — caso real nov-2026: key
+    revocada y TODO el rescate se saltaba mientras la extracción en
+    vivo podía seguir por compat/Gemini."""
+    if getattr(settings, "openai_api_key", None):
+        return True
+    from app.services.results import compat_llm
+
+    return compat_llm.configured(settings)
+
+
 async def reprocess_pending_raws(
     max_age_days: Optional[float] = None,
 ) -> dict[str, int]:
@@ -163,7 +180,7 @@ async def reprocess_pending_raws(
         "sin_pick": 0,
         "antiguos": 0,
     }
-    if not settings.openai_api_key:
+    if not _hay_via_llm(settings):
         return empty
 
     cutoff = _rescue_cutoff(settings, max_age_days)
@@ -335,7 +352,7 @@ async def retry_incomplete_picks(
     """
     settings = get_settings()
     resumen = {"candidatos": 0, "rellenados": 0, "descartados": 0, "fallos": 0}
-    if not settings.openai_api_key:
+    if not _hay_via_llm(settings):
         return resumen
 
     cutoff = _rescue_cutoff(settings, max_age_days)
