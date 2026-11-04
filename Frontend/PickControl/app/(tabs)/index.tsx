@@ -16,6 +16,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useInformantes } from "@/src/hooks/useInformantes";
 import DonutChart from "@/src/components/donut-chart";
 import { metricColor } from "@/src/theme";
+import { colors } from "@/src/theme";
 
 const Main = () => {
   const router = useRouter();
@@ -65,14 +66,13 @@ const Main = () => {
       <View style={styles.container}>
         <TopBar />
         <View style={styles.center}>
-          <ActivityIndicator size="large" color="#ff9f1c" />
+          <ActivityIndicator size="large" color={colors.primary} />
         </View>
       </View>
     );
   }
 
   if (!isAuthenticated) {
-    console.log("Renderizando vista no autenticada");
     try {
       return (
         <View style={[styles.container, { paddingHorizontal: 0 }]}>
@@ -91,7 +91,7 @@ const Main = () => {
               <MaterialCommunityIcons
                 name="crown"
                 size={40}
-                color="#ff9f1c"
+                color={colors.primary}
                 style={styles.titleIcon}
               />
               <Text style={styles.sectionTitle}>Toma el Control</Text>
@@ -101,7 +101,7 @@ const Main = () => {
                 <MaterialCommunityIcons
                   name="chart-areaspline"
                   size={32}
-                  color="#ff9f1c"
+                  color={colors.primary}
                 />
                 <Text style={styles.featureTitle}>Audita Tipsters</Text>
                 <Text style={styles.featureText}>
@@ -113,7 +113,7 @@ const Main = () => {
                 <MaterialCommunityIcons
                   name="account-group"
                   size={32}
-                  color="#ff9f1c"
+                  color={colors.primary}
                 />
                 <Text style={styles.featureTitle}>Ranking Verificado</Text>
                 <Text style={styles.featureText}>
@@ -125,7 +125,7 @@ const Main = () => {
                 <MaterialCommunityIcons
                   name="bell-alert"
                   size={32}
-                  color="#ff9f1c"
+                  color={colors.primary}
                 />
                 <Text style={styles.featureTitle}>Tu Banco Real</Text>
                 <Text style={styles.featureText}>
@@ -137,7 +137,7 @@ const Main = () => {
                 <MaterialCommunityIcons
                   name="wallet"
                   size={32}
-                  color="#ff9f1c"
+                  color={colors.primary}
                 />
                 <Text style={styles.featureTitle}>Gestión de Bankroll</Text>
                 <Text style={styles.featureText}>
@@ -174,7 +174,7 @@ const Main = () => {
       <View style={styles.container}>
         <TopBar />
         <View style={styles.center}>
-          <ActivityIndicator size="large" color="#ff9f1c" />
+          <ActivityIndicator size="large" color={colors.primary} />
         </View>
       </View>
     );
@@ -245,7 +245,7 @@ const Main = () => {
                   <Text
                     style={[
                       styles.value,
-                      t.pendientes > 0 && { color: "#ff9f1c" },
+                      t.pendientes > 0 && { color: colors.primary },
                     ]}
                   >
                     {t.pendientes}
@@ -301,7 +301,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   error: {
-    color: "#f44336",
+    color: colors.danger,
     fontSize: 16,
     textAlign: "center",
   },
@@ -309,7 +309,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   title: {
-    color: "#ff9f1c",
+    color: colors.primary,
     fontSize: 28,
     fontWeight: "bold",
     marginBottom: 8,
@@ -434,7 +434,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: "10%",
     alignSelf: "center",
-    backgroundColor: "#ff9f1c",
+    backgroundColor: colors.primary,
     paddingHorizontal: 30,
     paddingVertical: 18,
     borderRadius: 30,

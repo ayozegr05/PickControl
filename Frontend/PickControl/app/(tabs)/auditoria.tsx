@@ -20,6 +20,7 @@ import {
 } from "@/src/api/analisis.api";
 import { metricColor } from "@/src/theme";
 import { cleanChannel } from "@/src/utils/format";
+import { colors } from "@/src/theme";
 
 function StatsLine({ label, stats }: { label: string; stats: StatsBloque }) {
   return (
@@ -62,7 +63,7 @@ function OddsLine({ odds }: { odds: OddsBloque }) {
       {odds.cuotas_infladas > 0 && (
         <>
           {" · "}
-          <Text style={{ color: "#f44336", fontWeight: "bold" }}>
+          <Text style={{ color: colors.danger, fontWeight: "bold" }}>
             {odds.pct_cuota_inflada.toFixed(0)}% cuotas infladas
           </Text>
         </>
@@ -132,7 +133,7 @@ export default function AuditoriaScreen() {
                 {canal.cuota_media_mia?.toFixed(2)}{" "}
                 <Text
                   style={{
-                    color: diffCuota >= 0 ? "#4caf50" : "#f44336",
+                    color: diffCuota >= 0 ? colors.success : colors.danger,
                     fontWeight: "bold",
                   }}
                 >
@@ -161,7 +162,7 @@ export default function AuditoriaScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={handleRefresh}
-            tintColor="#ff9f1c"
+            tintColor={colors.primary}
           />
         }
       >
@@ -170,7 +171,7 @@ export default function AuditoriaScreen() {
           Lo que publican los tipsters vs lo que tú jugaste
         </Text>
 
-        {loading && <ActivityIndicator size="large" color="#ff9f1c" />}
+        {loading && <ActivityIndicator size="large" color={colors.primary} />}
         {error && <Text style={styles.error}>Error: {error}</Text>}
 
         {data && (
@@ -231,7 +232,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   title: {
-    color: "#ff9f1c",
+    color: colors.primary,
     fontSize: 22,
     fontWeight: "bold",
     marginBottom: 4,
@@ -242,14 +243,14 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   sectionTitle: {
-    color: "#ff9f1c",
+    color: colors.primary,
     fontSize: 15,
     fontWeight: "bold",
     textTransform: "uppercase",
     marginBottom: 8,
   },
   sectionTitleOuter: {
-    color: "#ff9f1c",
+    color: colors.primary,
     fontSize: 15,
     fontWeight: "bold",
     textTransform: "uppercase",
@@ -309,7 +310,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   error: {
-    color: "red",
+    color: colors.danger,
     fontSize: 14,
     marginBottom: 12,
   },

@@ -12,6 +12,7 @@ import { ParsedPick } from "@/src/api/parsed-picks.api";
 import ParsedPickCard, {
   CorregirUpdate,
 } from "@/src/components/parsed-pick-card";
+import { colors } from "@/src/theme";
 
 export interface ChannelGroup {
   key: string;
@@ -90,14 +91,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "#241a0d",
     borderLeftWidth: 4,
-    borderLeftColor: "#ff9f1c",
+    borderLeftColor: colors.primary,
     borderRadius: 6,
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 12,
   },
   channelTitle: {
-    color: "#ff9f1c",
+    color: colors.primary,
     fontSize: 16,
     fontWeight: "bold",
     letterSpacing: 0.5,

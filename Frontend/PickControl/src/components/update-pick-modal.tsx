@@ -7,6 +7,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import ModalFrame from "@/src/components/modal-frame";
 import { Acierto } from "@/src/types/pick.types";
+import { colors } from "@/src/theme";
 
 interface UpdatePickModalProps {
   visible: boolean;
@@ -25,7 +26,7 @@ export default function UpdatePickModal({
       <Text style={styles.modalText}>¿La apuesta fue correcta?</Text>
       <View style={styles.modalButtons}>
         <TouchableOpacity
-          style={[styles.modalButton, { backgroundColor: "#4CAF50" }]}
+          style={[styles.modalButton, { backgroundColor: colors.success }]}
           onPress={() => onResult("True")}
           accessibilityLabel="Apuesta acertada"
         >
@@ -34,7 +35,7 @@ export default function UpdatePickModal({
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.modalButton, { backgroundColor: "#F44336" }]}
+          style={[styles.modalButton, { backgroundColor: colors.danger }]}
           onPress={() => onResult("False")}
           accessibilityLabel="Apuesta fallada"
         >

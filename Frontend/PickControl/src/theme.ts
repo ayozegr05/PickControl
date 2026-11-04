@@ -11,6 +11,7 @@ export const colors = {
   border: "#3f3f3f",
   bar: "#131313",
   primary: "#ff9f1c",
+  primarySoft: "#ffba57",
   onPrimary: "#1a1a1a",
   text: "#ffffff",
   textSecondary: "#aaaaaa",

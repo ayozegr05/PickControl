@@ -54,7 +54,7 @@ function PronosticoIcon({
     );
   }
   if (acierto === "False") {
-    return <Text style={[styles.icon, { color: "red" }]}>❌</Text>;
+    return <Text style={[styles.icon, { color: colors.danger }]}>❌</Text>;
   }
   return (
     <TouchableOpacity onPress={onPress}>
@@ -116,7 +116,7 @@ export default function ApuestasTable({
                   <MaterialCommunityIcons
                     name="calendar-edit"
                     size={16}
-                    color="#ff9f1c"
+                    color={colors.primary}
                     style={styles.calendarIcon}
                   />
                 </TouchableOpacity>

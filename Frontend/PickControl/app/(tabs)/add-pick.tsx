@@ -282,7 +282,7 @@ const AddPick = () => {
           {loadingInformantes ? (
             <ActivityIndicator
               size="small"
-              color="#ff9f1c"
+              color={colors.primary}
               style={{ marginVertical: 10 }}
             />
           ) : informantes.length === 0 ? (

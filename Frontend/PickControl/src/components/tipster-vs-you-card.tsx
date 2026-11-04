@@ -5,6 +5,7 @@
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { metricColor } from "@/src/theme";
+import { colors } from "@/src/theme";
 
 export interface ColumnaComparativa {
   yieldPct: number;
@@ -120,7 +121,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     marginBottom: 30,
     textAlign: "center",
-    color: "#ffba57",
+    color: colors.primarySoft,
   },
   compareRow: {
     flexDirection: "row",
@@ -138,7 +139,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     fontWeight: "bold",
-    color: "#ff9f1c",
+    color: colors.primary,
     textAlign: "center",
   },
   compareValue: {

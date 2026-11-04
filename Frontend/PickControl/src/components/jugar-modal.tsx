@@ -12,6 +12,7 @@ import {
   TouchableOpacity,
 } from "react-native";
 import ModalFrame from "@/src/components/modal-frame";
+import { colors } from "@/src/theme";
 
 export interface JugarFormValues {
   cantidad: string;
@@ -123,7 +124,7 @@ const styles = StyleSheet.create({
     color: "#000",
   },
   jugarButton: {
-    backgroundColor: "#ff9f1c",
+    backgroundColor: colors.primary,
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 8,

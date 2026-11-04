@@ -166,7 +166,6 @@ const LoginScreen = () => {
         email: values.email,
         password: values.password,
       });
-      console.log("Usuario logueado: ", data.user.name);
 
       // Credencial biométrica: solo el refresh token de larga
       // duración — la contraseña NUNCA se persiste.
@@ -210,7 +209,7 @@ const LoginScreen = () => {
               <MaterialCommunityIcons
                 name="fingerprint"
                 size={30}
-                color="#ff9f1c"
+                color={colors.primary}
               />
               <Text style={styles.biometricText}>Usar huella dactilar</Text>
             </TouchableOpacity>
@@ -341,7 +340,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontWeight: "bold",
-    color: "#ff9f1c",
+    color: colors.primary,
     marginBottom: 10,
   },
   subtitle: {
@@ -414,7 +413,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   registerLinkText: {
-    color: "#ff9f1c",
+    color: colors.primary,
     fontWeight: "bold",
     marginLeft: 5,
   },
@@ -427,10 +426,10 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginBottom: 20,
     borderWidth: 1,
-    borderColor: "#ff9f1c",
+    borderColor: colors.primary,
   },
   biometricText: {
-    color: "#ff9f1c",
+    color: colors.primary,
     fontSize: 16,
     marginLeft: 10,
     fontWeight: "600",

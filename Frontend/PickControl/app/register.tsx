@@ -220,7 +220,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontWeight: "bold",
-    color: "#ff9f1c",
+    color: colors.primary,
     marginBottom: 10,
   },
   subtitle: {
@@ -280,7 +280,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   loginLinkText: {
-    color: "#ff9f1c",
+    color: colors.primary,
     fontWeight: "bold",
     marginLeft: 5,
   },

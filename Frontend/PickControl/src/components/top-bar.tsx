@@ -15,6 +15,7 @@ import { useAuth } from "@/src/context/AuthContext";
 import { Alert } from "react-native";
 import { listPicks } from "@/src/api/picks.api";
 import { PickItem } from "@/src/types/pick.types";
+import { colors } from "@/src/theme";
 
 const BAR_HEIGHT = 60;
 
@@ -114,7 +115,7 @@ const TopBar = () => {
                 <Text
                   style={[
                     styles.subText,
-                    { color: gananciasTotal >= 0 ? "#4CAF50" : "#F44336" },
+                    { color: gananciasTotal >= 0 ? colors.success : colors.danger },
                   ]}
                 >
                   {gananciasTotal.toFixed(2)}€
@@ -265,7 +266,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#ff9f1c",
+    borderColor: colors.primary,
     marginLeft: 1,
     elevation: 2,
     shadowColor: "#000",
@@ -277,13 +278,13 @@ const styles = StyleSheet.create({
     shadowRadius: 1.41,
   },
   authButtonText: {
-    color: "#ff9f1c",
+    color: colors.primary,
     fontSize: 14,
     fontWeight: "600",
     textAlign: "center",
   },
   title: {
-    color: "#ff9f1c",
+    color: colors.primary,
     fontSize: 20,
     fontWeight: "bold",
   },

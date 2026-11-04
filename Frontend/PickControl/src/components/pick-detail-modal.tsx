@@ -86,7 +86,7 @@ export default function PickDetailModal({
               {oddsLoading ? (
                 <ActivityIndicator
                   size="small"
-                  color="#ff9f1c"
+                  color={colors.primary}
                   style={{ marginVertical: 8 }}
                 />
               ) : odds ? (
@@ -218,7 +218,7 @@ const styles = StyleSheet.create({
   },
   oddsTitle: {
     fontSize: 12,
-    color: "#ff9f1c",
+    color: colors.primary,
     fontWeight: "bold",
     textTransform: "uppercase",
     marginBottom: 6,
@@ -239,7 +239,7 @@ const styles = StyleSheet.create({
   },
   oddsBadgeOk: {
     fontSize: 12,
-    color: "#4caf50",
+    color: colors.success,
     fontWeight: "bold",
   },
   oddsBadgeInflada: {
@@ -267,7 +267,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
   jugarButton: {
-    backgroundColor: "#ff9f1c",
+    backgroundColor: colors.primary,
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 8,
@@ -281,7 +281,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
   jugadaText: {
-    color: "#4caf50",
+    color: colors.success,
     fontSize: 14,
     fontWeight: "bold",
     marginTop: 6,

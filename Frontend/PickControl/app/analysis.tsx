@@ -19,6 +19,7 @@ import {
   calcularProyeccion as proyeccionDe,
   nivelRiesgo,
 } from "@/src/utils/picks";
+import { colors } from "@/src/theme";
 
 interface Apuesta {
   Fecha: string;
@@ -203,7 +204,7 @@ export default function Analysis() {
                         <MaterialIcons
                           name="query-stats"
                           size={20}
-                          color="#4CAF50"
+                          color={colors.success}
                         />
                         <Text style={styles.statsButtonText}>Ver más</Text>
                       </View>
@@ -226,7 +227,7 @@ export default function Analysis() {
                       <Text
                         style={[
                           styles.statValue,
-                          { color: stats.roi >= 0 ? "#4CAF50" : "#F44336" },
+                          { color: stats.roi >= 0 ? colors.success : colors.danger },
                         ]}
                       >
                         {stats.roi.toFixed(1)}%
@@ -239,7 +240,7 @@ export default function Analysis() {
                         style={[
                           styles.statValue,
                           {
-                            color: stats.tendencia >= 0 ? "#4CAF50" : "#F44336",
+                            color: stats.tendencia >= 0 ? colors.success : colors.danger,
                           },
                         ]}
                       >
@@ -265,10 +266,10 @@ export default function Analysis() {
                         {
                           backgroundColor:
                             nivelRiesgo(stats) === "BAJO"
-                              ? "#4CAF50"
+                              ? colors.success
                               : nivelRiesgo(stats) === "MEDIO"
                                 ? "#FFC107"
-                                : "#F44336",
+                                : colors.danger,
                         },
                       ]}
                     >
@@ -301,7 +302,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: "bold",
-    color: "orange",
+    color: colors.primary,
     marginBottom: 20,
     textAlign: "center",
   },
@@ -356,7 +357,7 @@ const styles = StyleSheet.create({
     padding: 8,
     paddingHorizontal: 12,
     borderWidth: 1,
-    borderColor: "#4CAF50",
+    borderColor: colors.success,
   },
   statsButtonContent: {
     flexDirection: "row",
@@ -364,7 +365,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   statsButtonText: {
-    color: "#4CAF50",
+    color: colors.success,
     fontSize: 14,
     fontWeight: "500",
   },
@@ -411,7 +412,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   projectionValue: {
-    color: "#4CAF50",
+    color: colors.success,
     fontSize: 15,
     marginBottom: 4,
   },
@@ -458,7 +459,7 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   errorText: {
-    color: "#F44336",
+    color: colors.danger,
     fontSize: 16,
     marginBottom: 15,
   },

@@ -8,6 +8,7 @@ import {
   StyleSheet,
   TouchableOpacity,
 } from "react-native";
+import { colors } from "@/src/theme";
 
 export interface ChannelChip {
   key: string;
@@ -85,8 +86,8 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   chipActive: {
-    backgroundColor: "#ff9f1c",
-    borderColor: "#ff9f1c",
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
   channelChipText: {
     color: "#aaa",

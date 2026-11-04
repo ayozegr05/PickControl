@@ -18,6 +18,7 @@ import {
   formatDateTime as formatDate,
   cleanChannel,
 } from "@/src/utils/format";
+import { colors } from "@/src/theme";
 
 export function ProvidersCard({ rows }: { rows: ProviderRow[] }) {
   return (
@@ -525,12 +526,12 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255, 152, 0, 0.15)",
   },
   providerOk: {
-    color: "#4caf50",
+    color: colors.success,
     fontSize: 12,
     fontWeight: "bold",
   },
   providerBad: {
-    color: "#f44336",
+    color: colors.danger,
     fontSize: 12,
     fontWeight: "bold",
   },
@@ -573,7 +574,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   residuoButtonText: {
-    color: "#f44336",
+    color: colors.danger,
     fontSize: 12,
     fontWeight: "bold",
   },

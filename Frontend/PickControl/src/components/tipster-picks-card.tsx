@@ -76,7 +76,7 @@ function PronosticoTelegram({
     );
   }
   if (acierto === "False") {
-    return <Text style={[styles.icon, { color: "red" }]}>❌</Text>;
+    return <Text style={[styles.icon, { color: colors.danger }]}>❌</Text>;
   }
   return <Text style={[styles.icon, { color: "gray" }]}>❓</Text>;
 }
@@ -101,7 +101,7 @@ export default function TipsterPicksCard({
 
   return (
     <View style={styles.card}>
-      <Text style={[styles.cardTitle, { color: "#ff9f1c" }]}>
+      <Text style={[styles.cardTitle, { color: colors.primary }]}>
         Picks del tipster
       </Text>
       <Text style={styles.cardSubtitle}>
@@ -367,7 +367,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     marginBottom: 30,
     textAlign: "center",
-    color: "#ffba57",
+    color: colors.primarySoft,
   },
   cardSubtitle: {
     fontSize: 13,
@@ -391,7 +391,7 @@ const styles = StyleSheet.create({
     color: "white",
   },
   telegramButton: {
-    backgroundColor: "#ff9f1c",
+    backgroundColor: colors.primary,
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 20,

@@ -189,7 +189,7 @@ export default function InformantDetail() {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#4CAF50" />
+        <ActivityIndicator size="large" color={colors.success} />
         <Text style={styles.loadingText}>Cargando información...</Text>
       </View>
     );
@@ -256,7 +256,6 @@ export default function InformantDetail() {
       console.error("El ID de la apuesta es nulo o indefinido.");
       return;
     }
-    console.log("Actualizar Apuesta - ID:", id, "Acierto:", acierto);
     try {
       await updatePick(id, { acierto });
 
@@ -428,10 +427,8 @@ export default function InformantDetail() {
         await updatePick(selectedApuestaToUpdate.id, {
           fecha: selectedDate.toISOString(),
         });
-        console.log("Fecha actualizada en el servidor");
         // Esperar a que se complete la recarga de datos
         await reload();
-        console.log("Datos del informante recargados");
         Alert.alert("Éxito", "Fecha actualizada correctamente");
       } catch (error) {
         console.error("Error en la petición:", error);
@@ -640,10 +637,10 @@ export default function InformantDetail() {
             display="spinner" // Cambiamos a spinner para más control sobre el estilo
             onChange={handleDateChange}
             {...(Platform.OS === "ios"
-              ? { themeVariant: "light" as const, textColor: "#ff9f1c" }
+              ? { themeVariant: "light" as const, textColor: colors.primary }
               : {
-                  positiveButton: { label: "OK", textColor: "#ff9f1c" },
-                  negativeButton: { label: "Cancelar", textColor: "#ff9f1c" },
+                  positiveButton: { label: "OK", textColor: colors.primary },
+                  negativeButton: { label: "Cancelar", textColor: colors.primary },
                 })}
           />
         )}
@@ -669,13 +666,13 @@ const styles = StyleSheet.create({
   },
   errorText: {
     fontSize: 18,
-    color: "#ffba57",
+    color: colors.primarySoft,
     textAlign: "center",
     marginVertical: 20,
   },
   loadingText: {
     fontSize: 18,
-    color: "#4CAF50",
+    color: colors.success,
     textAlign: "center",
     marginVertical: 20,
   },
@@ -688,7 +685,7 @@ const styles = StyleSheet.create({
     marginBottom: 30,
     marginTop: 60,
     textAlign: "center",
-    color: "orange",
+    color: colors.primary,
   },
   card: {
     backgroundColor: "rgba(33, 33, 33, 0.5)",
@@ -706,7 +703,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     marginBottom: 30,
     textAlign: "center",
-    color: "#ffba57",
+    color: colors.primarySoft,
   },
   row: {
     flexDirection: "row",
@@ -741,8 +738,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   filterButtonActive: {
-    backgroundColor: "#ff9f1c",
-    borderColor: "#ff9f1c",
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
   filterButtonText: {
     color: "white",

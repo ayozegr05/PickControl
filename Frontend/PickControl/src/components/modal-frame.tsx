@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
+import { colors } from "@/src/theme";
 
 interface ModalFrameProps {
   visible: boolean;
@@ -76,7 +77,7 @@ const styles = StyleSheet.create({
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: "#F44336",
+    backgroundColor: colors.danger,
     justifyContent: "center",
     alignItems: "center",
     zIndex: 1,

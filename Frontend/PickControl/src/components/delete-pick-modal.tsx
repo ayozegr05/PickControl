@@ -5,6 +5,7 @@ import React from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import ModalFrame from "@/src/components/modal-frame";
+import { colors } from "@/src/theme";
 
 interface DeletePickModalProps {
   visible: boolean;
@@ -25,7 +26,7 @@ export default function DeletePickModal({
       </Text>
       <View style={styles.modalButtons}>
         <TouchableOpacity
-          style={[styles.modalButton, { backgroundColor: "#F44336" }]}
+          style={[styles.modalButton, { backgroundColor: colors.danger }]}
           onPress={onConfirm}
           accessibilityLabel="Eliminar apuesta"
         >

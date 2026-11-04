@@ -43,6 +43,7 @@ import {
   buildProviderRows,
   buildOddsProviderRows,
 } from "@/src/utils/providers";
+import { colors } from "@/src/theme";
 
 export default function ParsedPicksScreen() {
   const {
@@ -260,7 +261,7 @@ export default function ParsedPicksScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={refresh}
-            tintColor="#ff9f1c"
+            tintColor={colors.primary}
           />
         }
         onEndReached={() => {
@@ -316,7 +317,7 @@ export default function ParsedPicksScreen() {
           <DuplicadosCard picks={dupPicks} />
         )}
 
-        {loading && <ActivityIndicator size="large" color="#ff9f1c" />}
+        {loading && <ActivityIndicator size="large" color={colors.primary} />}
         {error && <Text style={styles.error}>Error: {error}</Text>}
 
         {channelGroups.length > 0 && (
@@ -365,7 +366,7 @@ export default function ParsedPicksScreen() {
               disabled={loadingMore}
             >
               {loadingMore ? (
-                <ActivityIndicator size="small" color="#ff9f1c" />
+                <ActivityIndicator size="small" color={colors.primary} />
               ) : (
                 <Text style={styles.loadMoreText}>Cargar más</Text>
               )}
@@ -386,13 +387,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   title: {
-    color: "#ff9f1c",
+    color: colors.primary,
     fontSize: 22,
     fontWeight: "bold",
     marginBottom: 16,
   },
   error: {
-    color: "red",
+    color: colors.danger,
     fontSize: 14,
     marginBottom: 12,
   },
@@ -417,7 +418,7 @@ const styles = StyleSheet.create({
   },
   loadMore: {
     backgroundColor: "#1a1a1a",
-    borderColor: "#ff9f1c",
+    borderColor: colors.primary,
     borderWidth: 1,
     borderRadius: 8,
     paddingVertical: 10,
@@ -425,7 +426,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   loadMoreText: {
-    color: "#ff9f1c",
+    color: colors.primary,
     fontSize: 14,
     fontWeight: "bold",
   },
@@ -443,8 +444,8 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   checkboxChecked: {
-    backgroundColor: "#ff9f1c",
-    borderColor: "#ff9f1c",
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
   toggleLabel: {
     color: "#aaa",

@@ -85,8 +85,10 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   login/register/add-pick verde/rojo → `primary` con texto
   `onPrimary`; tablas verde+beige de my-picks e `[informante]` →
   dark surface; inputs blancos de add-pick → `colors.input` +
-  texto claro. Quedan literales `#ff9f1c` sueltos (~50) — migración
-  incremental al tocar cada pantalla.
+  texto claro. Todos los literales `#ff9f1c` (~66) migrados a
+  `colors.primary`; además `"orange"` → `primary`, `#ffba57` →
+  nuevo token `primarySoft`, verdes/`"green"`/`#4caf50` → `success`
+  y rojos/`"red"`/`#f44336` → `danger`.
 - [x] ✅ **Tabla de historial recortada a la derecha** — resuelto:
   `tableContainer` de my-picks tenía `flexGrow:1` dentro del scroll
   horizontal → el contenedor se quedaba con el ancho del viewport y
@@ -162,10 +164,12 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   lista de canal de parsed-picks virtualizada con `onEndReached`,
   tablas de my-picks e `[informante]` (simples + "Mis apuestas") con
   `FlatList` en contenedor acotado.
-- [ ] 🟡 **Sin tema centralizado**: `#ff9f1c` hardcodeado ~50 veces +
-  variantes (`"orange"`, `#ffba57`, `#f3b02b`, `#FF4500`); verdes en
-  ≥7 valores; fondos `"black"`/`#000`/`#0d0d0d`/`#1a1a1a`/`#2d2d2d`.
-  Cada pantalla repite `container/card/input/title` casi idénticos.
+- [ ] 🟡 **Sin tema centralizado** (parcial, 2026-11): migrados TODOS
+  los literales de marca y semánticos — `#ff9f1c`×66 → `primary`,
+  `"orange"` → `primary`, `#ffba57` → `primarySoft` (nuevo token),
+  `#4caf50`/`"green"` → `success`, `#f44336`/`"red"` → `danger`.
+  Quedan neutros (`"black"`/`#000`/`#0d0d0d`, grises `#2e2e2e`/`#444`/
+  `#555` de tablas) y estilos `container/card/input/title` repetidos.
 - [x] ✅ **Duplicación de utilidades** — resuelto en Fase A/B
   (2026-11): `src/utils/format.ts` (`cleanChannel`, `formatDate*`),
   `picks.ts` (`gananciaApuesta`, `iconoAnulada`), `estadisticas.ts`
@@ -181,16 +185,22 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   `handleScroll`/`showTopBar` en my-picks, estilos copiados de index.
 - [ ] 🟡 **`try/catch` alrededor de JSX** (`index.tsx:71-164`) — no
   captura errores de render; el `catch` es inalcanzable.
-- [ ] 🟡 ~40 `console.log` (alguno en cada render), `any`×28,
-  `as any` en 5 `router.push` pese a `typedRoutes: true`.
+- [ ] 🟡 `console.log` de debug → **0** (quitados los ~7 de render/
+  handlers; `console.error`/`warn` en catches se quedan — son
+  diagnóstico). También quitadas 11 deps sin uso: `dotlottie-react`,
+  `@types/yup` (yup 1.x trae tipos), `numeral`, `prop-types`,
+  `dotenv`, `expo-dotenv`, `expo-env`, `expo-blur`, `expo-haptics`,
+  `expo-symbols`, `react-native-webview`. Quedan `any`×28 y
+  `as any` en `router.push` pese a `typedRoutes: true`.
 - [x] ✅ **Fetchs sin cancelación** — resuelto en Fase B: `useApiData`
   cancela updates al desmontar y refetchea si cambia el fetcher;
   todas las pantallas lo usan. Además `usePicks`/`useInformantes`
   devuelven referencia estable (bug real: array nuevo por render
   causaba render-storm en el `useEffect([apuestas])` de my-picks —
   pillado por los tests).
-- [ ] 🟡 Keys inseguras `key={index}` en listas (`my-picks:307,326,427,471`,
-  `parsed-picks:988`).
+- [x] ✅ Keys inseguras `key={index}` — resuelto: los 3 restantes de
+  my-picks pasan a keys estables (`informante`, `apuesta.id`,
+  `rank.informante`); parsed-picks ya estaba limpio.
 - [x] 🟡 `isInitializing` en AuthContext — la landing ya no pinta un
   frame en cold start: `(tabs)/index` muestra el spinner hasta que
   `checkAuth` resuelve.

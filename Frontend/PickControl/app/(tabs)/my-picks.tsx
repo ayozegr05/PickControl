@@ -51,10 +51,10 @@ const MyPicksScreen = () => {
   const renderPronostico = (acierto: Acierto) => {
     if (acierto === "True") {
       return (
-        <Text style={[styles.icon, { color: "green", fontSize: 21 }]}>✅ </Text>
+        <Text style={[styles.icon, { color: colors.success, fontSize: 21 }]}>✅ </Text>
       );
     } else if (acierto === "False") {
-      return <Text style={[styles.icon, { color: "red" }]}>❌</Text>;
+      return <Text style={[styles.icon, { color: colors.danger }]}>❌</Text>;
     }
     return <Text>-</Text>;
   };
@@ -97,7 +97,6 @@ const MyPicksScreen = () => {
   const getMaxApuestas = () => maxApuestasPorInformante(apuestasFiltradas);
 
   const handleActualizarApuesta = (apuesta: PickItem) => {
-    console.log("Apuesta seleccionada:", apuesta);
     setSelectedApuesta(apuesta); // Guardamos la apuesta seleccionada
     setModalVisible(true); // Mostramos el modal
   };
@@ -107,7 +106,6 @@ const MyPicksScreen = () => {
 
     try {
       await updatePick(selectedApuesta.id, { acierto });
-      console.log("Apuesta actualizada");
       reload(); // Volvemos a cargar las apuestas
       setModalVisible(false); // Cerramos el modal
     } catch (error) {
@@ -251,8 +249,8 @@ const MyPicksScreen = () => {
                     <View style={styles.shimmerEffect} />
                   </TouchableOpacity>
                 </View>
-                {informantes.map((informante, index) => (
-                  <View key={index} style={[styles.cell, { width: cellWidth }]}>
+                {informantes.map((informante) => (
+                  <View key={informante} style={[styles.cell, { width: cellWidth }]}>
                     <TouchableOpacity
                       onPress={() => handleInformantePress(informante)}
                       style={styles.informanteButton}
@@ -374,8 +372,8 @@ const MyPicksScreen = () => {
               showsVerticalScrollIndicator={true}
               nestedScrollEnabled={true}
             >
-              {apuestasPendientes.map((apuesta, index) => (
-                <View key={index} style={styles.pendingItem}>
+              {apuestasPendientes.map((apuesta) => (
+                <View key={apuesta.id} style={styles.pendingItem}>
                   {/* Columna de Apuesta */}
                   <View style={styles.column}>
                     <Text style={styles.pendingText}>Apuesta</Text>
@@ -419,7 +417,7 @@ const MyPicksScreen = () => {
             </Text>
 
             {ranking.map((rank, index) => (
-              <View key={index} style={styles.rankingItem}>
+              <View key={rank.informante} style={styles.rankingItem}>
                 <Text style={styles.rankingText}>
                   {index + 1}. {rank.informante}
                 </Text>
@@ -460,7 +458,7 @@ const MyPicksScreen = () => {
                   <Text style={styles.choiceButtonText}>✔️</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.choiceButton, { backgroundColor: "red" }]}
+                  style={[styles.choiceButton, { backgroundColor: colors.danger }]}
                   onPress={() => actualizarApuesta("False")}
                 >
                   <Text style={styles.choiceButtonText}>❌</Text>
@@ -570,7 +568,7 @@ const styles = StyleSheet.create({
   },
   cardSubtitle: {
     fontSize: 18,
-    color: "red",
+    color: colors.danger,
     fontWeight: "bold",
     textAlign: "center",
     marginBottom: 10,
@@ -654,7 +652,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: "10%",
     alignSelf: "center",
-    backgroundColor: "#ff9f1c",
+    backgroundColor: colors.primary,
     paddingHorizontal: 30,
     paddingVertical: 18,
     borderRadius: 30,
@@ -719,7 +717,7 @@ const styles = StyleSheet.create({
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: "red",
+    backgroundColor: colors.danger,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -825,7 +823,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   filterButton: {
-    backgroundColor: "#ff9f1c",
+    backgroundColor: colors.primary,
     padding: 10,
     borderRadius: 5,
     borderWidth: 1,
@@ -846,7 +844,7 @@ const styles = StyleSheet.create({
   buttonInformantText: {
     fontSize: 16,
     fontWeight: "bold",
-    color: "#ff9f1c", // Mantiene el color naranja de tu app
+    color: colors.primary, // Mantiene el color naranja de tu app
   },
   shimmerEffect: {
     position: "absolute",
@@ -854,7 +852,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 2,
-    backgroundColor: "#ff9f1c",
+    backgroundColor: colors.primary,
     opacity: 0.3,
   },
 });

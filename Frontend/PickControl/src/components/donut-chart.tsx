@@ -1,6 +1,7 @@
 import React from "react";
 import { View, Text, StyleSheet } from "react-native";
 import Svg, { Circle } from "react-native-svg";
+import { colors } from "@/src/theme";
 
 type DonutChartProps = {
   /** Porcentaje 0-100 que rellena el anillo. */
@@ -14,7 +15,7 @@ export default function DonutChart({
   percentage,
   size = 56,
   strokeWidth = 6,
-  color = "#ff9f1c",
+  color = colors.primary,
 }: DonutChartProps) {
   const clamped = Math.max(0, Math.min(100, percentage));
   const radius = (size - strokeWidth) / 2;

@@ -11,6 +11,7 @@ import {
   gananciasPor,
   totalGanancias as sumarGanancias,
 } from "@/src/utils/picks";
+import { colors } from "@/src/theme";
 
 const GananciasPage = () => {
   const { apuestas, loading: fetching, error, reload } = usePicks();
@@ -164,7 +165,7 @@ const GananciasPage = () => {
               <Animated.Text
                 style={[
                   styles.gananciasText,
-                  { color: totalGanancias >= 0 ? "green" : "red" },
+                  { color: totalGanancias >= 0 ? colors.success : colors.danger },
                 ]}
               >
                 {animatedGanancias} €
@@ -201,7 +202,7 @@ const GananciasPage = () => {
                   <Text
                     style={[
                       styles.itemValue,
-                      { color: ganancia >= 0 ? "green" : "red" },
+                      { color: ganancia >= 0 ? colors.success : colors.danger },
                     ]}
                   >
                     {ganancia.toFixed(2)} €
@@ -218,7 +219,7 @@ const GananciasPage = () => {
                 <Text
                   style={[
                     styles.itemValue,
-                    { color: ganancia >= 0 ? "green" : "red" },
+                    { color: ganancia >= 0 ? colors.success : colors.danger },
                   ]}
                 >
                   {ganancia.toFixed(2)} €
@@ -251,7 +252,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 35,
     fontWeight: "bold",
-    color: "orange",
+    color: colors.primary,
     marginRight: 10,
   },
   titleIcon: {
@@ -267,7 +268,7 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 22,
-    color: "orange",
+    color: colors.primary,
     marginTop: 30,
     marginBottom: 15,
     fontWeight: "bold",

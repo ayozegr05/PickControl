@@ -15,6 +15,7 @@ import {
   formatDateTime as formatDate,
   cleanChannel,
 } from "@/src/utils/format";
+import { colors } from "@/src/theme";
 
 export type CorregirUpdate = {
   acierto?: boolean | null;
@@ -249,7 +250,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   cardDate: {
-    color: "#ff9f1c",
+    color: colors.primary,
     fontSize: 12,
     marginBottom: 6,
   },
@@ -270,15 +271,15 @@ const styles = StyleSheet.create({
     borderTopColor: "#333",
   },
   acertoTrue: {
-    color: "#4caf50",
+    color: colors.success,
     fontWeight: "bold",
   },
   acertoFalse: {
-    color: "#f44336",
+    color: colors.danger,
     fontWeight: "bold",
   },
   acertoPending: {
-    color: "#ff9f1c",
+    color: colors.primary,
     fontWeight: "bold",
   },
   acertoAnulada: {
@@ -298,12 +299,12 @@ const styles = StyleSheet.create({
   },
   acertoButtonTrue: {
     backgroundColor: "#1e3a24",
-    borderColor: "#4caf50",
+    borderColor: colors.success,
     borderWidth: 1,
   },
   acertoButtonFalse: {
     backgroundColor: "#3a1e1e",
-    borderColor: "#f44336",
+    borderColor: colors.danger,
     borderWidth: 1,
   },
   acertoButtonAnulada: {
@@ -313,7 +314,7 @@ const styles = StyleSheet.create({
   },
   acertoButtonPending: {
     backgroundColor: "#332a1a",
-    borderColor: "#ff9f1c",
+    borderColor: colors.primary,
     borderWidth: 1,
   },
   acertoButtonText: {
@@ -351,7 +352,7 @@ const styles = StyleSheet.create({
     marginLeft: 6,
   },
   channelLink: {
-    color: "#ff9f1c",
+    color: colors.primary,
     textDecorationLine: "underline",
   },
 });

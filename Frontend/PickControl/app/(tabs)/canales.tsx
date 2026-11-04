@@ -23,6 +23,7 @@ import {
   setCanalActivo,
 } from "@/src/api/channels.api";
 import { Canal, CanalDisponible } from "@/src/types/channel.types";
+import { colors } from "@/src/theme";
 
 const Canales = () => {
   const [canales, setCanales] = useState<Canal[]>([]);
@@ -133,7 +134,7 @@ const Canales = () => {
 
         <Text style={styles.sectionTitle}>Monitorizados</Text>
         {loading ? (
-          <ActivityIndicator size="large" color="#ff9f1c" />
+          <ActivityIndicator size="large" color={colors.primary} />
         ) : error ? (
           <Text style={styles.error}>{error}</Text>
         ) : canales.length === 0 ? (
@@ -154,7 +155,7 @@ const Canales = () => {
               <Switch
                 value={canal.activo}
                 onValueChange={(v) => handleToggle(canal, v)}
-                trackColor={{ false: "#555", true: "#ff9f1c" }}
+                trackColor={{ false: "#555", true: colors.primary }}
                 thumbColor="#fff"
                 accessibilityLabel={`Activar canal ${canal.name || canal.target}`}
                 accessibilityState={{ checked: canal.activo }}
@@ -165,7 +166,7 @@ const Canales = () => {
                 accessibilityRole="button"
                 accessibilityLabel={`Eliminar canal ${canal.name || canal.target}`}
               >
-                <Ionicons name="trash-outline" size={20} color="#f44336" />
+                <Ionicons name="trash-outline" size={20} color={colors.danger} />
               </TouchableOpacity>
             </View>
           ))
@@ -235,7 +236,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   title: {
-    color: "#ff9f1c",
+    color: colors.primary,
     fontSize: 28,
     fontWeight: "bold",
     marginBottom: 8,
@@ -264,7 +265,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   error: {
-    color: "#f44336",
+    color: colors.danger,
     fontSize: 15,
   },
   card: {
@@ -307,7 +308,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   addButton: {
-    backgroundColor: "#ff9f1c",
+    backgroundColor: colors.primary,
     borderRadius: 10,
     padding: 12,
     marginLeft: 10,
@@ -315,7 +316,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   monitorButton: {
-    backgroundColor: "#ff9f1c",
+    backgroundColor: colors.primary,
     borderRadius: 8,
     paddingHorizontal: 14,
     paddingVertical: 8,
