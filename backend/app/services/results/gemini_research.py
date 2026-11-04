@@ -668,7 +668,7 @@ class ClosingOdds:
     cuota: float
     casa: str
     source_url: str
-    # Motor que extrajo el JSON ("groq", "cerebras", "gemini"...) —
+    # Motor que extrajo el JSON ("groq", "openrouter", "gemini"...) —
     # la fila se escribe como provider "{extractor}-odds" para que la
     # auditoría diga quién produjo cada cuota.
     extractor: str = ""
@@ -759,7 +759,7 @@ class GeminiResearchProvider:
 
         Con un endpoint compat vivo la extracción no depende de la
         cuota de Gemini: la búsqueda va por fetch propio y extraer
-        sale por Groq/Cerebras/OpenRouter, así que el cooldown del
+        sale por Groq/OpenRouter, así que el cooldown del
         free tier no debe parar el pipeline."""
         if compat_llm.has_live_endpoint():
             return False
@@ -863,12 +863,12 @@ class GeminiResearchProvider:
         self, prompt: str, purpose: str = ""
     ) -> Optional[tuple[str, list[str], str]]:
         """Extracción texto→JSON: primero los endpoints OpenAI-compat
-        gratuitos (Groq/Cerebras/OpenRouter — cuota diaria grande y
+        gratuitos (Groq/OpenRouter — cuota diaria grande y
         modelos 70B); Gemini solo si ninguno responde — su cuota es la
         más pequeña. Devuelve (texto, urls_leídas_por_el_modelo,
         motor) — las urls solo vienen cuando respondió Gemini con
         tool — y el texto lo valida siempre quien llama contra la
-        página. El motor ("groq"/"cerebras"/.../"gemini") nombra el
+        página. El motor ("groq"/"openrouter"/"gemini") nombra el
         provider de la fila que se escriba: `{motor}-odds` dice la
         verdad de quién extrajo cada cuota."""
         compat = await compat_llm.extract_text(prompt, purpose=purpose)

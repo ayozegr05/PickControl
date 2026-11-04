@@ -730,7 +730,7 @@ def count_purpose_call(mark: str, purpose: str) -> None:
 
 
 def record_extractor_result(name: str, ok: bool) -> None:
-    """Éxito/fallo por extractor LLM (groq, cerebras, gemini...).
+    """Éxito/fallo por extractor LLM (groq, openrouter, gemini...).
 
     `ok` = devolvió texto usable; `fail` = error/timeout/vacío.
     Termómetro de calidad real por endpoint para la vista de

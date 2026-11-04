@@ -1327,7 +1327,7 @@ async def _llm_extract(
     informante: Optional[str] = None,
     fecha_referencia: Optional[datetime] = None,
 ) -> Optional[ExtractedPick]:
-    """Extracción por la cascada gratuita Groq→Cerebras→OpenRouter. El
+    """Extracción por la cascada gratuita Groq→OpenRouter. El
     pick lleva `metodo="llm-{motor}"`, así se puede comparar quién
     extrajo qué en BD.
     """

@@ -1448,7 +1448,7 @@ class TestCompoundSelection:
 
 
 class TestLlmExtractFallback:
-    """`_llm_extract`: la cascada gratuita Groq->Cerebras->OpenRouter
+    """`_llm_extract`: la cascada gratuita Groq->OpenRouter
     cubre la ingesta, y el pick lleva el motor en `metodo` para poder
     auditar quién extrajo qué."""
 
@@ -1485,14 +1485,14 @@ class TestLlmExtractFallback:
         async def fake_extract(prompt, *, purpose="", settings=None):
             return (
                 '{"es_apuesta": false}',
-                "cerebras",
+                "openrouter",
             )
 
         monkeypatch.setattr(compat_llm, "extract_text", fake_extract)
 
         pick = await pe._llm_extract("hola foro")
         assert pick is not None
-        assert pick.metodo == "llm-cerebras"
+        assert pick.metodo == "llm-openrouter"
         assert pick.es_apuesta is False
 
     async def test_cascada_con_fences_markdown(self, monkeypatch):

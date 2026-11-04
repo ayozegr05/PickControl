@@ -3,7 +3,7 @@
 
 Para cada pick extraído en su día por OpenAI (metodo 'llm%'), vuelve a
 extraer el MISMO texto con cada motor disponible (OpenAI, Groq,
-Cerebras, OpenRouter, Gemini) y puntúa el acuerdo campo a campo contra
+OpenRouter, Gemini) y puntúa el acuerdo campo a campo contra
 el pick almacenado. Sirve para decidir si la cascada gratuita puede
 sustituir a OpenAI sin perder calidad.
 
@@ -355,7 +355,7 @@ def main():
     ap.add_argument("--limit", type=int, default=30)
     ap.add_argument(
         "--engines",
-        default="groq,cerebras,openrouter,gemini",
+        default="groq,openrouter,gemini",
         help="Motores a comparar (coma-separados)",
     )
     ap.add_argument(

@@ -48,7 +48,7 @@ _BACKLOG_INTERVAL_SECONDS = 24 * 3600
 # Goteo de cuotas históricas: esperar al backfill diario dejaba el
 # grifo cerrado todo el día. Sin candidatos o en cooldown la pasada
 # sale gratis (early-exit, ni una llamada al modelo).
-# Con un extractor compat vivo (Groq/Cerebras/OpenRouter) el goteo
+# Con un extractor compat vivo (Groq/OpenRouter) el goteo
 # corre cada 3 min — sus cooldowns duran segundos-minutos. Cuando
 # solo queda Gemini, la cadencia vuelve a ~20 min: su free tier no
 # da para más y así no se machaca el fallback.
@@ -326,12 +326,7 @@ async def lifespan(app: FastAPI):
     # (Gemini/compat): con cualquier key de extracción debe arrancar
     # — caso real nov-2026: key de OpenAI revocada, 530 fotos
     # esperando OCR por Gemini.
-    if (
-        settings.google_api_key
-        or settings.groq_api_key
-        or settings.openrouter_api_key
-        or settings.cerebras_api_key
-    ):
+    if settings.google_api_key or settings.groq_api_key or settings.openrouter_api_key:
         rescue_task = asyncio.create_task(_run_rescue_loop())
         logger.info(
             "[LIFECYCLE] Rescate OCR/reproceso iniciado en segundo plano "

@@ -37,7 +37,6 @@ from app.services.results.gemini_research import GeminiResearchProvider
 _PROVIDERS = (
     "llm-odds",
     "groq-odds",
-    "cerebras-odds",
     "openrouter-odds",
     "gemini-odds",
 )

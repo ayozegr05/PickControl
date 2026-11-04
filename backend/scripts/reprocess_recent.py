@@ -39,7 +39,7 @@ async def main() -> None:
     from app.services.results import compat_llm
 
     if not compat_llm.configured(settings):
-        print("Sin cascada compat (GROQ/CEREBRAS/OPENROUTER) configurada.")
+        print("Sin cascada compat (GROQ/OPENROUTER) configurada.")
         return
 
     cutoff = utc_now() - timedelta(days=days)

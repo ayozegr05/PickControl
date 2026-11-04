@@ -54,10 +54,9 @@ class Settings(BaseSettings):
     telegram_media_path: str = "media/telegram"
 
     # Extractores texto→JSON gratis (API OpenAI-compatible, sin
-    # tarjeta): cascada Groq -> Cerebras -> OpenRouter antes de gastar
-    # la cuota mínima de Gemini. Cada key activa su endpoint.
+    # tarjeta): cascada Groq -> OpenRouter antes de gastar la cuota
+    # mínima de Gemini. Cada key activa su endpoint.
     groq_api_key: str | None = None
-    cerebras_api_key: str | None = None
     openrouter_api_key: str | None = None
 
     # Verificación automática de resultados (opcional).

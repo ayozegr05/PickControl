@@ -64,7 +64,7 @@ def _candidate_from_text(text: Optional[str]) -> Optional[str]:
 
 async def _evento_via_llm(text: str) -> Optional[str]:
     """Mini-extracción del SOLO campo evento sobre el texto guardado,
-    por la cascada gratuita (Groq/Cerebras/OpenRouter)."""
+    por la cascada gratuita (Groq/OpenRouter)."""
     from app.services.results import compat_llm
 
     compat = await compat_llm.extract_text(

@@ -67,26 +67,23 @@ _GEMINI_429_DEFAULT = timedelta(minutes=20)
 # visión. La cuota DIARIA de Gemini la comparten OCR y
 # gemini_research (verificación de resultados) — cuando research la
 # agota, los 3 modelos quedan aparcados hasta el reset y el OCR
-# moría horas. Estos endpoints usan keys distintas (Groq/OpenRouter)
-# y no compiten por ese presupuesto.
+# moría horas. Estos endpoints usan otra key (OpenRouter) y no
+# compiten por ese presupuesto. Groq ya no lista modelos vision
+# en su catálogo (nov-2026: llama-4-scout/maverick retirados), así
+# que los dos peldaños son modelos :free de OpenRouter — sus cuotas
+# :free son por modelo, así que son dos reservas distintas.
 _VISION_ENDPOINTS = (
     # name, base_url, model, env_key
     (
-        "groq-vision-scout",
-        "https://api.groq.com/openai/v1",
-        "meta-llama/llama-4-scout-17b-16e-instruct",
-        "groq_api_key",
-    ),
-    (
-        "groq-vision-maverick",
-        "https://api.groq.com/openai/v1",
-        "meta-llama/llama-4-maverick-17b-128e-instruct",
-        "groq_api_key",
-    ),
-    (
-        "openrouter-vision",
+        "openrouter-vision-gemma",
         "https://openrouter.ai/api/v1",
-        "google/gemma-3-27b-it:free",
+        "google/gemma-4-31b-it:free",
+        "openrouter_api_key",
+    ),
+    (
+        "openrouter-vision-nemotron",
+        "https://openrouter.ai/api/v1",
+        "nvidia/nemotron-3.5-super-vl:free",
         "openrouter_api_key",
     ),
 )

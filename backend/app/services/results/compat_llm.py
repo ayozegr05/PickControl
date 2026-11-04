@@ -1,6 +1,6 @@
 """Extractores texto→JSON gratuitos vía API OpenAI-compatible.
 
-Groq, Cerebras y OpenRouter hablan el mismo `/chat/completions`: un
+Groq y OpenRouter hablan el mismo `/chat/completions`: un
 solo cliente, la cascada en `_ENDPOINTS`, cada endpoint se activa con
 su key en Settings. La cuota de cada uno se aparca con `mark_cooldown`
 usando el hint del 429 (`retry_hint_seconds`) — persistido en
@@ -54,9 +54,11 @@ class Endpoint:
 
 
 # Cascada en orden de calidad/cuota: Groq gpt-oss-120b gratis y
-# rapidísimo (su catálogo ya no trae llama-3.3); Cerebras y
-# OpenRouter :free como refuerzo; Gemini queda fuera — es el
-# paracaídas que maneja quien llama (su cuota es la más pequeña).
+# rapidísimo (su catálogo ya no trae llama-3.3); OpenRouter :free
+# como refuerzo; Gemini queda fuera — es el paracaídas que maneja
+# quien llama (su cuota es la más pequeña). Cerebras se retiró:
+# nunca llegó a configurarse en prod (sin key) y su modelo free
+# desapareció del catálogo.
 _ENDPOINTS: tuple[Endpoint, ...] = (
     Endpoint(
         "groq",
@@ -65,15 +67,9 @@ _ENDPOINTS: tuple[Endpoint, ...] = (
         "groq_api_key",
     ),
     Endpoint(
-        "cerebras",
-        "https://api.cerebras.ai/v1",
-        "llama-3.3-70b",
-        "cerebras_api_key",
-    ),
-    Endpoint(
         "openrouter",
         "https://openrouter.ai/api/v1",
-        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3.5-lightning:free",
         "openrouter_api_key",
     ),
 )

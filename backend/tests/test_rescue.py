@@ -49,9 +49,7 @@ def _settings_stub(monkeypatch, max_age_days: float = 30.0, **kwargs):
         compat_llm,
         "configured",
         lambda s=None: bool(
-            getattr(s, "groq_api_key", None)
-            or getattr(s, "cerebras_api_key", None)
-            or getattr(s, "openrouter_api_key", None)
+            getattr(s, "groq_api_key", None) or getattr(s, "openrouter_api_key", None)
         ),
     )
 
@@ -327,7 +325,6 @@ class TestReprocessPendingRaws:
         _settings_stub(
             monkeypatch,
             groq_api_key=None,
-            cerebras_api_key=None,
             openrouter_api_key=None,
         )
         resumen = await rescue.reprocess_pending_raws()

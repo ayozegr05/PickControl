@@ -45,7 +45,7 @@ def _isolated_provider_cache(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_compat_llm(monkeypatch):
-    """La cascada de extractores hosted (Groq/Cerebras/OpenRouter)
+    """La cascada de extractores hosted (Groq/OpenRouter)
     apagada en tests: con keys reales en `.env` haría llamadas HTTP
     de verdad. `test_compat_llm` la prueba aparte restaurando
     `_ENDPOINTS` con su fixture `_real_endpoints`."""

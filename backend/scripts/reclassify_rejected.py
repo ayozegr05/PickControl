@@ -74,7 +74,7 @@ async def main() -> None:
         from app.services.results import compat_llm
 
         if not compat_llm.configured(settings):
-            print("Sin cascada compat (GROQ/CEREBRAS/OPENROUTER) configurada.")
+            print("Sin cascada compat (GROQ/OPENROUTER) configurada.")
             return
 
         # Fase 2: extracción real (reglas + fallback LLM) y actualización.

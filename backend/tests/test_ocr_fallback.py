@@ -164,7 +164,6 @@ class TestOcrCompatVision:
     def _settings(self, **kw):
         base = {
             "groq_api_key": None,
-            "cerebras_api_key": None,
             "openrouter_api_key": None,
         }
         base.update(kw)
@@ -178,7 +177,7 @@ class TestOcrCompatVision:
             )
 
         monkeypatch.setattr(
-            ocr_mod, "get_settings", lambda: self._settings(groq_api_key="g")
+            ocr_mod, "get_settings", lambda: self._settings(openrouter_api_key="k")
         )
         self._cliente_mock(monkeypatch, handler)
         assert await ocr_mod._ocr_compat_vision(image) == "PICK OCR"
@@ -195,7 +194,7 @@ class TestOcrCompatVision:
             )
 
         monkeypatch.setattr(
-            ocr_mod, "get_settings", lambda: self._settings(groq_api_key="g")
+            ocr_mod, "get_settings", lambda: self._settings(openrouter_api_key="k")
         )
         self._cliente_mock(monkeypatch, handler)
         await ocr_mod._ocr_compat_vision(image)
@@ -218,7 +217,7 @@ class TestOcrCompatVision:
             )
 
         monkeypatch.setattr(
-            ocr_mod, "get_settings", lambda: self._settings(groq_api_key="g")
+            ocr_mod, "get_settings", lambda: self._settings(openrouter_api_key="k")
         )
         self._cliente_mock(monkeypatch, handler)
         assert await ocr_mod._ocr_compat_vision(image) == "OK"

@@ -32,10 +32,9 @@ def state_file(tmp_path, monkeypatch):
     monkeypatch.setattr(results_base, "_STATE_FILE", tmp_path / "provider_state.json")
 
 
-def _settings(groq=None, cerebras=None, openrouter=None):
+def _settings(groq=None, openrouter=None):
     return SimpleNamespace(
         groq_api_key=groq,
-        cerebras_api_key=cerebras,
         openrouter_api_key=openrouter,
     )
 
@@ -88,13 +87,13 @@ class TestExtractText:
 
         async def fake(ep, key, prompt, purpose=""):
             calls.append(ep.name)
-            return "ok" if ep.name == "cerebras" else None
+            return "ok" if ep.name == "openrouter" else None
 
         monkeypatch.setattr(compat_llm, "_call", fake)
-        s = _settings(cerebras="k2", openrouter="k3")
-        assert await compat_llm.extract_text("p", settings=s) == ("ok", "cerebras")
-        # groq sin key ni se intenta; openrouter ni llega al turno.
-        assert calls == ["cerebras"]
+        s = _settings(groq="k2", openrouter="k3")
+        assert await compat_llm.extract_text("p", settings=s) == ("ok", "openrouter")
+        # groq falló y openrouter corta la cascada.
+        assert calls == ["groq", "openrouter"]
 
     async def test_endpoint_aparcado_se_salta_sin_llamar(self, monkeypatch):
         results_base.mark_cooldown("llm-compat-groq", utc_now() + timedelta(hours=1))
@@ -105,16 +104,16 @@ class TestExtractText:
             return "ok"
 
         monkeypatch.setattr(compat_llm, "_call", fake)
-        s = _settings(groq="k1", cerebras="k2")
-        assert await compat_llm.extract_text("p", settings=s) == ("ok", "cerebras")
-        assert calls == ["cerebras"]  # groq aparcado ni se intenta
+        s = _settings(groq="k1", openrouter="k2")
+        assert await compat_llm.extract_text("p", settings=s) == ("ok", "openrouter")
+        assert calls == ["openrouter"]  # groq aparcado ni se intenta
 
     async def test_todos_fallan_devuelve_none(self, monkeypatch):
         async def fake(ep, key, prompt, purpose=""):
             return None
 
         monkeypatch.setattr(compat_llm, "_call", fake)
-        s = _settings(groq="k", cerebras="k", openrouter="k")
+        s = _settings(groq="k", openrouter="k")
         assert await compat_llm.extract_text("p", settings=s) is None
 
     async def test_ingesta_usa_pool_separado_primero(self, monkeypatch):
@@ -183,7 +182,7 @@ class TestCall:
         monkeypatch.setattr(compat_llm.httpx, "AsyncClient", _client(exc=_error(503)))
         ep = compat_llm._ENDPOINTS[1]
         assert await compat_llm._call(ep, "k", "p") is None
-        assert results_base.is_rate_limited("llm-compat-cerebras")
+        assert results_base.is_rate_limited("llm-compat-openrouter")
 
     async def test_fallo_red_pausa_corta(self, monkeypatch):
         req = httpx.Request("POST", "https://x")
@@ -192,7 +191,7 @@ class TestCall:
             "AsyncClient",
             _client(exc=httpx.ConnectError("down", request=req)),
         )
-        ep = compat_llm._ENDPOINTS[2]
+        ep = compat_llm._ENDPOINTS[-1]
         assert await compat_llm._call(ep, "k", "p") is None
         assert results_base.is_rate_limited("llm-compat-openrouter")
 
@@ -201,12 +200,12 @@ class TestCall:
         assert compat_llm.configured(_settings(groq="k"))
 
     async def test_has_live_endpoint(self):
-        s = _settings(groq="k", cerebras="k")
+        s = _settings(groq="k", openrouter="k")
         assert compat_llm.has_live_endpoint(s)
-        # Groq aparcado pero Cerebras libre -> sigue habiendo camino.
+        # Groq aparcado pero OpenRouter libre -> sigue habiendo camino.
         results_base.mark_cooldown("llm-compat-groq", utc_now() + timedelta(hours=1))
         assert compat_llm.has_live_endpoint(s)
         results_base.mark_cooldown(
-            "llm-compat-cerebras", utc_now() + timedelta(hours=1)
+            "llm-compat-openrouter", utc_now() + timedelta(hours=1)
         )
         assert not compat_llm.has_live_endpoint(s)

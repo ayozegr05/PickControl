@@ -41,7 +41,7 @@ async def main() -> None:
     from app.services.results import compat_llm
 
     if not compat_llm.configured(settings):
-        print("Sin cascada compat configurada (GROQ/CEREBRAS/OPENROUTER).")
+        print("Sin cascada compat configurada (GROQ/OPENROUTER).")
         return
 
     async with AsyncSessionLocal() as session:
