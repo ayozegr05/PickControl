@@ -192,9 +192,9 @@ class TestCall:
             "AsyncClient",
             _client(exc=httpx.ConnectError("down", request=req)),
         )
-        ep = compat_llm._ENDPOINTS[-1]
+        ep = compat_llm._ENDPOINTS[2]
         assert await compat_llm._call(ep, "k", "p") is None
-        assert results_base.is_rate_limited(f"llm-compat-{ep.name}")
+        assert results_base.is_rate_limited("llm-compat-openrouter")
 
     async def test_configured(self):
         assert not compat_llm.configured(_settings())

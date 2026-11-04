@@ -151,7 +151,7 @@ class TestOcrGemini:
 
 class TestOcrCompatVision:
     """Tercer peldaño de la cadena OCR: endpoints OpenAI-compatible
-    con visión (Groq llama-4). Existe porque la
+    con visión (Groq llama-4, OpenRouter :free). Existe porque la
     cuota DIARIA de Gemini la quema gemini_research verificando
     resultados — cuando los 3 modelos quedan aparcados hasta el
     reset, el OCR de Telegram moría con ellos hasta las 08:00."""
