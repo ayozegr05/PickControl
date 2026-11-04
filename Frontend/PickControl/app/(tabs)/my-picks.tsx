@@ -88,7 +88,7 @@ const MyPicksScreen = () => {
 
   const handleInformantePress = (informante: string) => {
     router.push({
-      pathname: "/dynamic-routes/[informante]",
+      pathname: "/informante/[informante]",
       params: { informante },
     });
   };

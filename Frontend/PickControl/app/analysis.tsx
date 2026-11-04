@@ -138,7 +138,7 @@ export default function Analysis() {
             <Text style={styles.loadingText}>Cargando datos...</Text>
             <LottieView
               ref={loadingRef}
-              source={require("../../assets/animations/loading.json")}
+              source={require("../assets/animations/loading.json")}
               style={styles.loadingAnimation}
               autoPlay
               loop
@@ -193,7 +193,7 @@ export default function Analysis() {
                     <TouchableOpacity
                       onPress={() =>
                         router.push({
-                          pathname: "/dynamic-routes/[informante]",
+                          pathname: "/informante/[informante]",
                           params: { informante },
                         })
                       }

@@ -158,7 +158,7 @@ const AddPick = () => {
       console.error("Error al crear la apuesta:", error);
       if (error instanceof ApiError && error.status === 401) {
         Alert.alert("Error", "No has iniciado sesion");
-        router.push("/screens/login");
+        router.push("/login");
         return;
       }
       Alert.alert(

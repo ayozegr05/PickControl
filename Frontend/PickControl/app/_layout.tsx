@@ -12,10 +12,10 @@ export default function Layout() {
         <AuthGuard>
           <Stack screenOptions={{ headerShown: false }}>
             <Stack.Screen name="(tabs)" />
-            <Stack.Screen name="screens/login" />
-            <Stack.Screen name="screens/register" />
-            <Stack.Screen name="screens/analysis" />
-            <Stack.Screen name="dynamic-routes/[informante]" />
+            <Stack.Screen name="login" />
+            <Stack.Screen name="register" />
+            <Stack.Screen name="analysis" />
+            <Stack.Screen name="informante/[informante]" />
           </Stack>
         </AuthGuard>
       </AuthProvider>

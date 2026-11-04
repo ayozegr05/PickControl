@@ -139,13 +139,13 @@ const TopBar = () => {
           <View style={styles.rightSection}>
             <TouchableOpacity
               style={styles.authButton}
-              onPress={() => router.push("/screens/login")}
+              onPress={() => router.push("/login")}
             >
               <Text style={styles.authButtonText}>Login</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.authButton}
-              onPress={() => router.push("/screens/register")}
+              onPress={() => router.push("/register")}
             >
               <Text style={styles.authButtonText}>Register</Text>
             </TouchableOpacity>

@@ -52,7 +52,7 @@ const Main = () => {
 
   const handleTipsterPress = (nombre: string) => {
     router.push({
-      pathname: "/dynamic-routes/[informante]",
+      pathname: "/informante/[informante]",
       params: { informante: nombre },
     });
   };
@@ -150,7 +150,7 @@ const Main = () => {
           <TouchableOpacity
             style={styles.joinButton}
             activeOpacity={0.8}
-            onPress={() => router.push("/screens/login")}
+            onPress={() => router.push("/login")}
           >
             <Text style={styles.joinButtonText}>Start</Text>
           </TouchableOpacity>

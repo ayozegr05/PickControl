@@ -111,7 +111,7 @@ export default function AuditoriaScreen() {
         <TouchableOpacity
           onPress={() =>
             router.push({
-              pathname: "/dynamic-routes/[informante]",
+              pathname: "/informante/[informante]",
               params: { informante: canal.informante },
             })
           }
@@ -209,7 +209,7 @@ export default function AuditoriaScreen() {
 
             <TouchableOpacity
               style={styles.linkButton}
-              onPress={() => router.push("/screens/analysis")}
+              onPress={() => router.push("/analysis")}
             >
               <Text style={styles.linkButtonText}>
                 Proyecciones (calculadora)

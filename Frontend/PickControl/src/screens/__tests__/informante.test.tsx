@@ -4,7 +4,7 @@
 // partir el componente.
 import React from "react";
 import { render, waitFor, fireEvent } from "@testing-library/react-native";
-import InformantDetail from "@/app/dynamic-routes/[informante]";
+import InformantDetail from "@/app/informante/[informante]";
 import { getInformanteStats } from "@/src/api/informantes.api";
 import { getPickOdds } from "@/src/api/parsed-picks.api";
 import { InformanteStats } from "@/src/types/informante.types";

@@ -228,7 +228,7 @@ export default function ParsedPicksScreen() {
     onCorregirPata: handleCorregirPata,
     onChannelPress: (informante) =>
       router.push({
-        pathname: "/dynamic-routes/[informante]",
+        pathname: "/informante/[informante]",
         params: { informante },
       }),
   };

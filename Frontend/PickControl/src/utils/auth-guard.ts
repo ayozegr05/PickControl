@@ -11,8 +11,9 @@ export type AuthGuardState = {
 };
 
 // Pantallas alcanzables sin sesión: la landing ((tabs)/index — el
-// grupo (tabs) a secas también cae aquí) y el login/register.
-const PUBLIC_SCREENS = new Set(["login", "register"]);
+// grupo (tabs) a secas también cae aquí) y el login/register, ahora
+// rutas de primer nivel (antes bajo /screens/…).
+const PUBLIC_ROUTES = new Set(["login", "register"]);
 
 const isLanding = (segments: string[]): boolean =>
   segments[0] === "(tabs)" &&
@@ -28,15 +29,14 @@ export function redirectTarget(
   if (isInitializing) return null;
 
   if (!isAuthenticated) {
-    if (isLanding(segments)) return null;
-    if (segments[0] === "screens" && PUBLIC_SCREENS.has(segments[1])) {
+    if (isLanding(segments) || PUBLIC_ROUTES.has(segments[0])) {
       return null;
     }
     return "/";
   }
 
   // Autenticado: login/register ya no tienen sentido → home.
-  if (segments[0] === "screens" && PUBLIC_SCREENS.has(segments[1])) {
+  if (PUBLIC_ROUTES.has(segments[0])) {
     return "/";
   }
   return null;

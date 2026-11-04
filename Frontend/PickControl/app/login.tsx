@@ -291,7 +291,7 @@ const LoginScreen = () => {
 
                 <TouchableOpacity
                   style={styles.registerLink}
-                  onPress={() => router.push("/screens/register")}
+                  onPress={() => router.push("/register")}
                 >
                   <Text style={styles.registerText}>
                     ¿No tienes una cuenta?

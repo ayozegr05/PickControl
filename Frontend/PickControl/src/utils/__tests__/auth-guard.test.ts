@@ -28,10 +28,8 @@ describe("redirectTarget", () => {
     it("permite la landing y las pantallas públicas", () => {
       expect(redirectTarget(["(tabs)"], auth(false))).toBeNull();
       expect(redirectTarget(["(tabs)", "index"], auth(false))).toBeNull();
-      expect(redirectTarget(["screens", "login"], auth(false))).toBeNull();
-      expect(
-        redirectTarget(["screens", "register"], auth(false))
-      ).toBeNull();
+      expect(redirectTarget(["login"], auth(false))).toBeNull();
+      expect(redirectTarget(["register"], auth(false))).toBeNull();
     });
 
     it("expulsa a la landing desde cualquier pestaña protegida", () => {
@@ -48,31 +46,24 @@ describe("redirectTarget", () => {
     });
 
     it("expulsa a la landing desde pantallas sueltas protegidas", () => {
-      expect(redirectTarget(["screens", "analysis"], auth(false))).toBe(
-        "/"
-      );
+      expect(redirectTarget(["analysis"], auth(false))).toBe("/");
       expect(
-        redirectTarget(
-          ["dynamic-routes", "[informante]"],
-          auth(false)
-        )
+        redirectTarget(["informante", "[informante]"], auth(false))
       ).toBe("/");
     });
   });
 
   describe("con sesión", () => {
     it("rechaza login/register (ya autenticado) hacia la home", () => {
-      expect(redirectTarget(["screens", "login"], auth(true))).toBe("/");
-      expect(redirectTarget(["screens", "register"], auth(true))).toBe(
-        "/"
-      );
+      expect(redirectTarget(["login"], auth(true))).toBe("/");
+      expect(redirectTarget(["register"], auth(true))).toBe("/");
     });
 
     it("deja pasar el resto de rutas", () => {
       expect(redirectTarget(["(tabs)", "earns"], auth(true))).toBeNull();
-      expect(redirectTarget(["screens", "analysis"], auth(true))).toBeNull();
+      expect(redirectTarget(["analysis"], auth(true))).toBeNull();
       expect(
-        redirectTarget(["dynamic-routes", "[informante]"], auth(true))
+        redirectTarget(["informante", "[informante]"], auth(true))
       ).toBeNull();
       expect(redirectTarget(["(tabs)"], auth(true))).toBeNull();
     });

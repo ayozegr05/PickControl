@@ -47,7 +47,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     // las llamadas fallando (sesión zombie).
     setUnauthorizedHandler(() => {
       void logout();
-      router.replace("/screens/login");
+      router.replace("/login");
     });
     return () => setUnauthorizedHandler(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
