@@ -15,7 +15,13 @@ import httpx
 from app.core.config import get_settings
 from app.core.dates import utc_now
 from app.core.logging import get_logger
-from app.services.results.base import retry_hint_seconds
+from app.services.results.base import (
+    count_provider_call,
+    count_purpose_call,
+    is_rate_limited,
+    mark_cooldown,
+    retry_hint_seconds,
+)
 from app.services.telegram.openai_retry import call_with_retry
 
 logger = get_logger("app.telegram.ocr")
@@ -55,6 +61,41 @@ _GEMINI_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
 # un 429 aparca solo ese modelo hasta el hint del retry, no la familia.
 _GEMINI_QUOTA_UNTIL: dict[str, datetime] = {}
 _GEMINI_429_DEFAULT = timedelta(minutes=20)
+
+# Tercer peldaño de la cadena: endpoints OpenAI-compatible con
+# visión. La cuota DIARIA de Gemini la comparten OCR y
+# gemini_research (verificación de resultados) — cuando research la
+# agota, los 3 modelos quedan aparcados hasta el reset y el OCR
+# moría horas. Estos endpoints usan keys distintas (Groq/OpenRouter)
+# y no compiten por ese presupuesto.
+_VISION_ENDPOINTS = (
+    # name, base_url, model, env_key
+    (
+        "groq-vision-scout",
+        "https://api.groq.com/openai/v1",
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "groq_api_key",
+    ),
+    (
+        "groq-vision-maverick",
+        "https://api.groq.com/openai/v1",
+        "meta-llama/llama-4-maverick-17b-128e-instruct",
+        "groq_api_key",
+    ),
+    (
+        "openrouter-vision",
+        "https://openrouter.ai/api/v1",
+        "google/gemma-3-27b-it:free",
+        "openrouter_api_key",
+    ),
+)
+_VISION_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
+_VISION_429_FALLBACK = timedelta(minutes=20)
+_VISION_ERROR_COOLDOWN = timedelta(minutes=5)
+
+
+def _vision_mark(name: str) -> str:
+    return f"ocr-vision-{name}"
 
 
 def _encode_image(image_path: str) -> str:
@@ -147,6 +188,75 @@ async def _ocr_gemini(image_path: str, api_key: str) -> str | None:
     return None
 
 
+async def _ocr_compat_vision(image_path: str) -> str | None:
+    """OCR vía endpoints OpenAI-compatible con visión (Groq llama-4,
+    OpenRouter :free). Mismo patrón de cooldown que compat_llm: un
+    429 aparca solo ese endpoint hasta el hint del retry."""
+    b64 = _encode_image(image_path)
+    settings = get_settings()
+    for name, base_url, model, env_key in _VISION_ENDPOINTS:
+        key = getattr(settings, env_key, None)
+        mark = _vision_mark(name)
+        if not key or is_rate_limited(mark):
+            continue
+        count_provider_call(mark)
+        count_purpose_call(mark, "ingesta")
+        try:
+            async with httpx.AsyncClient(timeout=_VISION_TIMEOUT) as client:
+                resp = await client.post(
+                    f"{base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    json={
+                        "model": model,
+                        "temperature": 0,
+                        "max_tokens": 2000,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": _OCR_PROMPT},
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:image/jpeg;base64,{b64}"
+                                        },
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 429:
+                secs = retry_hint_seconds(exc.response)
+                mark_cooldown(
+                    mark,
+                    utc_now()
+                    + (timedelta(seconds=secs) if secs else _VISION_429_FALLBACK),
+                )
+                logger.warning("[OCR] %s 429 — probando siguiente endpoint", name)
+            else:
+                mark_cooldown(mark, utc_now() + _VISION_ERROR_COOLDOWN)
+                logger.warning(
+                    "[OCR] %s HTTP %s — pausa 5m", name, exc.response.status_code
+                )
+            continue
+        except httpx.HTTPError as exc:
+            mark_cooldown(mark, utc_now() + _VISION_ERROR_COOLDOWN)
+            logger.warning("[OCR] %s error: %s — pausa 5m", name, exc)
+            continue
+        try:
+            text = (resp.json()["choices"][0]["message"]["content"] or "").strip()
+        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            logger.warning("[OCR] %s respuesta ilegible: %s", name, exc)
+            continue
+        if text:
+            logger.info("OCR completado (%s) para %s", name, image_path)
+            return text
+    return None
+
+
 async def extract_text_from_image(image_path: str, api_key: str | None) -> str | None:
     """Extrae texto de una imagen.
 
@@ -171,6 +281,12 @@ async def extract_text_from_image(image_path: str, api_key: str | None) -> str |
         text = await _ocr_gemini(image_path, google_key)
         if text:
             return text
+
+    # Gemini comparte cuota diaria con la verificación de resultados:
+    # cuando está aparcado, la visión compat (keys aparte) salva el OCR.
+    text = await _ocr_compat_vision(image_path)
+    if text:
+        return text
 
     if not api_key and not google_key:
         logger.info(
