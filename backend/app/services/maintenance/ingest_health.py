@@ -20,12 +20,17 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import func, or_, select
 
+from app.core.config import get_settings
 from app.core.dates import utc_now
 from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.services.notifications.push import notify_ingest_down
-from app.services.results.base import is_rate_limited, mark_cooldown
+from app.services.results.base import (
+    is_rate_limited,
+    mark_cooldown,
+    rate_limited_until,
+)
 
 logger = get_logger("app.maintenance.ingest_health")
 
@@ -103,33 +108,219 @@ async def check_ingest_health(session) -> IngestHealth:
     )
 
 
+@dataclass
+class IngestProblem:
+    """Un fallo concreto de la cadena en lenguaje claro — el correo
+    debe decir QUÉ se rompió y si hay que actuar, no un genérico
+    "ingesta caída" (caso real nov-2026: 25 fotos sin leer con el
+    listener perfectamente vivo)."""
+
+    kind: str  # "ocr" | "extraccion" | "listener"
+    title: str
+    cause: str  # causa probable
+    impact: str  # qué se pierde mientras dure
+    action: str  # se autorrecupera o requiere acción humana
+
+
+def _build_problems(health: IngestHealth) -> list[IngestProblem]:
+    """Traduce los contadores a problemas explicados. El orden es el
+    del correo: primero lo que se ve (fotos), luego la cola, al final
+    el fallo grave (listener)."""
+    problems: list[IngestProblem] = []
+    if health.fotos_sin_ocr >= _OCR_FAIL_THRESHOLD:
+        problems.append(
+            IngestProblem(
+                kind="ocr",
+                title=f"📷 {health.fotos_sin_ocr} fotos sin leer (OCR)",
+                cause=(
+                    "Los lectores de imágenes no responden: la cuota "
+                    "diaria de Gemini está agotada y/o el respaldo de "
+                    "OpenRouter está caído."
+                ),
+                impact=(
+                    "Los picks que llegan COMO FOTO no se interpretan "
+                    "ahora mismo. Los de texto sí funcionan."
+                ),
+                action=(
+                    "Ninguna necesaria: los mensajes están guardados "
+                    "y el rescate automático las reintenta cada 6h. "
+                    "Si mañana sigue igual, revisar las keys de "
+                    "Gemini/OpenRouter."
+                ),
+            )
+        )
+    if health.raws_sin_procesar >= _PROC_FAIL_THRESHOLD:
+        problems.append(
+            IngestProblem(
+                kind="extraccion",
+                title=f"⚙️ {health.raws_sin_procesar} mensajes sin procesar",
+                cause=(
+                    "Los extractores LLM (Groq/OpenRouter) no responden "
+                    "o van muy lentos."
+                ),
+                impact=(
+                    "Los mensajes entran y se guardan, pero no se "
+                    "convierten en pick ni se descartan: se acumulan "
+                    "pendientes."
+                ),
+                action=(
+                    "Ninguna de momento: quedan encolados y el rescate "
+                    "los reprocesa solo cuando vuelva un extractor. "
+                    "Si dura más de 24h, revisar las keys."
+                ),
+            )
+        )
+    if health.ultimo_raw is not None:
+        silencio = utc_now() - health.ultimo_raw
+        if silencio >= _SILENCE_THRESHOLD:
+            horas = int(silencio.total_seconds() // 3600)
+            problems.append(
+                IngestProblem(
+                    kind="listener",
+                    title=f"🔌 Sin mensajes nuevos en {horas}h",
+                    cause=(
+                        "El listener de Telegram está desconectado o "
+                        "el backend está caído."
+                    ),
+                    impact=(
+                        "Nada de lo que publiquen los canales está "
+                        "entrando: esto SÍ es una parada de ingesta "
+                        "real."
+                    ),
+                    action=(
+                        "REQUIERE ACCIÓN: comprobar que el contenedor "
+                        "backend está vivo y la sesión de Telegram "
+                        "conectada. Al reconectar, el catch-up "
+                        "recupera lo perdido (hasta 7 días)."
+                    ),
+                )
+            )
+    return problems
+
+
+def _provider_status_lines(settings) -> list[str]:
+    """Línea de estado por pieza de la cadena (sin key / OK /
+    aparcado hasta HH:MM) — el correo debe mostrar qué respaldo
+    sigue vivo, no solo qué falla."""
+    from app.services.telegram import ocr
+
+    def _estado(env_key: str, marks: list[str]) -> str:
+        if not getattr(settings, env_key, None):
+            return "sin key"
+        aparcados = [
+            u
+            for u in (rate_limited_until(m) for m in marks)
+            if u is not None and u > utc_now()
+        ]
+        if len(aparcados) == len(marks):
+            return f"aparcado hasta ~{max(aparcados):%H:%M}"
+        return "OK"
+
+    lines: list[str] = []
+    if not getattr(settings, "google_api_key", None):
+        lines.append("• OCR Gemini: sin key")
+    else:
+        aparcados = [
+            u
+            for m in ocr._GEMINI_MODELS
+            if (u := ocr._GEMINI_QUOTA_UNTIL.get(m)) is not None and u > utc_now()
+        ]
+        if len(aparcados) == len(ocr._GEMINI_MODELS):
+            lines.append(
+                f"• OCR Gemini: aparcado hasta ~{max(aparcados):%H:%M} "
+                "(cuota diaria agotada)"
+            )
+        else:
+            lines.append("• OCR Gemini: OK")
+    lines.append(
+        "• OCR OpenRouter: "
+        + _estado(
+            "openrouter_api_key",
+            [ocr._vision_mark(ep[0]) for ep in ocr._VISION_ENDPOINTS],
+        )
+    )
+    lines.append(
+        "• Extracción Groq: "
+        + _estado(
+            "groq_api_key",
+            ["llm-compat-groq-ingesta", "llm-compat-groq"],
+        )
+    )
+    lines.append(
+        "• Extracción OpenRouter: "
+        + _estado("openrouter_api_key", ["llm-compat-openrouter"])
+    )
+    return lines
+
+
+_KIND_LABEL = {"ocr": "OCR", "extraccion": "extracción", "listener": "listener"}
+
+
+def _format_alert(
+    health: IngestHealth,
+    problems: list[IngestProblem],
+    status_lines: list[str],
+) -> tuple[str, str, str]:
+    """(subject, push_body, email_body). El subject nombra el fallo
+    real; el email explica qué sigue funcionando y qué no."""
+    kinds = [p.kind for p in problems]
+    if kinds == ["listener"]:
+        subject = "[ControlPick] 🔌 Sin mensajes de Telegram — listener parado"
+    elif kinds == ["ocr"]:
+        subject = f"[ControlPick] 📷 OCR de fotos acumulado ({health.fotos_sin_ocr})"
+    elif kinds == ["extraccion"]:
+        subject = f"[ControlPick] ⚙️ Extracción atascada ({health.raws_sin_procesar})"
+    else:
+        subject = "[ControlPick] ⚠️ Ingesta degradada: " + " + ".join(
+            _KIND_LABEL[k] for k in kinds
+        )
+
+    entrada = (
+        f"✅ Los mensajes SIGUEN entrando y guardándose: "
+        f"{health.raws_ventana} en las últimas 3h."
+        if health.raws_ventana > 0
+        else "No ha entrado ningún mensaje en las últimas 3h."
+    )
+    email = f"=== ControlPick — estado de la ingesta ===\n\n{entrada}\n\n"
+    email += "❌ PROBLEMAS DETECTADOS\n"
+    for i, p in enumerate(problems, 1):
+        email += (
+            f"{i}) {p.title}\n"
+            f"   Causa probable: {p.cause}\n"
+            f"   Impacto: {p.impact}\n"
+            f"   Acción: {p.action}\n\n"
+        )
+    if status_lines:
+        email += (
+            "📡 ESTADO DE LOS LECTORES/EXTRACTORES\n" + "\n".join(status_lines) + "\n"
+        )
+
+    entrada_short = (
+        f"mensajes entrando ({health.raws_ventana} en 3h)"
+        if health.raws_ventana > 0
+        else "sin mensajes nuevos"
+    )
+    push_body = " | ".join(p.title for p in problems) + f" — {entrada_short}"
+    return subject, push_body, email
+
+
 async def run_ingest_healthcheck() -> None:
-    """Pasada del healthcheck: si hay señal de ingesta caída y no se
-    avisó en el cooldown, push a admins. Nunca lanza — un fallo del
+    """Pasada del healthcheck: si hay señal de fallo y no se avisó en
+    el cooldown, email+push a admins. Nunca lanza — un fallo del
     propio healthcheck no puede tumbar el loop que lo hospeda."""
     try:
         async with AsyncSessionLocal() as session:
             health = await check_ingest_health(session)
-        problems: list[str] = []
-        if health.fotos_sin_ocr >= _OCR_FAIL_THRESHOLD:
-            problems.append(f"{health.fotos_sin_ocr} fotos sin OCR")
-        if health.raws_sin_procesar >= _PROC_FAIL_THRESHOLD:
-            problems.append(f"{health.raws_sin_procesar} raws sin procesar")
-        if health.ultimo_raw is not None:
-            silencio = utc_now() - health.ultimo_raw
-            if silencio >= _SILENCE_THRESHOLD:
-                horas = int(silencio.total_seconds() // 3600)
-                problems.append(f"sin mensajes nuevos en {horas}h")
+        problems = _build_problems(health)
         if not problems:
             return
         if is_rate_limited(_ALERT_MARK):
             return
         mark_cooldown(_ALERT_MARK, utc_now() + _ALERT_COOLDOWN)
-        logger.warning(
-            "[INGEST] posible ingesta caída: %s (%s raws en 3h)",
-            ", ".join(problems),
-            health.raws_ventana,
+        subject, push_body, email_body = _format_alert(
+            health, problems, _provider_status_lines(get_settings())
         )
-        await notify_ingest_down(", ".join(problems), health.raws_ventana)
+        logger.warning("%s — %s", subject, push_body)
+        await notify_ingest_down(subject, push_body, email_body)
     except Exception as exc:  # noqa: BLE001
         logger.warning("[INGEST] healthcheck falló: %s", exc)

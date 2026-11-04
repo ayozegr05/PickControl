@@ -366,25 +366,20 @@ async def notify_scraper_broken(source_name: str, detail: str) -> None:
         logger.warning("[PUSH] notify_scraper_broken(%s) falló: %s", source_name, exc)
 
 
-async def notify_ingest_down(detail: str, raws_ventana: int) -> None:
-    """Push "ingesta posiblemente caída" SOLO a admins.
+async def notify_ingest_down(subject: str, push_body: str, email_body: str) -> None:
+    """Alerta de fallo de ingesta SOLO a admins (email + push).
 
-    Disparada por `maintenance/ingest_health.py`: mensajes entrando pero
-    fotos sin OCR o raws sin procesar — firma de que la cadena de
-    extracción está rota (p. ej. OpenAI sin crédito). Información de
-    operación, no para usuarios normales."""
+    Disparada por `maintenance/ingest_health.py`, que compone el
+    subject/push/email ya explicados (qué falla, causa, si hay que
+    actuar). Aquí solo va el transporte — la lógica del mensaje vive
+    en el healthcheck."""
     # Email como canal de emergencia independiente del push: si el
     # admin no tiene la app instalada, el push muere con el token y
     # nadie se entera (caso real oct-2026: 10 días de ingesta caída
     # sin aviso recibido). Sin ALERT_EMAIL_TO configurado es no-op.
     from app.services.notifications.email_alert import send_alert
 
-    await send_alert(
-        "[ControlPick] Ingesta posiblemente caída",
-        f"{detail} ({raws_ventana} raws en las últimas 3h).\n\n"
-        "El listener de Telegram o la cadena de extracción pueden "
-        "estar rotos. Revisar el backend de producción.",
-    )
+    await send_alert(subject, email_body)
     try:
         if not _enabled(get_settings()):
             return
@@ -399,22 +394,21 @@ async def notify_ingest_down(detail: str, raws_ventana: int) -> None:
                     )
                 ).all()
             )
+            # El título del push es el subject sin el prefijo de marca.
+            push_title = subject.removeprefix("[ControlPick] ")
 
             def message(token: str) -> dict:
                 return {
                     "to": token,
-                    "title": "Ingesta posiblemente caída",
-                    "body": (
-                        f"{detail} ({raws_ventana} raws en las últimas "
-                        f"3h). Revisar OCR/extracción."
-                    ),
-                    "data": {"type": "ingest_down", "detail": detail},
+                    "title": push_title,
+                    "body": push_body,
+                    "data": {"type": "ingest_down", "detail": push_body},
                 }
 
             sent = await _send(session, rows, message)
             if sent:
                 logger.info(
-                    "[PUSH] Ingesta caída notificada a %d dispositivos admin.",
+                    "[PUSH] Alerta de ingesta notificada a %d dispositivos admin.",
                     sent,
                 )
     except Exception as exc:  # noqa: BLE001

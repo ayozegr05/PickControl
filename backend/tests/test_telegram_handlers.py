@@ -132,6 +132,49 @@ class TestFetchMessageContent:
         assert (text, media_path, ocr) == ("hola", None, None)
         client.download_media.assert_not_awaited()
 
+    async def test_documento_imagen_hace_ocr(self, monkeypatch, tmp_path):
+        """Un MessageMediaDocument con mime image/* ES una foto (los
+        tipsters a veces mandan el boleto "como archivo"): se descarga
+        y pasa por OCR igual que una MessageMediaPhoto."""
+        monkeypatch.setattr(
+            handlers,
+            "get_settings",
+            lambda: SimpleNamespace(telegram_media_path=str(tmp_path)),
+        )
+        doc = SimpleNamespace(mime_type="image/png")
+        ocr_mock = AsyncMock(return_value="TEXTO SLIP")
+        monkeypatch.setattr(handlers, "extract_text_from_image", ocr_mock)
+        client = SimpleNamespace(download_media=AsyncMock())
+
+        text, media_path, ocr = await handlers.fetch_message_content(
+            client, _msg(text="", media=MessageMediaDocument(document=doc))
+        )
+        assert text == ""
+        assert media_path is not None and media_path.endswith(".png")
+        assert ocr == "TEXTO SLIP"
+        client.download_media.assert_awaited_once()
+        ocr_mock.assert_awaited_once()
+
+    async def test_documento_no_imagen_se_ignora(self, monkeypatch, tmp_path):
+        """Un documento que NO es imagen (vídeo, PDF...) no se descarga
+        ni pasa por OCR."""
+        monkeypatch.setattr(
+            handlers,
+            "get_settings",
+            lambda: SimpleNamespace(telegram_media_path=str(tmp_path)),
+        )
+        doc = SimpleNamespace(mime_type="video/mp4")
+        ocr_mock = AsyncMock()
+        monkeypatch.setattr(handlers, "extract_text_from_image", ocr_mock)
+        client = SimpleNamespace(download_media=AsyncMock())
+
+        text, media_path, ocr = await handlers.fetch_message_content(
+            client, _msg(text="hola", media=MessageMediaDocument(document=doc))
+        )
+        assert (text, media_path, ocr) == ("hola", None, None)
+        client.download_media.assert_not_awaited()
+        ocr_mock.assert_not_awaited()
+
 
 def _activa_canal(monkeypatch):
     """Marca -100100 como canal activo con nombre 'Canal'."""

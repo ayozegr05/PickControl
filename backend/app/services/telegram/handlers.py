@@ -9,7 +9,7 @@ re-registrar handlers ni reiniciar el listener.
 import os
 
 from telethon import TelegramClient, events
-from telethon.tl.types import MessageMediaPhoto
+from telethon.tl.types import MessageMediaDocument, MessageMediaPhoto
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -41,9 +41,26 @@ async def fetch_message_content(
     extracted_text: str | None = None
 
     if message.media:
+        # Extensión según el tipo de media. Además de las fotos, un
+        # MessageMediaDocument con mime image/* ES una imagen: los
+        # tipsters a veces mandan el boleto "como archivo" (Telegram lo
+        # envía sin comprimir) — caso real: +300 raws guardados sin
+        # leer por no reconocerlos como foto.
+        ext: str | None = None
         if isinstance(message.media, MessageMediaPhoto):
+            ext = ".jpg"
+        elif isinstance(message.media, MessageMediaDocument):
+            mime = getattr(message.media.document, "mime_type", "") or ""
+            if mime.startswith("image/"):
+                ext = {
+                    "image/png": ".png",
+                    "image/webp": ".webp",
+                    "image/gif": ".gif",
+                }.get(mime, ".jpg")
+
+        if ext is not None:
             os.makedirs(settings.telegram_media_path, exist_ok=True)
-            filename = f"{message.chat_id}_{message.id}.jpg"
+            filename = f"{message.chat_id}_{message.id}{ext}"
             media_path = os.path.join(settings.telegram_media_path, filename)
             try:
                 await client.download_media(message.media, file=media_path)
