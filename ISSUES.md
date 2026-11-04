@@ -87,9 +87,15 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   dark surface; inputs blancos de add-pick → `colors.input` +
   texto claro. Quedan literales `#ff9f1c` sueltos (~50) — migración
   incremental al tocar cada pantalla.
-- [ ] 🟡 **Tabla de historial recortada a la derecha** (`[informante]`,
-  `my-picks`): columnas cortadas dentro de scroll horizontal, fechas en
-  formato US (`7/28/2026`) mientras el resto usa `17/10/2026`.
+- [x] ✅ **Tabla de historial recortada a la derecha** — resuelto:
+  `tableContainer` de my-picks tenía `flexGrow:1` dentro del scroll
+  horizontal → el contenedor se quedaba con el ancho del viewport y
+  las columnas extra quedaban inalcanzables; ahora la tabla mide su
+  contenido. Además `showsHorizontalScrollIndicator` pasa a `true`
+  en las tres tablas (my-picks, ApuestasTable, TipsterPicksCard) —
+  con el indicador oculto la última columna parecía "cortada" sin
+  remedio. Fechas: los `toLocaleDateString()` sin locale de my-picks
+  pasan a `formatDateES()` (DD/MM/YYYY explícito, es-ES).
 - [x] ✅ **El teclado tapa el CTA** — resuelto (2026-11-03,
   `1e31c7c`): `KeyboardAvoidingView` (iOS padding + offset) +
   `keyboardShouldPersistTaps="handled"` en login, register y

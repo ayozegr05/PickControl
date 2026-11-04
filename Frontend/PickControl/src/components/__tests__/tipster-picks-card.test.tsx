@@ -80,6 +80,32 @@ describe("TipsterPicksCard", () => {
     );
   });
 
+  it("el scroll horizontal de la tabla muestra su indicador", async () => {
+    // Misma queja que ApuestasTable: con el indicador oculto las
+    // columnas fuera del viewport parecían recortadas sin remedio.
+    const props = { ...baseProps(), rows: [makePick()] };
+    const screen = await render(<TipsterPicksCard {...props} />);
+
+    const findHorizontal = (node: {
+      props?: Record<string, unknown>;
+      children?: (unknown)[] | null;
+    } | null): { props?: Record<string, unknown> } | null => {
+      if (!node) return null;
+      if (node.props?.horizontal === true) return node;
+      for (const child of node.children ?? []) {
+        if (typeof child !== "object" || child === null) continue;
+        const found = findHorizontal(
+          child as { props?: Record<string, unknown>; children?: unknown[] }
+        );
+        if (found) return found;
+      }
+      return null;
+    };
+    const scroll = findHorizontal(screen.toJSON());
+    expect(scroll).toBeTruthy();
+    expect(scroll!.props?.showsHorizontalScrollIndicator).toBe(true);
+  });
+
   it("un reto aparece en su sección y abre el detalle", async () => {
     const props = {
       ...baseProps(),

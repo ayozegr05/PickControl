@@ -18,6 +18,7 @@ import { useAuth } from "@/src/context/AuthContext";
 import { updatePick } from "@/src/api/picks.api";
 import { PickItem, Acierto } from "@/src/types/pick.types";
 import { usePicks } from "@/src/hooks/usePicks";
+import { formatDateES } from "@/src/utils/format";
 import {
   rankingInformantes,
   pendientesDe,
@@ -235,7 +236,7 @@ const MyPicksScreen = () => {
           </Text>
           <ScrollView
             horizontal
-            showsHorizontalScrollIndicator={false}
+            showsHorizontalScrollIndicator={true}
             contentContainerStyle={{ flexGrow: 0 }}
             style={{ width: "100%" }} // Asegurar que el ScrollView ocupe todo el ancho
           >
@@ -303,9 +304,11 @@ const MyPicksScreen = () => {
                             );
                             // Si la fecha no es válida, usamos la fecha de hoy
                             if (isNaN(fechaObj.getTime())) {
-                              return new Date().toLocaleDateString();
+                              return formatDateES(new Date());
                             } else {
-                              return fechaObj.toLocaleDateString();
+                              // es-ES: el toLocaleDateString() sin locale
+                              // renderizaba formato US (mes/día).
+                              return formatDateES(fechaObj);
                             }
                           })()
                         : "-"}
@@ -515,8 +518,6 @@ const styles = StyleSheet.create({
   tableContainer: {
     backgroundColor: colors.surface,
     flexDirection: "column",
-    flexGrow: 1,
-    alignSelf: "center",
     borderRadius: 8,
   },
   rowsContainer: {

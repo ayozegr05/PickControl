@@ -7,6 +7,23 @@ import { render, fireEvent } from "@testing-library/react-native";
 import ApuestasTable from "@/src/components/apuestas-table";
 import { PickItem } from "@/src/types/pick.types";
 
+// Nodo host con `horizontal` (el ScrollView de la tabla) dentro del
+// árbol JSON — en RNTL 14 las queries solo ven elementos host.
+type JsonNode = {
+  props?: Record<string, unknown>;
+  children?: (JsonNode | string)[] | null;
+};
+const findHorizontalScroll = (node: JsonNode | null): JsonNode | null => {
+  if (!node) return null;
+  if (node.props?.horizontal === true) return node;
+  for (const child of node.children ?? []) {
+    if (typeof child === "string") continue;
+    const found = findHorizontalScroll(child);
+    if (found) return found;
+  }
+  return null;
+};
+
 const makeApuesta = (over: Partial<PickItem> = {}): PickItem => ({
   id: 1,
   apuesta: "Over 2.5 goles",
@@ -46,6 +63,19 @@ describe("ApuestasTable", () => {
     ]) {
       expect(screen.getByText(h)).toBeTruthy();
     }
+  });
+
+  it("el scroll horizontal muestra su indicador (columnas a la vista)", async () => {
+    // Con el indicador oculto la última columna parecía "cortada":
+    // el usuario no veía que había tabla fuera del viewport.
+    const props = baseProps();
+    const screen = await render(
+      <ApuestasTable rows={[makeApuesta()]} {...props} />
+    );
+
+    const scroll = findHorizontalScroll(screen.toJSON());
+    expect(scroll).toBeTruthy();
+    expect(scroll!.props?.showsHorizontalScrollIndicator).toBe(true);
   });
 
   it("la fila muestra datos, cuota con 2 decimales y ganancia", async () => {

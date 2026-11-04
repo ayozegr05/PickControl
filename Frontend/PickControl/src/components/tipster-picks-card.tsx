@@ -139,7 +139,7 @@ export default function TipsterPicksCard({
           Todavía no hay picks extraídos de este canal.
         </Text>
       ) : (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={true}>
           <View style={styles.table}>
             <View style={styles.tableRow}>
               {HEADERS.map((h) => (

@@ -70,7 +70,7 @@ export default function ApuestasTable({
   onEliminar,
 }: ApuestasTableProps) {
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+    <ScrollView horizontal showsHorizontalScrollIndicator={true}>
       <View style={styles.table}>
         <View style={styles.tableRow}>
           {HEADERS.map((h) => (
