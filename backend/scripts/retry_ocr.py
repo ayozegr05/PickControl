@@ -46,8 +46,10 @@ async def main() -> None:
     max_age = float(v) if (v := _arg_value("--max-age-days")) else None
 
     settings = get_settings()
-    if apply and not settings.openai_api_key:
-        print("OPENAI_API_KEY no está configurada.")
+    if apply and not (
+        settings.google_api_key or settings.groq_api_key or settings.openrouter_api_key
+    ):
+        print("Sin GOOGLE/GROQ/OPENROUTER key — no hay visión para OCR.")
         return
     print(f"MODO: {'APLICAR' if apply else 'DRY-RUN'}")
 

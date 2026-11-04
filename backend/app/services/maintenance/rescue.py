@@ -29,7 +29,6 @@ import os
 from datetime import timedelta
 from typing import Optional
 
-from openai import RateLimitError
 from sqlalchemy import func, or_, select
 
 from app.core.config import get_settings
@@ -99,10 +98,12 @@ async def retry_pending_ocr(
     """
     settings = get_settings()
     empty = {"pendientes": 0, "sin_fichero": 0, "hechos": 0, "fallos": 0}
-    # El OCR corre por OpenAI O por Gemini — cualquiera vale.
+    # El OCR corre por Gemini O por la visión compat (Groq/OpenRouter)
+    # — cualquier key de esas familias abre la pasada.
     if not (
-        getattr(settings, "openai_api_key", None)
-        or getattr(settings, "google_api_key", None)
+        getattr(settings, "google_api_key", None)
+        or getattr(settings, "groq_api_key", None)
+        or getattr(settings, "openrouter_api_key", None)
     ):
         return empty
 
@@ -115,9 +116,7 @@ async def retry_pending_ocr(
         hechos = fallos = 0
         for raw in pendientes:
             try:
-                texto = await extract_text_from_image(
-                    _media_path(raw.media_path), settings.openai_api_key
-                )
+                texto = await extract_text_from_image(_media_path(raw.media_path))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[RESCUE] OCR msg %s falló: %s", raw.message_id, exc)
                 fallos += 1
@@ -149,13 +148,11 @@ async def retry_pending_ocr(
 
 
 def _hay_via_llm(settings) -> bool:
-    """Algún camino de extracción LLM: OpenAI o la cascada gratuita
+    """Algún camino de extracción LLM: la cascada gratuita
     (Groq/Cerebras/OpenRouter). La puerta vieja a `openai_api_key` solo
     se quedó obsoleta cuando entró la cascada — caso real nov-2026: key
     revocada y TODO el rescate se saltaba mientras la extracción en
     vivo podía seguir por compat/Gemini."""
-    if getattr(settings, "openai_api_key", None):
-        return True
     from app.services.results import compat_llm
 
     return compat_llm.configured(settings)
@@ -234,13 +231,12 @@ async def reprocess_pending_raws(
             try:
                 pick = await extract_pick(
                     source_text,
-                    settings.openai_api_key,
                     informante=raw.channel_name,
                     fecha_referencia=raw.received_at,
                 )
-            except RateLimitError:
-                # Sin cuota de OpenAI: se deja processed=False para la
-                # siguiente pasada.
+            except Exception:  # noqa: BLE001
+                # Extracción caída (cascada entera en cooldown, red...):
+                # se deja processed=False para la siguiente pasada.
                 continue
             if not pick:
                 # El extractor resolvió "no es pick": se cierra para no
@@ -392,14 +388,9 @@ async def retry_incomplete_picks(
             try:
                 llm = await _llm_extract(
                     text,
-                    settings.openai_api_key,
                     informante=raw.channel_name,
                     fecha_referencia=raw.received_at,
                 )
-            except RateLimitError:
-                # Sin cuota: no se tocó nada, reintento en el próximo ciclo.
-                resumen["fallos"] += 1
-                continue
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "[RESCUE] LLM incompleto pick %s falló: %s", pick.id, exc

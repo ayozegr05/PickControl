@@ -1,9 +1,11 @@
 """OCR para imágenes recibidas por Telegram.
 
-Cadena: OpenAI (gpt-4o-mini) si hay `OPENAI_API_KEY` → Gemini vision
-(free tier, `GOOGLE_API_KEY`) cuando OpenAI falla o no hay key — un
-billing agotado no puede parar la ingesta. Mismo prompt en ambos:
-el texto extraído alimenta el mismo extractor.
+Cadena gratuita: Gemini vision (free tier, `GOOGLE_API_KEY`) →
+endpoints compat con visión (Groq llama-4, OpenRouter :free) — la
+cuota diaria de Google es compartida con la verificación de
+resultados y cuando se agota el OCR sigue por las keys de Groq/
+OpenRouter. Mismo prompt en todos: el texto extraído alimenta el
+mismo extractor.
 """
 
 import base64
@@ -22,7 +24,6 @@ from app.services.results.base import (
     mark_cooldown,
     retry_hint_seconds,
 )
-from app.services.telegram.openai_retry import call_with_retry
 
 logger = get_logger("app.telegram.ocr")
 
@@ -104,43 +105,19 @@ def _encode_image(image_path: str) -> str:
         return base64.b64encode(f.read()).decode("utf-8")
 
 
-async def _ocr_openai(image_path: str, api_key: str) -> str | None:
-    """OCR vía OpenAI vision. Devuelve None si la llamada falla —
-    quien llama prueba el fallback."""
-    from openai import AsyncOpenAI
-
-    client = AsyncOpenAI(api_key=api_key)
-    data_url = f"data:image/jpeg;base64,{_encode_image(image_path)}"
-    response = await call_with_retry(
-        lambda: client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": _OCR_PROMPT},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
-                }
-            ],
-            max_tokens=2000,
-        ),
-        f"OCR {image_path}",
-    )
-    extracted = response.choices[0].message.content
-    logger.info("OCR completado (openai) para %s", image_path)
-    return extracted
-
-
-async def _ocr_gemini(image_path: str, api_key: str) -> str | None:
+async def _ocr_gemini(
+    image_path: str, api_key: str, prompt: str = _OCR_PROMPT
+) -> str | None:
     """OCR vía Gemini vision REST (inline_data base64). Recorre los
-    modelos en orden: un 429 aparca solo ese modelo, no la familia."""
+    modelos en orden: un 429 aparca solo ese modelo, no la familia.
+    `prompt` permite re-OCR dirigido (event_rescue pregunta solo por
+    el cruce)."""
     b64 = _encode_image(image_path)
     body = {
         "contents": [
             {
                 "parts": [
-                    {"text": _OCR_PROMPT},
+                    {"text": prompt},
                     {
                         "inline_data": {
                             "mime_type": "image/jpeg",
@@ -188,7 +165,7 @@ async def _ocr_gemini(image_path: str, api_key: str) -> str | None:
     return None
 
 
-async def _ocr_compat_vision(image_path: str) -> str | None:
+async def _ocr_compat_vision(image_path: str, prompt: str = _OCR_PROMPT) -> str | None:
     """OCR vía endpoints OpenAI-compatible con visión (Groq llama-4,
     OpenRouter :free). Mismo patrón de cooldown que compat_llm: un
     429 aparca solo ese endpoint hasta el hint del retry."""
@@ -214,7 +191,7 @@ async def _ocr_compat_vision(image_path: str) -> str | None:
                             {
                                 "role": "user",
                                 "content": [
-                                    {"type": "text", "text": _OCR_PROMPT},
+                                    {"type": "text", "text": prompt},
                                     {
                                         "type": "image_url",
                                         "image_url": {
@@ -257,39 +234,43 @@ async def _ocr_compat_vision(image_path: str) -> str | None:
     return None
 
 
-async def extract_text_from_image(image_path: str, api_key: str | None) -> str | None:
-    """Extrae texto de una imagen.
+async def ocr_image(image_path: str, prompt: str = _OCR_PROMPT) -> str | None:
+    """Cadena de visión gratuita: Gemini → endpoints compat.
 
-    OpenAI primero si hay `api_key`; si falla (o no hay key) cae a
-    Gemini vision con `GOOGLE_API_KEY`. Sin ninguno de los dos,
-    devuelve None y la imagen queda guardada para el ciclo de rescate.
-    """
+    `prompt` permite preguntas dirigidas (event_rescue re-pregunta a
+    la imagen solo por el cruce, el OCR general a veces lo pierde
+    entre cuotas/promos/chrome del boleto)."""
     if not os.path.exists(image_path):
         logger.warning("El archivo %s no existe; no se puede hacer OCR", image_path)
         return None
 
-    if api_key:
-        try:
-            text = await _ocr_openai(image_path, api_key)
-            if text:
-                return text
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Error haciendo OCR openai en %s: %s", image_path, exc)
-
     google_key = get_settings().google_api_key
     if google_key:
-        text = await _ocr_gemini(image_path, google_key)
+        try:
+            text = await _ocr_gemini(image_path, google_key, prompt)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[OCR] Gemini falló (%s); pruebo visión compat", exc)
+            text = None
         if text:
             return text
 
     # Gemini comparte cuota diaria con la verificación de resultados:
     # cuando está aparcado, la visión compat (keys aparte) salva el OCR.
-    text = await _ocr_compat_vision(image_path)
+    try:
+        text = await _ocr_compat_vision(image_path, prompt)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[OCR] visión compat falló: %s", exc)
+        text = None
     if text:
         return text
 
-    if not api_key and not google_key:
-        logger.info(
-            "Ni OPENAI_API_KEY ni GOOGLE_API_KEY; se omite OCR para %s", image_path
-        )
+    if not google_key:
+        logger.info("Sin GOOGLE_API_KEY ni visión compat; se omite %s", image_path)
     return None
+
+
+async def extract_text_from_image(image_path: str) -> str | None:
+    """Extrae el texto completo de una imagen (OCR general de la
+    ingesta). Gemini primero, visión compat detrás; devuelve None y
+    la imagen queda guardada para el ciclo de rescate."""
+    return await ocr_image(image_path)

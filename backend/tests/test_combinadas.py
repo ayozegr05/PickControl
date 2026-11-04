@@ -124,13 +124,10 @@ class TestExtractCombinada:
 
 
 @pytest.fixture
-def fake_settings(monkeypatch):
-    settings = SimpleNamespace(openai_api_key="test-key")
-    monkeypatch.setattr(
-        "app.services.telegram.processor.get_settings",
-        lambda: settings,
-    )
-    return settings
+def fake_settings():
+    """La extracción ya no consulta settings (la cascada lee las keys
+    por endpoint); el fixture queda para no reescribir firmas."""
+    return SimpleNamespace()
 
 
 @pytest.mark.asyncio

@@ -148,7 +148,7 @@ async def _run_rescue_loop() -> None:
     """Rescate periódico: OCR de fotos pendientes + reproceso de raws
     + reparación de extracciones rotas (autorregulación).
 
-    Solo consume OpenAI cuando hay trabajo pendiente; en reposo son
+    Solo consume LLM cuando hay trabajo pendiente; en reposo son
     unas consultas a la BD y nada más.
     """
     from app.services.maintenance.repair import run_repair_cycle
@@ -322,11 +322,16 @@ async def lifespan(app: FastAPI):
         )
 
     rescue_task: asyncio.Task | None = None
-    # El rescate ya no depende de OpenAI: el OCR/extracción puede
-    # correr entero sobre la cascada gratuita (Gemini/compat). Si solo
-    # hay GOOGLE_API_KEY también debe arrancar — caso real nov-2026:
-    # key de OpenAI revocada, 530 fotos esperando OCR por Gemini.
-    if settings.openai_api_key or settings.google_api_key:
+    # El rescate corre entero sobre la cascada gratuita
+    # (Gemini/compat): con cualquier key de extracción debe arrancar
+    # — caso real nov-2026: key de OpenAI revocada, 530 fotos
+    # esperando OCR por Gemini.
+    if (
+        settings.google_api_key
+        or settings.groq_api_key
+        or settings.openrouter_api_key
+        or settings.cerebras_api_key
+    ):
         rescue_task = asyncio.create_task(_run_rescue_loop())
         logger.info(
             "[LIFECYCLE] Rescate OCR/reproceso iniciado en segundo plano "

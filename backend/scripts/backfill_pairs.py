@@ -25,7 +25,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding="utf-8")
 
-from openai import RateLimitError
 from sqlalchemy import and_, select
 
 from app.core.config import get_settings
@@ -131,8 +130,10 @@ def _seleccion_casa_con_evento(seleccion: str | None, evento: str | None) -> boo
 
 async def main() -> None:
     settings = get_settings()
-    if not settings.openai_api_key:
-        print("OPENAI_API_KEY no está configurada.")
+    from app.services.results import compat_llm
+
+    if not compat_llm.configured(settings):
+        print("Sin cascada compat configurada (GROQ/CEREBRAS/OPENROUTER).")
         return
     print(f"MODO: {'APLICAR' if APPLY else 'DRY-RUN'}")
 
@@ -170,11 +171,10 @@ async def main() -> None:
             try:
                 pick = await extract_pick(
                     source,
-                    settings.openai_api_key,
                     informante=raw.channel_name,
                     fecha_referencia=raw.received_at,
                 )
-            except RateLimitError:
+            except Exception:
                 llm_blocked += 1
                 continue
             if pick is None or not pick.es_apuesta:

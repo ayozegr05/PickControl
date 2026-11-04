@@ -14,11 +14,9 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.logging import get_logger
-from app.services.telegram.openai_retry import call_with_retry
 
 logger = get_logger("app.telegram.extractor")
 
@@ -1326,14 +1324,12 @@ _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 async def _llm_extract(
     text: str,
-    api_key: Optional[str],
     informante: Optional[str] = None,
     fecha_referencia: Optional[datetime] = None,
 ) -> Optional[ExtractedPick]:
-    """Extracción por LLM: OpenAI si hay key y responde; si falla (o no
-    hay key) cae a la cascada gratuita Groq→Cerebras→OpenRouter. El pick
-    lleva `metodo="llm"` con OpenAI y `llm-{motor}` con la cascada, así
-    se puede comparar quién extrajo qué en BD.
+    """Extracción por la cascada gratuita Groq→Cerebras→OpenRouter. El
+    pick lleva `metodo="llm-{motor}"`, así se puede comparar quién
+    extrajo qué en BD.
     """
     text = _strip_slip_chrome(text)
     fecha_str = (
@@ -1349,36 +1345,13 @@ async def _llm_extract(
     content: Optional[str] = None
     engine: Optional[str] = None
 
-    if api_key:
-        try:
-            client = AsyncOpenAI(api_key=api_key)
-            response = await call_with_retry(
-                lambda: client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": _SYSTEM_PROMPT},
-                        {"role": "user", "content": user_content},
-                    ],
-                    response_format={"type": "json_object"},
-                    temperature=0.0,
-                ),
-                f"extracción LLM ({informante or 'desconocido'})",
-            )
-            content = response.choices[0].message.content
-        except Exception as exc:  # noqa: BLE001
-            # Cuota agotada, red caída... la cascada gratuita cubre la
-            # ingesta; la alerta operativa la da el benchmark/logs.
-            logger.warning("[LLM] OpenAI falló (%s) — probando cascada gratuita", exc)
-            content = None
+    from app.services.results import compat_llm
 
-    if content is None:
-        from app.services.results import compat_llm
-
-        compat = await compat_llm.extract_text(
-            f"{_SYSTEM_PROMPT}\n\n{user_content}", purpose="ingesta"
-        )
-        if compat:
-            content, engine = compat
+    compat = await compat_llm.extract_text(
+        f"{_SYSTEM_PROMPT}\n\n{user_content}", purpose="ingesta"
+    )
+    if compat:
+        content, engine = compat
 
     if not content:
         return None
@@ -1386,7 +1359,7 @@ async def _llm_extract(
     try:
         data = json.loads(_JSON_FENCE.sub("", content.strip()))
     except json.JSONDecodeError as exc:
-        logger.warning("[LLM] JSON ilegible (%s): %s", engine or "openai", exc)
+        logger.warning("[LLM] JSON ilegible (%s): %s", engine or "compat", exc)
         return None
     pick = ExtractedPick(**data)
     pick.metodo = f"llm-{engine}" if engine else "llm"
@@ -1699,7 +1672,6 @@ def _is_premium_urgency(text: str) -> bool:
 
 async def extract_pick(
     text: str,
-    api_key: Optional[str],
     informante: Optional[str] = None,
     fecha_referencia: Optional[datetime] = None,
 ) -> Optional[ExtractedPick]:
@@ -1762,7 +1734,7 @@ async def extract_pick(
                 _ensure_combinada_shape(rule_comb, fecha_referencia), text
             )
         llm_comb = await _llm_extract(
-            text, api_key, informante=informante, fecha_referencia=fecha_referencia
+            text, informante=informante, fecha_referencia=fecha_referencia
         )
         if llm_comb is None:
             return None
@@ -1785,7 +1757,6 @@ async def extract_pick(
             # reglas siguen ahorrando el LLM como antes.
             llm_result = await _llm_extract(
                 text,
-                api_key,
                 informante=informante,
                 fecha_referencia=fecha_referencia,
             )
@@ -1797,8 +1768,8 @@ async def extract_pick(
                     if not getattr(rule_result, field):
                         setattr(rule_result, field, getattr(llm_result, field))
                 if llm_result.evento:
-                    # "rule+llm" con OpenAI, "rule+llm-groq" con la
-                    # cascada — se ve quién aportó el campo extra.
+                    # "rule+llm-groq" — se ve quién aportó el campo
+                    # extra (el motor va en el metodo del LLM).
                     rule_result.metodo = f"rule+{llm_result.metodo}"[:20]
         rule_result.fecha_evento = _sanitize_event_date(
             rule_result.fecha_evento, fecha_referencia
@@ -1810,7 +1781,7 @@ async def extract_pick(
         return _normalize_pick(rule_result, text)
 
     llm_result = await _llm_extract(
-        text, api_key, informante=informante, fecha_referencia=fecha_referencia
+        text, informante=informante, fecha_referencia=fecha_referencia
     )
     if llm_result is not None:
         llm_result.fecha_evento = _sanitize_event_date(

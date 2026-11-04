@@ -14,12 +14,24 @@ from app.core.dates import utc_now
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
 from app.services.odds import event_rescue
+from app.services.results import compat_llm
+
+_REAL_ENDPOINTS = compat_llm._ENDPOINTS
 
 pytestmark = pytest.mark.asyncio
 
 
-def _settings(openai: str | None = "k") -> SimpleNamespace:
-    return SimpleNamespace(openai_api_key=openai)
+@pytest.fixture(autouse=True)
+def _real_endpoints(monkeypatch):
+    """El conftest vacía `_ENDPOINTS`; aquí la puerta del LLM ES la
+    cascada, así que la restauramos para que dependa de las keys."""
+    monkeypatch.setattr(compat_llm, "_ENDPOINTS", _REAL_ENDPOINTS)
+
+
+def _settings(llm_key: str | None = "k") -> SimpleNamespace:
+    """La puerta LLM del rescate es la cascada gratuita: basta una key
+    de cualquier endpoint compat (usamos groq como representante)."""
+    return SimpleNamespace(groq_api_key=llm_key)
 
 
 _RAW_SEQ = 0

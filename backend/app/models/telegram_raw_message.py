@@ -28,7 +28,7 @@ class TelegramRawMessage(SQLModel, table=True):
     text: str = Field(sa_column=sa.Column(sa.Text, nullable=False))
     # Si el mensaje contiene una imagen, ruta del fichero descargado.
     media_path: str | None = Field(default=None, max_length=500)
-    # Texto extraído de la imagen con OCR (p. ej. OpenAI).
+    # Texto extraído de la imagen con OCR (Gemini o visión compat).
     extracted_text: str | None = Field(default=None, sa_column=sa.Column(sa.Text))
     received_at: datetime = Field(default_factory=utc_now)
     processed: bool = Field(default=False)

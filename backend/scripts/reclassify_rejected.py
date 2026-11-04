@@ -20,7 +20,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding="utf-8")
 
-from openai import RateLimitError
 from sqlalchemy import select
 
 from app.core.config import get_settings
@@ -72,8 +71,10 @@ async def main() -> None:
             )
             return
 
-        if not settings.openai_api_key:
-            print("OPENAI_API_KEY no está configurada.")
+        from app.services.results import compat_llm
+
+        if not compat_llm.configured(settings):
+            print("Sin cascada compat (GROQ/CEREBRAS/OPENROUTER) configurada.")
             return
 
         # Fase 2: extracción real (reglas + fallback LLM) y actualización.
@@ -83,13 +84,12 @@ async def main() -> None:
             try:
                 pick = await extract_pick(
                     source_text,
-                    settings.openai_api_key,
                     informante=raw.channel_name,
                     fecha_referencia=raw.received_at,
                 )
-            except RateLimitError:
-                # Sin créditos/cuota de OpenAI: este candidato necesitaba el
-                # LLM; se deja como rejected para un próximo intento.
+            except Exception:
+                # Cascada agotada/caída: el candidato necesitaba el LLM;
+                # se deja como rejected para un próximo intento.
                 llm_blocked += 1
                 continue
             if not pick or not pick.es_apuesta:

@@ -28,7 +28,6 @@ from datetime import timedelta
 
 from sqlalchemy import select
 
-from app.core.config import get_settings
 from app.core.dates import utc_now
 from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
@@ -88,7 +87,6 @@ async def audit_rejected_picks(
         .order_by(TelegramRawMessage.received_at.desc())
         .limit(sample * 3)  # margen: algunos se saltarán (ya auditados/sin texto)
     )
-    settings = get_settings()
     for parsed, raw in result.all():
         if report.muestreados >= sample:
             break
@@ -104,7 +102,6 @@ async def audit_rejected_picks(
         try:
             pick = await extract_pick(
                 source_text,
-                settings.openai_api_key,
                 informante=raw.channel_name,
                 fecha_referencia=raw.received_at,
             )

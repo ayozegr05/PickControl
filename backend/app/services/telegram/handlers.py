@@ -32,7 +32,7 @@ async def fetch_message_content(
 
     Devuelve (texto, media_path, extracted_text). Si el mensaje lleva
     foto, la descarga al directorio configurado; si además no tiene
-    texto propio, le aplica OCR con OpenAI.
+    texto propio, le aplica OCR (Gemini, con fallback a visión compat).
     """
     settings = get_settings()
     text = message.text or ""
@@ -49,9 +49,7 @@ async def fetch_message_content(
                 await client.download_media(message.media, file=media_path)
                 logger.info("Imagen descargada: %s", media_path)
                 if not text:
-                    extracted_text = await extract_text_from_image(
-                        media_path, settings.openai_api_key
-                    )
+                    extracted_text = await extract_text_from_image(media_path)
             except Exception as exc:  # noqa: BLE001
                 logger.error("Error descargando imagen: %s", exc)
                 media_path = None

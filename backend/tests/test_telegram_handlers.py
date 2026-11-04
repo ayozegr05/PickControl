@@ -56,9 +56,7 @@ class TestFetchMessageContent:
         monkeypatch.setattr(
             handlers,
             "get_settings",
-            lambda: SimpleNamespace(
-                telegram_media_path=str(tmp_path), openai_api_key="k"
-            ),
+            lambda: SimpleNamespace(telegram_media_path=str(tmp_path)),
         )
         client = SimpleNamespace(download_media=AsyncMock())
         text, media_path, ocr = await handlers.fetch_message_content(
@@ -72,9 +70,7 @@ class TestFetchMessageContent:
         monkeypatch.setattr(
             handlers,
             "get_settings",
-            lambda: SimpleNamespace(
-                telegram_media_path=str(tmp_path), openai_api_key="k"
-            ),
+            lambda: SimpleNamespace(telegram_media_path=str(tmp_path)),
         )
         ocr_mock = AsyncMock(return_value="OCR")
         monkeypatch.setattr(handlers, "extract_text_from_image", ocr_mock)
@@ -92,9 +88,7 @@ class TestFetchMessageContent:
         monkeypatch.setattr(
             handlers,
             "get_settings",
-            lambda: SimpleNamespace(
-                telegram_media_path=str(tmp_path), openai_api_key="k"
-            ),
+            lambda: SimpleNamespace(telegram_media_path=str(tmp_path)),
         )
         ocr_mock = AsyncMock(return_value="texto ocr")
         monkeypatch.setattr(handlers, "extract_text_from_image", ocr_mock)
@@ -114,9 +108,7 @@ class TestFetchMessageContent:
         monkeypatch.setattr(
             handlers,
             "get_settings",
-            lambda: SimpleNamespace(
-                telegram_media_path=str(tmp_path), openai_api_key="k"
-            ),
+            lambda: SimpleNamespace(telegram_media_path=str(tmp_path)),
         )
         client = SimpleNamespace(
             download_media=AsyncMock(side_effect=Exception("fallo red"))
@@ -131,9 +123,7 @@ class TestFetchMessageContent:
         monkeypatch.setattr(
             handlers,
             "get_settings",
-            lambda: SimpleNamespace(
-                telegram_media_path=str(tmp_path), openai_api_key="k"
-            ),
+            lambda: SimpleNamespace(telegram_media_path=str(tmp_path)),
         )
         client = SimpleNamespace(download_media=AsyncMock())
         text, media_path, ocr = await handlers.fetch_message_content(

@@ -34,9 +34,9 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.core.logging import get_logger
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
-from app.services.telegram.ocr import _encode_image
-from app.services.telegram.openai_retry import call_with_retry
+from app.services.telegram.ocr import ocr_image
 from app.services.telegram.pick_extractor import (
+    _JSON_FENCE,
     _extract_eventos,
     _fixture_from_slip_ocr,
 )
@@ -62,40 +62,27 @@ def _candidate_from_text(text: Optional[str]) -> Optional[str]:
     return _fixture_from_slip_ocr(text)
 
 
-async def _evento_via_llm(text: str, api_key: str) -> Optional[str]:
-    """Mini-extracción del SOLO campo evento sobre el texto guardado."""
-    from openai import AsyncOpenAI
+async def _evento_via_llm(text: str) -> Optional[str]:
+    """Mini-extracción del SOLO campo evento sobre el texto guardado,
+    por la cascada gratuita (Groq/Cerebras/OpenRouter)."""
+    from app.services.results import compat_llm
 
-    client = AsyncOpenAI(api_key=api_key)
-    response = await call_with_retry(
-        lambda: client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        "Texto de un mensaje de un canal de apuestas "
-                        "deportivas:\n\n"
-                        f"{text[:4000]}\n\n"
-                        "¿A qué partido o enfrentamiento se refiere la "
-                        "apuesta? Responde SOLO con JSON válido:\n"
-                        '{"evento": "EquipoA vs EquipoB"} — o '
-                        '{"evento": null} si el texto no menciona '
-                        "ningún partido."
-                    ),
-                }
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.0,
-            max_tokens=150,
-        ),
-        "rescate evento (texto)",
+    compat = await compat_llm.extract_text(
+        "Texto de un mensaje de un canal de apuestas "
+        "deportivas:\n\n"
+        f"{text[:4000]}\n\n"
+        "¿A qué partido o enfrentamiento se refiere la "
+        "apuesta? Responde SOLO con JSON válido:\n"
+        '{"evento": "EquipoA vs EquipoB"} — o '
+        '{"evento": null} si el texto no menciona '
+        "ningún partido.",
+        purpose="rescate",
     )
-    content = response.choices[0].message.content
-    if not content:
+    if not compat:
         return None
+    content, _engine = compat
     try:
-        data = json.loads(content)
+        data = json.loads(_JSON_FENCE.sub("", content.strip()))
     except ValueError:
         return None
     value = str(data.get("evento") or "").strip()
@@ -107,7 +94,7 @@ async def _evento_via_llm(text: str, api_key: str) -> Optional[str]:
     return value
 
 
-async def _evento_via_imagen(path: str, api_key: str) -> Optional[str]:
+async def _evento_via_imagen(path: str) -> Optional[str]:
     """Re-OCR dirigido: pregunta a la imagen solo por el partido.
 
     El OCR general vuelca todo el boleto (cuotas, promos, chrome) y a
@@ -115,41 +102,17 @@ async def _evento_via_imagen(path: str, api_key: str) -> Optional[str]:
     más fiable para ese único campo."""
     if not path or not os.path.exists(path):
         return None
-    from openai import AsyncOpenAI
-
-    client = AsyncOpenAI(api_key=api_key)
-    b64_image = _encode_image(path)
-    response = await call_with_retry(
-        lambda: client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": (
-                                "Esta imagen es un boleto/mensaje de "
-                                "apuestas deportivas. ¿Qué partido o "
-                                "enfrentamiento muestra? Responde SOLO "
-                                "con el cruce 'EquipoA vs EquipoB' con "
-                                "los nombres tal cual aparecen en la "
-                                "imagen, o 'null' si no se ve ningún "
-                                "partido."
-                            ),
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"},
-                        },
-                    ],
-                }
-            ],
-            max_tokens=60,
-        ),
-        f"rescate evento (imagen {path})",
+    content = await ocr_image(
+        path,
+        "Esta imagen es un boleto/mensaje de "
+        "apuestas deportivas. ¿Qué partido o "
+        "enfrentamiento muestra? Responde SOLO "
+        "con el cruce 'EquipoA vs EquipoB' con "
+        "los nombres tal cual aparecen en la "
+        "imagen, o 'null' si no se ve ningún "
+        "partido.",
     )
-    content = (response.choices[0].message.content or "").strip()
+    content = (content or "").strip()
     if not content or content.lower() == "null":
         return None
     found = _extract_eventos([content])
@@ -207,21 +170,22 @@ async def rescue_evento(
             logger.info("[RESCATE] pick %s: evento por reglas -> %s", pick.id, found)
             return found
 
-    api_key = getattr(settings, "openai_api_key", None)
-    if not api_key:
-        return None
+    # 2) Mini-LLM sobre el mismo texto (solo el campo evento), por la
+    #    cascada gratuita — si no hay ningún endpoint configurado se
+    #    salta directo al re-OCR de imagen.
+    from app.services.results import compat_llm
 
-    # 2) Mini-LLM sobre el mismo texto (solo el campo evento).
-    joined = "\n".join(t for t in (raw.text, raw.extracted_text) if t)
-    if joined.strip():
-        try:
-            found = await _evento_via_llm(joined, api_key)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[RESCATE] pick %s: LLM texto falló: %s", pick.id, exc)
-            found = None
-        if found:
-            logger.info("[RESCATE] pick %s: evento vía LLM -> %s", pick.id, found)
-            return found
+    if compat_llm.configured(settings):
+        joined = "\n".join(t for t in (raw.text, raw.extracted_text) if t)
+        if joined.strip():
+            try:
+                found = await _evento_via_llm(joined)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[RESCATE] pick %s: LLM texto falló: %s", pick.id, exc)
+                found = None
+            if found:
+                logger.info("[RESCATE] pick %s: evento vía LLM -> %s", pick.id, found)
+                return found
 
     # 3) Re-OCR dirigido: la imagen del raw y, si no, la del par
     #    foto-boleto (el slip suele vivir en el mensaje vecino).
@@ -232,7 +196,7 @@ async def rescue_evento(
         if not path:
             continue
         try:
-            found = await _evento_via_imagen(path, api_key)
+            found = await _evento_via_imagen(path)
         except Exception as exc:  # noqa: BLE001
             logger.warning("[RESCATE] pick %s: OCR dirigido falló: %s", pick.id, exc)
             found = None

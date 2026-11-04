@@ -76,8 +76,10 @@ async def _real_pick_of(session, raw_id: int):
 
 async def main() -> None:
     settings = get_settings()
-    if not settings.openai_api_key:
-        print("OPENAI_API_KEY no está configurada.")
+    from app.services.results import compat_llm
+
+    if not compat_llm.configured(settings):
+        print("Sin cascada compat (GROQ/CEREBRAS/OPENROUTER) configurada.")
         return
     print(f"MODO: {'APLICAR' if APPLY else 'DRY-RUN'}")
 
@@ -99,7 +101,6 @@ async def main() -> None:
 
             pick = await extract_pick(
                 source,
-                settings.openai_api_key,
                 informante=text_raw.channel_name,
                 fecha_referencia=text_raw.received_at,
             )

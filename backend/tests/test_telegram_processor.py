@@ -105,14 +105,10 @@ class TestMergePickData:
 
 
 @pytest.fixture
-def fake_settings(monkeypatch):
-    """Simula una Settings con OPENAI_API_KEY configurada."""
-    settings = SimpleNamespace(openai_api_key="test-key")
-    monkeypatch.setattr(
-        "app.services.telegram.processor.get_settings",
-        lambda: settings,
-    )
-    return settings
+def fake_settings():
+    """La extracción ya no consulta settings (la cascada lee las keys
+    por endpoint); el fixture queda para no reescribir firmas."""
+    return SimpleNamespace()
 
 
 @pytest.mark.asyncio
@@ -225,19 +221,13 @@ class TestProcessIncomingMessage:
         assert parsed.informante_id is not None
         assert parsed.informante == "Test Channel"
 
-    async def test_sin_openai_key_la_extraccion_sigue_corriendo(
-        self, session, monkeypatch
-    ):
+    async def test_la_extraccion_corre_sin_llm_configurado(self, session, monkeypatch):
         """Caso real nov-2026: al revocar OPENAI_API_KEY la puerta
         `settings.openai_api_key and source_text` saltaba TODA la
         extracción en vivo — el ruido quedaba processed=False para
-        siempre y el healthcheck avisaba cada 6h. La extracción debe
-        correr igual: extract_pick resuelve los rechazos por reglas
-        sin LLM y cae a la cascada gratuita para el resto."""
-        monkeypatch.setattr(
-            "app.services.telegram.processor.get_settings",
-            lambda: SimpleNamespace(openai_api_key=None),
-        )
+        siempre y el healthcheck avisaba cada 6h. La extracción corre
+        siempre que haya texto: los rechazos por reglas no necesitan
+        LLM y el resto lo cubre la cascada gratuita."""
         extract = AsyncMock(
             return_value=ExtractedPick(
                 es_apuesta=False, metodo="rejected", confianza=0.9

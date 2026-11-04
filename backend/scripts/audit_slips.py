@@ -79,10 +79,11 @@ async def main(
     gemini: bool = False,
 ) -> None:
     settings = get_settings()
-    if not (settings.openai_api_key or settings.google_api_key):
-        print("Sin OPENAI_API_KEY ni GOOGLE_API_KEY — no se puede hacer OCR.")
+    if not (
+        settings.google_api_key or settings.groq_api_key or settings.openrouter_api_key
+    ):
+        print("Sin GOOGLE/GROQ/OPENROUTER key — no hay visión para OCR.")
         return
-    api_key = None if gemini else settings.openai_api_key
     async with AsyncSessionLocal() as session:
         picks = list(
             (await session.exec(select(ParsedPick).where(ParsedPick.es_apuesta)))
@@ -116,7 +117,7 @@ async def main(
             if not os.path.exists(path):
                 skipped += 1
                 continue
-            new_ocr = await extract_text_from_image(path, api_key)
+            new_ocr = await extract_text_from_image(path)
             if save_ocr and new_ocr and new_ocr != raw.extracted_text:
                 # Transcripción mejor de la MISMA imagen: el prompt
                 # actual sí transcribe ticks/marcadores — dejarla en el

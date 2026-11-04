@@ -1,9 +1,9 @@
 """Tests del rescate de mantenimiento (`services/maintenance/rescue.py`).
 
 `AsyncSessionLocal` se sobreescribe con la sesión SQLite del fixture —
-mismo patrón que `test_notifications.py`. OpenAI se corta en
+mismo patrón que `test_notifications.py`. El OCR/extracción se corta en
 `extract_text_from_image` / `extract_pick` y `get_settings` se
-sustituye por un stub con `openai_api_key` presente.
+sustituye por un stub con las keys de la cascada gratuita.
 """
 
 from contextlib import asynccontextmanager
@@ -38,11 +38,22 @@ def _session_cm(session):
 
 def _settings_stub(monkeypatch, max_age_days: float = 30.0, **kwargs):
     vals = {
-        "openai_api_key": "test-key",
+        "groq_api_key": "test-key",
         "rescue_max_age_days": max_age_days,
         **kwargs,
     }
     monkeypatch.setattr(rescue, "get_settings", lambda: SimpleNamespace(**vals))
+    # El conftest vacía `_ENDPOINTS`: simulamos `configured` para que
+    # refleje de verdad si el stub lleva alguna key de la cascada.
+    monkeypatch.setattr(
+        compat_llm,
+        "configured",
+        lambda s=None: bool(
+            getattr(s, "groq_api_key", None)
+            or getattr(s, "cerebras_api_key", None)
+            or getattr(s, "openrouter_api_key", None)
+        ),
+    )
 
 
 _MSG_ID = [0]
@@ -145,15 +156,13 @@ class TestRetryPendingOcr:
         await session.refresh(raw)
         assert raw.extracted_text == "X"
 
-    async def test_ocr_corre_sin_openai_cuando_hay_gemini(
-        self, session, monkeypatch, tmp_path
-    ):
-        """La puerta vieja pedía openai_api_key; el OCR ya funciona por
-        Gemini — con solo GOOGLE_API_KEY el rescate debe correr."""
+    async def test_ocr_corre_con_solo_gemini(self, session, monkeypatch, tmp_path):
+        """El rescate corre con cualquier key de visión; con solo
+        GOOGLE_API_KEY debe correr."""
         media = tmp_path / "foto.jpg"
         media.write_bytes(b"fake")
         await _raw(session, media_path=str(media), processed=True)
-        _settings_stub(monkeypatch, openai_api_key=None, google_api_key="g")
+        _settings_stub(monkeypatch, google_api_key="g")
         monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
         ocr = AsyncMock(return_value="OCR gemini")
         monkeypatch.setattr(rescue, "extract_text_from_image", ocr)
@@ -164,8 +173,13 @@ class TestRetryPendingOcr:
         ocr.assert_called_once()
 
     async def test_ocr_se_salta_sin_ninguna_via(self, session, monkeypatch):
-        """Sin OpenAI ni Gemini no hay camino de OCR: early return."""
-        _settings_stub(monkeypatch, openai_api_key=None, google_api_key=None)
+        """Sin Gemini ni visión compat no hay camino de OCR: early return."""
+        _settings_stub(
+            monkeypatch,
+            google_api_key=None,
+            groq_api_key=None,
+            openrouter_api_key=None,
+        )
         resumen = await rescue.retry_pending_ocr()
         assert resumen == {
             "pendientes": 0,
@@ -290,14 +304,14 @@ class TestReprocessPendingRaws:
         assert resumen["pendientes"] == 0
         extract.assert_not_called()
 
-    async def test_reproceso_corre_sin_openai_con_cascada(self, session, monkeypatch):
-        """Caso real nov-2026: OPENAI_API_KEY revocada → el rescate
-        entero se saltaba y el ruido se acumulaba (healthcheck cada
-        6h). Con la cascada compat (groq/…) configurada debe correr."""
+    async def test_reproceso_corre_con_cascada(self, session, monkeypatch):
+        """Caso real nov-2026: sin la key de pago el rescate entero
+        se saltaba y el ruido se acumulaba (healthcheck cada 6h). Con
+        la cascada compat (groq/…) configurada debe correr."""
         raw = await _raw(session, text="chat sin pick", processed=False)
         # El conftest vacía _ENDPOINTS: aquí la cascada "existe".
         monkeypatch.setattr(compat_llm, "configured", lambda s=None: True)
-        _settings_stub(monkeypatch, openai_api_key=None, groq_api_key="g")
+        _settings_stub(monkeypatch, groq_api_key="g")
         monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
         monkeypatch.setattr(rescue, "extract_pick", AsyncMock(return_value=None))
 
@@ -308,9 +322,14 @@ class TestReprocessPendingRaws:
         assert raw.processed is True
 
     async def test_reproceso_se_salta_sin_ninguna_via(self, session, monkeypatch):
-        """Sin OpenAI ni cascada compat no hay extracción: early return
+        """Sin cascada compat no hay extracción: early return
         (los raws siguen acumulando y el healthcheck lo reporta)."""
-        _settings_stub(monkeypatch, openai_api_key=None)
+        _settings_stub(
+            monkeypatch,
+            groq_api_key=None,
+            cerebras_api_key=None,
+            openrouter_api_key=None,
+        )
         resumen = await rescue.reprocess_pending_raws()
         assert resumen["pendientes"] == 0
 
@@ -523,15 +542,13 @@ class TestRetryIncompletePicks:
         assert pata.es_apuesta is True
         assert pata.evento is None
 
-    async def test_retry_incomplete_corre_sin_openai_con_cascada(
-        self, session, monkeypatch
-    ):
-        """Misma puerta obsoleta: sin OpenAI pero con cascada compat
-        la 2ª pasada LLM debe correr."""
+    async def test_retry_incomplete_corre_con_cascada(self, session, monkeypatch):
+        """Sin key de pago pero con cascada compat la 2ª pasada LLM
+        debe correr."""
         raw = await _raw(session, text="Sakkari gana", processed=True)
         await self._pick_sin_evento(session, raw)
         monkeypatch.setattr(compat_llm, "configured", lambda s=None: True)
-        _settings_stub(monkeypatch, openai_api_key=None, groq_api_key="g")
+        _settings_stub(monkeypatch, groq_api_key="g")
         monkeypatch.setattr(rescue, "AsyncSessionLocal", _session_cm(session))
         llm = AsyncMock(return_value=ExtractedPick(es_apuesta=False))
         monkeypatch.setattr(rescue, "_llm_extract", llm)

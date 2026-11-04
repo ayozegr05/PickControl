@@ -528,9 +528,7 @@ class TestIsRepostedSlip:
         assert is_reposted_slip(self._SLIP, None) is False
 
     async def test_extract_pick_rechaza_slip_reposteado(self):
-        pick = await extract_pick(
-            self._SLIP, api_key="", fecha_referencia=datetime(2026, 10, 6)
-        )
+        pick = await extract_pick(self._SLIP, fecha_referencia=datetime(2026, 10, 6))
         assert pick is not None
         assert pick.es_apuesta is False
         assert pick.metodo == "rejected"
@@ -565,7 +563,6 @@ class TestIsPremiumUrgency:
     async def test_extract_pick_rechaza_urgencia_premium(self):
         pick = await extract_pick(
             "perdiste la ÚLTIMA PLAZA ⛔️ CUOTA 121 premiumpay.pro",
-            api_key="",
             fecha_referencia=datetime(2026, 10, 22),
         )
         assert pick is not None
@@ -752,7 +749,7 @@ class TestRuleLlmEnrichment:
         monkeypatch.setattr(
             "app.services.telegram.pick_extractor._llm_extract", fake_llm
         )
-        pick = await extract_pick(text, api_key="k")
+        pick = await extract_pick(text)
         assert llamadas  # sí se llamó al LLM
         assert pick is not None
         # Merge: evento/deporte/mercado del LLM, seleccion de reglas.
@@ -774,7 +771,7 @@ class TestRuleLlmEnrichment:
         monkeypatch.setattr(
             "app.services.telegram.pick_extractor._llm_extract", fake_llm
         )
-        pick = await extract_pick(text, api_key="k")
+        pick = await extract_pick(text)
         assert pick is not None
         assert pick.evento == "Marco Cecchinato vs Marvin Moeller"
         assert pick.metodo == "rule"
@@ -791,7 +788,7 @@ class TestRuleLlmEnrichment:
         monkeypatch.setattr(
             "app.services.telegram.pick_extractor._llm_extract", fake_llm
         )
-        pick = await extract_pick(text, api_key="k")
+        pick = await extract_pick(text)
         assert pick is not None
         assert pick.seleccion == "Chidek gana"
         assert pick.metodo == "rule"  # sin evento aportado no cambia
@@ -955,7 +952,7 @@ class TestWinCelebration:
     async def test_extract_pick_rechaza_celebracion(self):
         # El veto actúa dentro de extract_pick, antes de reglas/LLM:
         # aunque el texto cite una cuota, nunca llega a parser.
-        pick = await extract_pick(self._CELEBRACION, api_key="")
+        pick = await extract_pick(self._CELEBRACION)
         assert pick is not None
         assert pick.es_apuesta is False
         assert pick.metodo == "rejected"
@@ -987,7 +984,7 @@ class TestLiveCommentary:
         assert _is_live_commentary(self._COMENTARIO) is True
 
     async def test_extract_pick_rechaza_comentario_live(self):
-        pick = await extract_pick(self._COMENTARIO, api_key="")
+        pick = await extract_pick(self._COMENTARIO)
         assert pick is not None
         assert pick.es_apuesta is False
         assert pick.metodo == "rejected"
@@ -1451,18 +1448,14 @@ class TestCompoundSelection:
 
 
 class TestLlmExtractFallback:
-    """`_llm_extract`: OpenAI primero; si falla (o no hay key) la cascada
-    gratuita Groq->Cerebras->OpenRouter cubre la ingesta, y el pick lleva
-    el motor en `metodo` para poder auditar quién extrajo qué."""
+    """`_llm_extract`: la cascada gratuita Groq->Cerebras->OpenRouter
+    cubre la ingesta, y el pick lleva el motor en `metodo` para poder
+    auditar quién extrajo qué."""
 
-    async def test_openai_cae_a_cascada(self, monkeypatch):
+    async def test_cascada_extrae_y_marca_motor(self, monkeypatch):
         from app.services.results import compat_llm
         from app.services.telegram import pick_extractor as pe
 
-        async def boom(*args, **kwargs):
-            raise RuntimeError("429 credit_balance_exhausted")
-
-        monkeypatch.setattr(pe, "call_with_retry", boom)
         seen = {}
 
         async def fake_extract(prompt, *, purpose="", settings=None):
@@ -1477,7 +1470,7 @@ class TestLlmExtractFallback:
 
         monkeypatch.setattr(compat_llm, "extract_text", fake_extract)
 
-        pick = await pe._llm_extract("Betis gana cuota 2.0", "key-viva")
+        pick = await pe._llm_extract("Betis gana cuota 2.0")
         assert pick is not None
         assert pick.metodo == "llm-groq"
         assert pick.mercado == "ganador"
@@ -1485,14 +1478,9 @@ class TestLlmExtractFallback:
         assert "Betis gana cuota 2.0" in seen["prompt"]
         assert seen["purpose"] == "ingesta"
 
-    async def test_sin_key_va_directo_a_cascada(self, monkeypatch):
+    async def test_cascada_rechaza_ruido(self, monkeypatch):
         from app.services.results import compat_llm
         from app.services.telegram import pick_extractor as pe
-
-        async def boom(*args, **kwargs):
-            raise AssertionError("no debería llamar a OpenAI sin key")
-
-        monkeypatch.setattr(pe, "call_with_retry", boom)
 
         async def fake_extract(prompt, *, purpose="", settings=None):
             return (
@@ -1502,7 +1490,7 @@ class TestLlmExtractFallback:
 
         monkeypatch.setattr(compat_llm, "extract_text", fake_extract)
 
-        pick = await pe._llm_extract("hola foro", None)
+        pick = await pe._llm_extract("hola foro")
         assert pick is not None
         assert pick.metodo == "llm-cerebras"
         assert pick.es_apuesta is False
@@ -1521,23 +1509,18 @@ class TestLlmExtractFallback:
 
         monkeypatch.setattr(compat_llm, "extract_text", fake_extract)
 
-        pick = await pe._llm_extract("X gana", None)
+        pick = await pe._llm_extract("X gana")
         assert pick is not None
         assert pick.es_apuesta is True
         assert pick.metodo == "llm-openrouter"
 
-    async def test_todo_muerto_devuelve_none(self, monkeypatch):
+    async def test_cascada_seca_devuelve_none(self, monkeypatch):
         from app.services.results import compat_llm
         from app.services.telegram import pick_extractor as pe
-
-        async def boom(*args, **kwargs):
-            raise RuntimeError("openai roto")
-
-        monkeypatch.setattr(pe, "call_with_retry", boom)
 
         async def fake_extract(prompt, *, purpose="", settings=None):
             return None
 
         monkeypatch.setattr(compat_llm, "extract_text", fake_extract)
 
-        assert await pe._llm_extract("X gana", "key") is None
+        assert await pe._llm_extract("X gana") is None

@@ -1,4 +1,5 @@
-"""Tests del fallback de OCR: OpenAI primero, Gemini vision detrás."""
+"""Tests del fallback de OCR: Gemini vision primero, endpoints
+OpenAI-compatible con visión (Groq/OpenRouter) detrás."""
 
 import httpx
 import pytest
@@ -14,76 +15,72 @@ def image(tmp_path):
 
 
 class TestOcrChain:
-    async def test_openai_ok_no_llama_gemini(self, monkeypatch, image):
-        async def fake_openai(path, key):
-            return "TEXTO OPENAI"
-
-        async def fake_gemini(path, key):
-            raise AssertionError("no debería llamar a Gemini")
-
-        monkeypatch.setattr(ocr_mod, "_ocr_openai", fake_openai)
-        monkeypatch.setattr(ocr_mod, "_ocr_gemini", fake_gemini)
-        monkeypatch.setattr(
-            ocr_mod,
-            "get_settings",
-            lambda: type("S", (), {"google_api_key": "g"})(),
-        )
-        assert await ocr_mod.extract_text_from_image(image, "openai-key") == (
-            "TEXTO OPENAI"
-        )
-
-    async def test_openai_falla_cae_a_gemini(self, monkeypatch, image):
-        async def boom(path, key):
-            raise RuntimeError("429 credit_balance_exhausted")
-
-        async def fake_gemini(path, key):
+    async def test_gemini_ok_no_llama_compat(self, monkeypatch, image):
+        async def fake_gemini(path, key, prompt=""):
             return "TEXTO GEMINI"
 
-        monkeypatch.setattr(ocr_mod, "_ocr_openai", boom)
+        async def boom_vision(path, prompt=""):
+            raise AssertionError("no debería caer a la visión compat")
+
         monkeypatch.setattr(ocr_mod, "_ocr_gemini", fake_gemini)
+        monkeypatch.setattr(ocr_mod, "_ocr_compat_vision", boom_vision)
         monkeypatch.setattr(
             ocr_mod,
             "get_settings",
             lambda: type("S", (), {"google_api_key": "g"})(),
         )
-        assert await ocr_mod.extract_text_from_image(image, "openai-key") == (
-            "TEXTO GEMINI"
-        )
+        assert await ocr_mod.extract_text_from_image(image) == "TEXTO GEMINI"
 
-    async def test_sin_key_openai_va_directo_a_gemini(self, monkeypatch, image):
-        async def fake_gemini(path, key):
-            assert key == "g"
-            return "TEXTO GEMINI"
-
-        monkeypatch.setattr(ocr_mod, "_ocr_gemini", fake_gemini)
-        monkeypatch.setattr(
-            ocr_mod,
-            "get_settings",
-            lambda: type("S", (), {"google_api_key": "g"})(),
-        )
-        assert await ocr_mod.extract_text_from_image(image, None) == ("TEXTO GEMINI")
-
-    async def test_todo_falla_devuelve_none(self, monkeypatch, image):
-        async def boom(path, key):
-            raise RuntimeError("openai roto")
-
-        async def gemini_none(path, key):
+    async def test_gemini_seco_cae_a_compat(self, monkeypatch, image):
+        async def gemini_none(path, key, prompt=""):
             return None
 
-        monkeypatch.setattr(ocr_mod, "_ocr_openai", boom)
+        async def fake_vision(path, prompt=""):
+            return "TEXTO VISION"
+
         monkeypatch.setattr(ocr_mod, "_ocr_gemini", gemini_none)
+        monkeypatch.setattr(ocr_mod, "_ocr_compat_vision", fake_vision)
         monkeypatch.setattr(
             ocr_mod,
             "get_settings",
             lambda: type("S", (), {"google_api_key": "g"})(),
         )
-        assert await ocr_mod.extract_text_from_image(image, "k") is None
+        assert await ocr_mod.extract_text_from_image(image) == "TEXTO VISION"
+
+    async def test_sin_google_key_va_directo_a_compat(self, monkeypatch, image):
+        async def boom_gemini(path, key, prompt=""):
+            raise AssertionError("sin google key no se llama a Gemini")
+
+        async def fake_vision(path, prompt=""):
+            return "TEXTO VISION"
+
+        monkeypatch.setattr(ocr_mod, "_ocr_gemini", boom_gemini)
+        monkeypatch.setattr(ocr_mod, "_ocr_compat_vision", fake_vision)
+        monkeypatch.setattr(
+            ocr_mod,
+            "get_settings",
+            lambda: type("S", (), {"google_api_key": None})(),
+        )
+        assert await ocr_mod.extract_text_from_image(image) == "TEXTO VISION"
+
+    async def test_todo_falla_devuelve_none(self, monkeypatch, image):
+        async def boom(path, key, prompt=""):
+            raise RuntimeError("gemini roto")
+
+        async def vision_none(path, prompt=""):
+            return None
+
+        monkeypatch.setattr(ocr_mod, "_ocr_gemini", boom)
+        monkeypatch.setattr(ocr_mod, "_ocr_compat_vision", vision_none)
+        monkeypatch.setattr(
+            ocr_mod,
+            "get_settings",
+            lambda: type("S", (), {"google_api_key": "g"})(),
+        )
+        assert await ocr_mod.extract_text_from_image(image) is None
 
     async def test_archivo_inexistente_none(self, tmp_path):
-        assert (
-            await ocr_mod.extract_text_from_image(str(tmp_path / "nope.jpg"), "k")
-            is None
-        )
+        assert await ocr_mod.extract_text_from_image(str(tmp_path / "nope.jpg")) is None
 
 
 class TestOcrGemini:
@@ -237,10 +234,10 @@ class TestCadenaCompleta:
     está aparcado (el caso real: cuota diaria quemada por research)."""
 
     async def test_gemini_seco_usa_compat_vision(self, monkeypatch, image):
-        async def gemini_none(path, key):
+        async def gemini_none(path, key, prompt=""):
             return None
 
-        async def vision(path):
+        async def vision(path, prompt=""):
             return "TEXTO VISION"
 
         monkeypatch.setattr(ocr_mod, "_ocr_gemini", gemini_none)
@@ -250,13 +247,13 @@ class TestCadenaCompleta:
             "get_settings",
             lambda: type("S", (), {"google_api_key": "g"})(),
         )
-        assert await ocr_mod.extract_text_from_image(image, None) == ("TEXTO VISION")
+        assert await ocr_mod.extract_text_from_image(image) == ("TEXTO VISION")
 
     async def test_todo_seco_devuelve_none(self, monkeypatch, image):
-        async def gemini_none(path, key):
+        async def gemini_none(path, key, prompt=""):
             return None
 
-        async def vision_none(path):
+        async def vision_none(path, prompt=""):
             return None
 
         monkeypatch.setattr(ocr_mod, "_ocr_gemini", gemini_none)
@@ -266,4 +263,4 @@ class TestCadenaCompleta:
             "get_settings",
             lambda: type("S", (), {"google_api_key": "g"})(),
         )
-        assert await ocr_mod.extract_text_from_image(image, None) is None
+        assert await ocr_mod.extract_text_from_image(image) is None

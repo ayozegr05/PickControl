@@ -53,9 +53,6 @@ class Settings(BaseSettings):
     # Carpeta donde se descargan imágenes de Telegram.
     telegram_media_path: str = "media/telegram"
 
-    # OpenAI (opcional, para OCR de imágenes de Telegram).
-    openai_api_key: str | None = None
-
     # Extractores texto→JSON gratis (API OpenAI-compatible, sin
     # tarjeta): cascada Groq -> Cerebras -> OpenRouter antes de gastar
     # la cuota mínima de Gemini. Cada key activa su endpoint.
@@ -218,7 +215,7 @@ class Settings(BaseSettings):
     # Cada cuántas horas se revisan picks pendientes de verificar en segundo plano.
     results_verification_interval_hours: float = 3.0
     # Cada cuántas horas corre el rescate (OCR pendiente + reproceso de
-    # raws `processed=False`). Consume OpenAI solo si hay pendientes.
+    # raws `processed=False`). Consume LLM solo si hay pendientes.
     rescue_interval_hours: float = 6.0
     # Días máximos que un raw puede estar pendiente de rescate; pasado
     # ese plazo se da por imposible (la fila queda en BD para auditoría).

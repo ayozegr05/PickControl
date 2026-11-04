@@ -22,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Permite importar `app` cuando se ejecuta desde scripts/.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.core.config import get_settings
 from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
 from app.models.telegram_raw_message import TelegramRawMessage
@@ -86,10 +85,8 @@ async def repair(session: AsyncSession, pick_id: int, apply: bool) -> bool:
         print(f"[{pick_id}] raw sin texto ni OCR emparejable")
         return False
 
-    settings = get_settings()
     new = await extract_pick(
         combined,
-        settings.openai_api_key or "",
         informante=raw.channel_name,
         fecha_referencia=raw.received_at,
     )

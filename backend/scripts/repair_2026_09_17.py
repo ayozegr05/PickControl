@@ -24,7 +24,6 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from sqlalchemy import select
 
-from app.core.config import get_settings
 from app.db.postgres import AsyncSessionLocal
 from app.models.informante import Informante  # noqa: F401
 from app.models.parsed_pick import ParsedPick
@@ -40,7 +39,6 @@ BAD_DATE_PICK_IDS = [138, 142, 207, 667, 716]
 
 
 async def reprocess_raw(session, raw: TelegramRawMessage) -> None:
-    settings = get_settings()
     source_text = (raw.extracted_text or raw.text or "").strip()
     if not source_text:
         print(f"  raw={raw.id}: sin texto, no se puede reprocesar.")
@@ -55,7 +53,6 @@ async def reprocess_raw(session, raw: TelegramRawMessage) -> None:
 
     pick = await extract_pick(
         source_text,
-        settings.openai_api_key,
         informante=raw.channel_name,
         fecha_referencia=raw.received_at,
     )

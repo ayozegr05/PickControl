@@ -50,7 +50,7 @@ class TestAuditRejectedPicks:
         _rejected(session, 1, "Sevilla gana @2.0 stake 2")
         await session.commit()
 
-        async def fake_extract(text, key, informante, fecha_referencia):
+        async def fake_extract(text, informante, fecha_referencia):
             return _bet()
 
         monkeypatch.setattr(ra, "extract_pick", fake_extract)
@@ -69,7 +69,7 @@ class TestAuditRejectedPicks:
         _rejected(session, 1)
         await session.commit()
 
-        async def fake_extract(text, key, informante, fecha_referencia):
+        async def fake_extract(text, informante, fecha_referencia):
             return ExtractedPick(es_apuesta=False)
 
         monkeypatch.setattr(ra, "extract_pick", fake_extract)
@@ -94,7 +94,7 @@ class TestAuditRejectedPicks:
         session.add(existente)
         await session.commit()
 
-        async def fake_extract(text, key, informante, fecha_referencia):
+        async def fake_extract(text, informante, fecha_referencia):
             return _bet()
 
         async def fake_dup(session, channel, pick, received_at):
@@ -112,7 +112,7 @@ class TestAuditRejectedPicks:
         _rejected(session, 1)
         await session.commit()
 
-        async def fake_extract(text, key, informante, fecha_referencia):
+        async def fake_extract(text, informante, fecha_referencia):
             raise RuntimeError("cascada seca")
 
         monkeypatch.setattr(ra, "extract_pick", fake_extract)
@@ -133,7 +133,7 @@ class TestRunRejectAudit:
 
         picks = [_bet(), ExtractedPick(es_apuesta=False)]
 
-        async def fake_extract(text, key, informante, fecha_referencia):
+        async def fake_extract(text, informante, fecha_referencia):
             return picks.pop(0)
 
         monkeypatch.setattr(ra, "notify_rejects_recovered", fake_notify)

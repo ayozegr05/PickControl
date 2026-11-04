@@ -9,7 +9,6 @@ y los hooks se comprueban sustituyendo las funciones `notify_*`.
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import httpx
@@ -510,11 +509,6 @@ class TestNewPickHook:
     async def test_pick_nuevo_dispara_push(self, session, monkeypatch):
         monkeypatch.setattr(
             processor,
-            "get_settings",
-            lambda: SimpleNamespace(openai_api_key="test-key"),
-        )
-        monkeypatch.setattr(
-            processor,
             "extract_pick",
             AsyncMock(
                 return_value=ExtractedPick(
@@ -545,11 +539,6 @@ class TestNewPickHook:
         assert notified == [parsed.id]
 
     async def test_no_pick_no_notifica(self, session, monkeypatch):
-        monkeypatch.setattr(
-            processor,
-            "get_settings",
-            lambda: SimpleNamespace(openai_api_key="test-key"),
-        )
         monkeypatch.setattr(
             processor,
             "extract_pick",

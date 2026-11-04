@@ -18,7 +18,6 @@ from datetime import timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding="utf-8")
 
-from openai import RateLimitError
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
@@ -37,8 +36,10 @@ from app.services.telegram.processor import _find_duplicate_pick, _merge_pick_da
 async def main() -> None:
     days = int(sys.argv[1]) if len(sys.argv) > 1 else 7
     settings = get_settings()
-    if not settings.openai_api_key:
-        print("OPENAI_API_KEY no está configurada.")
+    from app.services.results import compat_llm
+
+    if not compat_llm.configured(settings):
+        print("Sin cascada compat (GROQ/CEREBRAS/OPENROUTER) configurada.")
         return
 
     cutoff = utc_now() - timedelta(days=days)
@@ -73,24 +74,14 @@ async def main() -> None:
                 continue
 
             pick = None
-            for attempt, wait in enumerate((5, 20, 60), start=1):
-                try:
-                    pick = await extract_pick(
-                        source_text,
-                        settings.openai_api_key,
-                        informante=raw.channel_name,
-                        fecha_referencia=raw.received_at,
-                    )
-                    break
-                except RateLimitError:
-                    print(
-                        f"  raw={raw.id}: 429 de OpenAI "
-                        f"(intento {attempt}), espero {wait}s..."
-                    )
-                    await asyncio.sleep(wait)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"  raw={raw.id}: extractor falló de nuevo: {exc}")
-                    break
+            try:
+                pick = await extract_pick(
+                    source_text,
+                    informante=raw.channel_name,
+                    fecha_referencia=raw.received_at,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"  raw={raw.id}: extractor falló: {exc}")
             if pick is None:
                 skipped += 1
                 continue

@@ -33,7 +33,6 @@ from typing import Optional
 
 from sqlalchemy import select
 
-from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
 from app.models.parsed_pick import ParsedPick
@@ -358,12 +357,9 @@ async def repair_pick(session, pick: ParsedPick, *, apply: bool) -> RepairReport
         report.detail = f"anulada·{pick.motivo_anulada}: fila bloqueada"
         return report
 
-    settings = get_settings()
-
     async def _extract(src: str) -> Optional[ExtractedPick]:
         return await extract_pick(
             src,
-            settings.openai_api_key,
             informante=raw.channel_name if raw else None,
             fecha_referencia=raw.received_at if raw else None,
         )

@@ -13,7 +13,6 @@ from difflib import SequenceMatcher
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.core.config import get_settings
 from app.core.dates import utc_now
 from app.core.logging import get_logger
 from app.db.postgres import AsyncSessionLocal
@@ -532,7 +531,6 @@ async def process_incoming_message(
         db_session.add(raw)
         await db_session.flush()
 
-        settings = get_settings()
         pick = None
         # Emparejado foto-boleto + texto del pick (ver _PAIR_WINDOW):
         # `pair_pick` es el pick que la foto previa ya creó (caso en
@@ -541,11 +539,11 @@ async def process_incoming_message(
         pair_pick = None
         forward_pick = None
         extraction_text = source_text
-        # La extracción corre siempre que haya texto: con api_key vacía
-        # extract_pick salta OpenAI y usa la cascada gratuita (los
-        # rechazos por reglas ni siquiera necesitan LLM). Antes la
-        # puerta a openai_api_key congelaba TODA la ingesta sin la key
-        # (caso real nov-2026: ruido acumulado + alerta cada 6h).
+        # La extracción corre siempre que haya texto: la cascada
+        # gratuita cubre el LLM y los rechazos por reglas ni siquiera
+        # lo necesitan. Antes una puerta a openai_api_key congelaba
+        # TODA la ingesta sin la key (caso real nov-2026: ruido
+        # acumulado + alerta cada 6h).
         if source_text:
             if not media_path and text and _looks_like_bet(text):
                 slip_raw = await _find_pair_slip(
@@ -580,7 +578,6 @@ async def process_incoming_message(
             try:
                 pick = await extract_pick(
                     extraction_text,
-                    settings.openai_api_key,
                     informante=channel,
                     fecha_referencia=naive_message_date,
                 )
@@ -601,7 +598,6 @@ async def process_incoming_message(
                 try:
                     pick = await extract_pick(
                         source_text,
-                        settings.openai_api_key,
                         informante=channel,
                         fecha_referencia=naive_message_date,
                     )

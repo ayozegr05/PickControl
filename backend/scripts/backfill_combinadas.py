@@ -38,8 +38,10 @@ from app.services.telegram.pick_extractor import extract_pick
 async def main() -> None:
     apply_changes = "--apply" in sys.argv
     settings = get_settings()
-    if not settings.openai_api_key:
-        print("OPENAI_API_KEY no está configurada.")
+    from app.services.results import compat_llm
+
+    if not compat_llm.configured(settings):
+        print("Sin cascada compat configurada (GROQ/CEREBRAS/OPENROUTER).")
         return
 
     async with AsyncSessionLocal() as session:
@@ -89,7 +91,6 @@ async def main() -> None:
 
             pick = await extract_pick(
                 source_text,
-                settings.openai_api_key,
                 informante=(raw.channel_name if raw else parent.informante),
                 fecha_referencia=(raw.received_at if raw else None),
             )

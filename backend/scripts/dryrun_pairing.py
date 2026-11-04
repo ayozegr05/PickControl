@@ -55,8 +55,10 @@ async def _raw(session, channel_id: int, message_id: int):
 
 async def main() -> None:
     settings = get_settings()
-    if not settings.openai_api_key:
-        print("OPENAI_API_KEY no está configurada.")
+    from app.services.results import compat_llm
+
+    if not compat_llm.configured(settings):
+        print("Sin cascada compat (GROQ/CEREBRAS/OPENROUTER) configurada.")
         return
 
     async with AsyncSessionLocal() as session:
@@ -74,7 +76,6 @@ async def main() -> None:
             combined = f"{text.text}\n\n{ocr}"
             pick = await extract_pick(
                 combined,
-                settings.openai_api_key,
                 informante=text.channel_name,
                 fecha_referencia=text.received_at,
             )
@@ -88,7 +89,6 @@ async def main() -> None:
                 continue
             pick = await extract_pick(
                 text.text or "",
-                settings.openai_api_key,
                 informante=text.channel_name,
                 fecha_referencia=text.received_at,
             )

@@ -36,7 +36,6 @@ from app.models.telegram_raw_message import TelegramRawMessage
 from app.services.results import compat_llm
 from app.services.results.base import fold_name
 from app.services.telegram import ocr as ocr_mod
-from app.services.telegram.openai_retry import call_with_retry
 from app.services.telegram.pick_extractor import (
     _SYSTEM_PROMPT,
     ExtractedPick,
@@ -67,30 +66,6 @@ def _parse_pick(content: str | None) -> ExtractedPick | None:
         return ExtractedPick(**json.loads(_JSON_FENCE.sub("", content.strip())))
     except Exception:
         return None
-
-
-async def _engine_openai(prompt: str, settings) -> str | None:
-    if not settings.openai_api_key:
-        return None
-    from openai import AsyncOpenAI
-
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
-    try:
-        resp = await call_with_retry(
-            lambda: client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.0,
-            ),
-            "bench-openai",
-        )
-        return resp.choices[0].message.content
-    except Exception as exc:
-        return f"__ERROR__ {exc}"
 
 
 async def _engine_gemini(prompt: str, settings) -> str | None:
@@ -278,9 +253,7 @@ async def _bench_picks(
         for engine in engines:
             if sleep:
                 await asyncio.sleep(sleep)
-            if engine == "openai":
-                content = await _engine_openai(prompt, settings)
-            elif engine == "gemini":
+            if engine == "gemini":
                 content = await _engine_gemini(prompt, settings)
             else:
                 content = await _engine_compat(engine, prompt, settings)
@@ -302,7 +275,7 @@ async def _bench_picks(
 
 async def _bench_ocr(limit: int):
     """Compara el OCR de Gemini contra el `extracted_text` guardado
-    (hecho con OpenAI). Ratio difflib por imagen."""
+    (hecho con la cadena activa). Ratio difflib por imagen."""
     settings = get_settings()
     if not settings.google_api_key:
         print("Sin GOOGLE_API_KEY — OCR Gemini no disponible")
@@ -336,7 +309,7 @@ async def _bench_ocr(limit: int):
             None, (raw.extracted_text or "").strip(), text.strip()
         ).ratio()
         ratios.append(ratio)
-        print(f"raw {raw.id}: similitud OCR gemini-vs-openai = {ratio:.0%}")
+        print(f"raw {raw.id}: similitud OCR gemini-vs-guardado = {ratio:.0%}")
     if ratios:
         print(
             f"\nOCR: {len(ratios)} imágenes, similitud media {sum(ratios)/len(ratios):.0%}"
@@ -382,13 +355,13 @@ def main():
     ap.add_argument("--limit", type=int, default=30)
     ap.add_argument(
         "--engines",
-        default="openai,groq,cerebras,openrouter,gemini",
+        default="groq,cerebras,openrouter,gemini",
         help="Motores a comparar (coma-separados)",
     )
     ap.add_argument(
         "--ocr",
         action="store_true",
-        help="Benchmark de OCR (Gemini vs OpenAI guardado)",
+        help="Benchmark de OCR (Gemini vs OCR guardado)",
     )
     ap.add_argument(
         "--solo-ocr",
