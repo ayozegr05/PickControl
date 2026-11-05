@@ -22,7 +22,7 @@ class ParsedPickBase(SQLModel):
     casa: Optional[str] = None
     informante: Optional[str] = None
     explicacion: Optional[str] = None
-    metodo: str = Field(default="unknown", max_length=20)
+    metodo: str = Field(default="unknown", max_length=40)
     confianza: float = Field(default=0.0)
 
     # Fecha/hora del evento deportivo (si se pudo extraer del mensaje).
