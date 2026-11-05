@@ -71,6 +71,60 @@ async def _raw(session, **kwargs) -> TelegramRawMessage:
     return raw
 
 
+class TestMissingMediaCandidates:
+    """Raws cuyo media no tiene fichero en disco: fotos borradas o
+    documentos-imagen nunca descargados (MessageMediaDocument sin
+    handler hasta nov-2026). `retry_pending_ocr` no los ve porque
+    exige fichero presente — hay que re-descargarlos de Telegram."""
+
+    async def test_fichero_perdido_es_candidato(self, session):
+        raw = await _raw(session, media_path="media/no_existe.jpg")
+        cands = await rescue.missing_media_candidates(session, None)
+        assert [r.id for r in cands] == [raw.id]
+
+    async def test_fichero_presente_no_es_candidato(self, session, tmp_path):
+        f = tmp_path / "ok.jpg"
+        f.write_bytes(b"x")
+        await _raw(session, media_path=str(f))
+        assert await rescue.missing_media_candidates(session, None) == []
+
+    async def test_media_null_sin_texto_es_candidato(self, session):
+        """Documento-imagen sin caption: media_path NULL y sin texto —
+        el fichero nunca se descargó; solo Telegram sabe si era imagen."""
+        raw = await _raw(session, media_path=None, text="")
+        cands = await rescue.missing_media_candidates(session, None)
+        assert [r.id for r in cands] == [raw.id]
+
+    async def test_media_null_con_texto_no_es_candidato(self, session):
+        """Mensaje de texto puro: no hay media que re-descargar."""
+        await _raw(session, media_path=None, text="pick texto")
+        assert await rescue.missing_media_candidates(session, None) == []
+
+    async def test_con_pick_no_es_candidato(self, session):
+        raw = await _raw(session, media_path="media/no_existe.jpg")
+        pick = ParsedPick(
+            raw_message_id=raw.id, es_apuesta=True, seleccion="X", metodo="rule"
+        )
+        session.add(pick)
+        await session.commit()
+        assert await rescue.missing_media_candidates(session, None) == []
+
+    async def test_con_ocr_no_es_candidato(self, session):
+        await _raw(session, media_path="media/no_existe.jpg", extracted_text="SLIP")
+        assert await rescue.missing_media_candidates(session, None) == []
+
+    async def test_fuera_de_ventana_no_es_candidato(self, session):
+        await _raw(
+            session,
+            media_path="media/no_existe.jpg",
+            received_at=utc_now() - timedelta(days=60),
+        )
+        cands = await rescue.missing_media_candidates(
+            session, utc_now() - timedelta(days=30)
+        )
+        assert cands == []
+
+
 class TestRetryPendingOcr:
     async def test_ocr_ok_marca_reproceso(self, session, monkeypatch, tmp_path):
         media = tmp_path / "foto.jpg"

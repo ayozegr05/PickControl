@@ -88,6 +88,44 @@ async def _ocr_candidates(session, cutoff):
     return raws, present
 
 
+async def missing_media_candidates(session, cutoff) -> list[TelegramRawMessage]:
+    """Raws con media sin leer que NO tiene fichero en disco.
+
+    Dos orígenes: fotos cuyo archivo se perdió del disco (el `media_path`
+    apunta a algo que ya no existe) y documentos-imagen nunca
+    descargados (`media_path` NULL + sin texto — el handler ignoraba
+    MessageMediaDocument hasta nov-2026). `retry_pending_ocr` no los ve
+    porque exige fichero presente: hay que re-descargarlos de Telegram
+    (`scripts/rescue_missing_media.py`). Solo Telegram sabe qué media
+    traía cada uno — aquí solo se filtran los que ya tienen pick (ya
+    resueltos) o texto/OCR (nada que leer).
+    """
+    stmt = (
+        select(TelegramRawMessage)
+        .where(
+            or_(
+                TelegramRawMessage.extracted_text.is_(None),
+                func.trim(TelegramRawMessage.extracted_text) == "",
+            )
+        )
+        .where(
+            ~select(ParsedPick.id)
+            .where(ParsedPick.raw_message_id == TelegramRawMessage.id)
+            .exists()
+        )
+        .order_by(TelegramRawMessage.received_at.desc())  # type: ignore[arg-type]
+    )
+    if cutoff is not None:
+        stmt = stmt.where(TelegramRawMessage.received_at >= cutoff)
+    raws = list((await session.exec(stmt)).scalars().all())
+    return [
+        r
+        for r in raws
+        if (r.media_path and not os.path.exists(_media_path(r.media_path)))
+        or (not r.media_path and not (r.text or "").strip())
+    ]
+
+
 async def retry_pending_ocr(
     limit: Optional[int] = None, max_age_days: Optional[float] = None
 ) -> dict[str, int]:
