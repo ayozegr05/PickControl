@@ -133,6 +133,60 @@ class TestRunHealthcheck:
         assert avisos == []
 
 
+class TestRecoveryAlert:
+    """Cuando el problema que disparó la alerta desaparece, el admin
+    recibe un "recuperado" UNA vez — no silencio eterno ni spam."""
+
+    async def test_avisa_recuperado_al_limpiarse(self, session, monkeypatch):
+        avisos = []
+
+        async def fake_notify(subject, push_body, email_body):
+            avisos.append(subject)
+
+        monkeypatch.setattr(ih, "notify_ingest_down", fake_notify)
+        monkeypatch.setattr(ih, "AsyncSessionLocal", lambda: _session_ctx(session))
+        fotos = [
+            _raw(i, media_path=f"{i}.jpg", extracted_text=None)
+            for i in range(1, ih._OCR_FAIL_THRESHOLD + 1)
+        ]
+        session.add_all(fotos)
+        await session.commit()
+
+        # 1) Problema presente → alerta de fallo.
+        await ih.run_ingest_healthcheck()
+        assert len(avisos) == 1
+        assert "OCR" in avisos[0]
+
+        # 2) El rescate arregla las fotos → siguiente pasada avisa recuperado.
+        for f in fotos:
+            f.extracted_text = "TEXTO"
+        await session.commit()
+        await ih.run_ingest_healthcheck()
+        assert len(avisos) == 2
+        assert "recuperad" in avisos[1].lower()
+
+        # 3) Ya recuperado → silencio.
+        await ih.run_ingest_healthcheck()
+        assert len(avisos) == 2
+
+    async def test_sin_alerta_previa_no_manda_recuperado(self, session, monkeypatch):
+        """Sistema sano desde el arranque: nunca hubo alerta → no se
+        manda "recuperado" de la nada en cada pasada."""
+        avisos = []
+
+        async def fake_notify(subject, push_body, email_body):
+            avisos.append(subject)
+
+        monkeypatch.setattr(ih, "notify_ingest_down", fake_notify)
+        monkeypatch.setattr(ih, "AsyncSessionLocal", lambda: _session_ctx(session))
+        session.add(_raw(1, extracted_text="ok"))
+        await session.commit()
+
+        await ih.run_ingest_healthcheck()
+        await ih.run_ingest_healthcheck()
+        assert avisos == []
+
+
 class TestBuildProblems:
     """Cada señal del healthcheck genera UN problema con causa,
     impacto y acción en lenguaje claro — el correo debe decir QUÉ

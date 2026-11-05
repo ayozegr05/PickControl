@@ -51,6 +51,11 @@ _SILENCE_THRESHOLD = timedelta(hours=18)
 # Un aviso cada 6h mientras siga roto (persistido en provider_state).
 _ALERT_COOLDOWN = timedelta(hours=6)
 _ALERT_MARK = "ingest-health"
+# Marca "hubo alerta sin confirmar recuperación": vive hasta que una
+# pasada sana la limpia y manda el aviso de recuperado (una sola vez,
+# aunque el cooldown de 6h haya expirado en medio).
+_FLAG_MARK = "ingest-health-alerted"
+_FLAG_TTL = timedelta(days=30)
 
 
 @dataclass
@@ -304,19 +309,53 @@ def _format_alert(
     return subject, push_body, email
 
 
+def _format_recovery(
+    health: IngestHealth, status_lines: list[str]
+) -> tuple[str, str, str]:
+    """Aviso "ya volvió": mismo canal que la alerta, pero verde."""
+    subject = "[ControlPick] ✅ Ingesta recuperada"
+    push_body = (
+        f"Todo vuelve a funcionar: {health.raws_ventana} mensajes en "
+        "3h, sin fotos pendientes ni cola."
+    )
+    email = (
+        "=== ControlPick — ingesta recuperada ===\n\n"
+        "El problema anterior se ha resuelto solo. Estado actual:\n"
+        f"• Mensajes recibidos (3h): {health.raws_ventana}\n"
+        f"• Fotos sin leer: {health.fotos_sin_ocr}\n"
+        f"• Pendientes de procesar: {health.raws_sin_procesar}\n"
+    )
+    if status_lines:
+        email += (
+            "\n📡 ESTADO DE LOS LECTORES/EXTRACTORES\n" + "\n".join(status_lines) + "\n"
+        )
+    return subject, push_body, email
+
+
 async def run_ingest_healthcheck() -> None:
     """Pasada del healthcheck: si hay señal de fallo y no se avisó en
-    el cooldown, email+push a admins. Nunca lanza — un fallo del
-    propio healthcheck no puede tumbar el loop que lo hospeda."""
+    el cooldown, email+push a admins; si la pasada sale limpia tras
+    una alerta, avisa "recuperado" una vez. Nunca lanza — un fallo
+    del propio healthcheck no puede tumbar el loop que lo hospeda."""
     try:
         async with AsyncSessionLocal() as session:
             health = await check_ingest_health(session)
         problems = _build_problems(health)
         if not problems:
+            # Pasada limpia: si había una alerta pendiente de
+            # confirmar recuperación, se avisa una vez y se limpia.
+            if is_rate_limited(_FLAG_MARK):
+                mark_cooldown(_FLAG_MARK, utc_now())
+                subject, push_body, email_body = _format_recovery(
+                    health, _provider_status_lines(get_settings())
+                )
+                logger.info("%s", subject)
+                await notify_ingest_down(subject, push_body, email_body)
             return
         if is_rate_limited(_ALERT_MARK):
             return
         mark_cooldown(_ALERT_MARK, utc_now() + _ALERT_COOLDOWN)
+        mark_cooldown(_FLAG_MARK, utc_now() + _FLAG_TTL)
         subject, push_body, email_body = _format_alert(
             health, problems, _provider_status_lines(get_settings())
         )
