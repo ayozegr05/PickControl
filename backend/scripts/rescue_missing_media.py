@@ -47,7 +47,7 @@ from app.services.maintenance.rescue import (
     _rescue_cutoff,
     missing_media_candidates,
 )
-from app.services.telegram.catchup import _resolve_channel
+from app.services.telegram.channels import resolve_channel_target
 from app.services.telegram.client import get_telegram_client, reset_telegram_client
 from app.services.telegram.handlers import fetch_message_content
 
@@ -86,7 +86,7 @@ async def main() -> None:
     stats = {"descargados": 0, "sin_media": 0, "fallos": 0, "no_encontrados": 0}
     try:
         for channel_id, raws in por_canal.items():
-            entity, resolved_id = await _resolve_channel(client, str(channel_id))
+            entity, resolved_id = await resolve_channel_target(client, str(channel_id))
             if entity is None:
                 print(f"canal {channel_id}: no resoluble, salto {len(raws)} raws.")
                 stats["fallos"] += len(raws)
@@ -124,7 +124,9 @@ async def main() -> None:
                         raw.processed = False
                         session.add(raw)
                         stats["descargados"] += 1
-                await session.commit()
+                    # Commit por lote: una interrupción solo pierde el
+                    # lote en curso, no el trabajo de todo el canal.
+                    await session.commit()
             # ids que Telegram no devolvió (borrados) quedan en by_id.
             stats["no_encontrados"] += len(by_id)
             print(f"canal {channel_id}: {stats}")
