@@ -925,7 +925,7 @@ def loop_due(loop_name: str, interval_seconds: float) -> bool:
     Los loops de `lifecycle.py` persisten su última pasada aquí para
     que un restart/redeploy no dispare ciclos extra: antes, cada
     rebuild relanzaba verifier+snapshotter+rescate+backfill al boot y
-    quemaba cuota de providers (y OpenAI) sin necesidad. Sin marca
+    quemaba cuota de providers sin necesidad. Sin marca
     previa devuelve True — el primer arranque real corre igual.
     """
     raw = _load_state()["loops"].get(loop_name)

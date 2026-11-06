@@ -86,7 +86,7 @@ async def _incomplete_raw_ids(channel_id: int) -> set[int]:
     """Ids de raws guardados a medias que conviene reintentar.
 
     - `processed=False`: la extracción del pick falló con excepción (p.
-      ej. un 429 de OpenAI). El raw conserva el texto; basta reintentar.
+      ej. un 429 del extractor). El raw conserva el texto; basta reintentar.
     - foto sin OCR (`media_path` presente pero `extracted_text` NULL y
       sin texto propio): la descarga funcionó pero el OCR devolvió None
       (rate limit); sin reintento ese pick se pierde para siempre.

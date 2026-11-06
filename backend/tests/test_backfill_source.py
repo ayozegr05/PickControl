@@ -8,8 +8,6 @@ sin marca, a diferencia de `sin_fixture`/`sin_historial` (intentados).
 
 from datetime import date, datetime, timedelta
 
-import pytest
-
 from app.models.parsed_pick import ParsedPick
 from app.services.odds.historical_backfill import (
     BackfillReport,
@@ -18,8 +16,6 @@ from app.services.odds.historical_backfill import (
 )
 from app.services.odds.oddspapi import HistoricalChoice, MarketDef, PricePoint
 from app.services.results.base import is_missed
-
-pytestmark = pytest.mark.asyncio
 
 
 class _Fixture:

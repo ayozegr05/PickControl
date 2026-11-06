@@ -3,9 +3,9 @@
 Dos piezas encadenadas (una alimenta a la otra):
 
 - `retry_pending_ocr`: reintenta el OCR de fotos sin `extracted_text`
-  (los 429 de OpenAI dejaban el raw vacío). Las fotos cuyo fichero ya
-  no existe en disco se saltan sin marcar — si reaparecen dentro de la
-  ventana de rescate, se procesan entonces.
+  (los 429 de los lectores dejaban el raw vacío). Las fotos cuyo
+  fichero ya no existe en disco se saltan sin marcar — para esas está
+  `scripts/rescue_missing_media.py`, que las re-descarga de Telegram.
 - `reprocess_pending_raws`: repasa raws `processed=False` (incluidos
   los que el OCR acaba de rescatar) e intenta extraer pick de nuevo,
   respetando la dedup por canal y rellenando `fecha_evento` desde

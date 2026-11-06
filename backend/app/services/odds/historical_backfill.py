@@ -2510,8 +2510,8 @@ async def _run_gemini_pass(
     settings = get_settings()
     if not _llm_odds_ready(settings):
         # Sin key no hay nada que hacer; en cooldown tampoco — salir
-        # aquí evita quemar rescates de OpenAI para picks que no se
-        # van a buscar en esta pasada.
+        # aquí evita quemar llamadas LLM para picks que no se van a
+        # buscar en esta pasada.
         return
     done_key = _llm_done_key()
     resolved = resolved_picks or set()

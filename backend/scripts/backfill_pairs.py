@@ -324,7 +324,7 @@ async def main() -> None:
         print(
             f"\nResumen: {emparejados} con slip pareja, "
             f"{cambiados} picks mejorados, {duplicados} duplicados eliminados, "
-            f"{llm_blocked} pendientes por falta de cuota de OpenAI."
+            f"{llm_blocked} pendientes por falta de cuota LLM."
         )
 
 

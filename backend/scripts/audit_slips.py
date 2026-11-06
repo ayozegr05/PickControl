@@ -48,7 +48,7 @@ _CELEBRATION_RE = re.compile(
     r"cobrad[oa]|premio cobrado|estamoss",
     re.IGNORECASE,
 )
-# Cortesía con el TPM de OpenAI — el retry ya cubre el 429.
+# Cortesía con los límites por minuto — la cascada ya aparca en 429.
 _DELAY = 0.4
 
 
@@ -170,7 +170,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--gemini",
         action="store_true",
-        help="fuerza OCR por Gemini vision (ignora OpenAI aunque haya key)",
+        help="fuerza OCR por Gemini vision (salta el resto de la cascada)",
     )
     args = parser.parse_args()
     only = [int(x) for x in args.raws.split(",")] if args.raws else None

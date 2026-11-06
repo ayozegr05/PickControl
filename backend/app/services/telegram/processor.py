@@ -1,7 +1,7 @@
 """Procesamiento de mensajes de Telegram recibidos por Telethon.
 
-Guarda el mensaje crudo y, si hay clave de OpenAI, intenta extraer un pick
-mediante el extractor híbrido (reglas + LLM).
+Guarda el mensaje crudo y, si tiene texto, intenta extraer un pick
+mediante el extractor híbrido (reglas + cascada LLM gratuita).
 """
 
 import asyncio
