@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from app.services.telegram.pick_extractor import (
     _LEG_NOISE_PATTERN,
     ExtractedPick,
+    _canonical_deporte,
     _clean_text_field,
     _detect_deporte,
     _extract_event_date,
@@ -656,6 +657,27 @@ class TestNormalizePick:
         pick.deporte = "tenis"
         pick = _normalize_pick(pick, "Cecchinato gana\nCuota 1.50\nStake 4")
         assert pick.deporte == "tenis"
+
+    def test_canoniza_deporte_del_llm(self):
+        # El LLM devuelve el deporte en cualquier forma ("Fórmula 1",
+        # "F1", "Formula 1") y en BD eso generaba dos categorías para el
+        # mismo deporte: todo motor queda como "automovilismo".
+        text = "**CHALL RENNES **🇫🇷 **🎾**\n\n**Chidek gana ****🇫🇷**\n\n**Cuota 1.53📈**\n\n**Stake 3💰**"
+        for forma in ("Fórmula 1", "Formula 1", "f1", "F1", "AUTOMOVILISMO"):
+            pick = _rule_extract(text)
+            pick.deporte = forma
+            pick = _normalize_pick(pick, text)
+            assert pick.deporte == "automovilismo", forma
+
+    def test_canoniza_variantes_conocidas(self):
+        pick = _rule_extract("Cecchinato gana\nCuota 1.50\nStake 4")
+        for forma, canon in (
+            ("Tennis", "tenis"),
+            ("SOCCER", "fútbol"),
+            ("Basketball", "baloncesto"),
+        ):
+            pick.deporte = forma
+            assert _canonical_deporte(pick.deporte) == canon, forma
 
     def test_recorta_prosa_del_llm(self):
         # El LLM volcó la frase del análisis en `seleccion`: se queda

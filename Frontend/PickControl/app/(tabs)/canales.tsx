@@ -139,7 +139,10 @@ const Canales = () => {
         <ScrollView
           contentContainerStyle={[
             styles.scroll,
-            { paddingTop: 80 + insets.top, paddingBottom: 24 },
+            {
+              paddingTop: 80 + insets.top,
+              paddingBottom: 24 + insets.bottom,
+            },
           ]}
           keyboardShouldPersistTaps="handled"
         >

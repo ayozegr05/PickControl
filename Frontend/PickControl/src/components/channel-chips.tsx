@@ -53,6 +53,7 @@ export default function ChannelChips({ groups, selectedId, onSelect }: Props) {
             ]}
           >
             <Text
+              numberOfLines={1}
               style={[
                 styles.channelChipText,
                 selectedId === group.informanteId && styles.chipTextActive,

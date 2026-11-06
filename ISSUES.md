@@ -133,21 +133,25 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   (`ErrorState`) de canal realmente vacío ("No se encontraron
   datos"). Bonus: la animación de earns se para al desmontar — el
   timer de 1500ms hacía setState sobre el componente muerto.
-- [ ] 🟡 `useVideoPlayer` se instancia siempre aunque el usuario esté
-  autenticado y no vea la landing (`index.tsx:36-43`) — vídeo en loop
-  innecesario; además `marginBottom: 655` mágico + `position:absolute`
-  → overflow en pantallas pequeñas.
-- [ ] 🔵 "Anade tu apuesta" sin tilde (`add-pick.tsx`).
-- [ ] 🔵 Chip de canal truncado ("Apuesta Diaria CopetePick") en
-  parsed-picks; sección "Añadir por enlace o id" queda medio tapada
-  por la BottomBar en canales.
-- [ ] 🔵 "Mi Perfil" es un botón sin `onPress` (`top-bar.tsx:159`).
-- [ ] 🔵 Deportes duplicados en Análisis: "Automovilismo" **y**
-  "Fórmula 1" como categorías separadas (mismo deporte, dos etiquetas
-  en BD); deportes con 0/0 ensucian la lista.
-- [ ] 🔵 `useState<string>("Pending")` para `acierto` y reset a `""`
-  inválido fuera de las opciones del picker (`add-pick.tsx:30,145`);
-  permite enviar con `apuesta` vacía ("(sin nombre)"), `cantidad=0` y
+- [x] ✅ `useVideoPlayer` siempre instanciado — resuelto (2026-11):
+  la landing entera se extrajo a `Landing()` con el hook dentro → el
+  vídeo solo existe sin sesión. `marginBottom: 655` muerto quitado.
+- [x] ✅ "Anade tu apuesta" → "Añade tu apuesta".
+- [x] ✅ Chip truncado + BottomBar — resuelto (2026-11):
+  `numberOfLines={1}` en los chips de canal (ya no envuelven); canales
+  gana `paddingBottom: 24 + insets.bottom`.
+- [x] ✅ "Mi Perfil" sin `onPress` — eliminado del menú (no existe
+  pantalla de perfil; un botón muerto es peor que no tenerlo).
+- [x] ✅ Deportes duplicados — resuelto a nivel de extracción
+  (2026-11): `_canonical_deporte` en `pick_extractor` mapea las
+  variantes del LLM ("Fórmula 1"/"F1"/"Formula 1" → "automovilismo",
+  Tennis/Soccer/Basketball → canónicos) → los registros FUTUROS ya
+  no fragmentan categorías. Las ~9+1 filas históricas quedan como
+  están (auditoría: no se reescribe historia sin autorización).
+- [x] ✅ `acierto` sin tipar + envíos silenciosos — resuelto
+  (2026-11): `useState<Acierto>("Pending")`, reset a `"Pending"` (no
+  `""`) y guard `apuesta.trim()` vacía → alerta, no envía. El caso
+  `cantidad=0`/`cuota=1` por defecto queda como antes —
   `cuota=1` silenciosos (`add-pick.tsx:128-136`).
 
 ## 3. Arquitectura / mantenibilidad
@@ -200,7 +204,7 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
 - [x] ✅ **`try/catch` alrededor de JSX** (`index.tsx`) — eliminado:
   crear elementos no renderiza hijos, el `catch` era inalcanzable;
   quitada también la UI de fallback muerta.
-- [ ] 🟡 `console.log` de debug → **0** (quitados los ~7 de render/
+- [x] ✅ `console.log` de debug → **0** (quitados los ~7 de render/
   handlers; `console.error`/`warn` en catches se quedan — son
   diagnóstico). También quitadas 11 deps sin uso: `dotlottie-react`,
   `@types/yup` (yup 1.x trae tipos), `numeral`, `prop-types`,
@@ -272,7 +276,14 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   `util.styleText` con array de formatos en Node ≥20 para @expo/cli).
 - [x] ✅ `react-native.config.js` vacío y `scripts/reset-project.js` —
   borrados (Bloque 3). README boilerplate pendiente de reescritura.
-- [ ] 🔵 Verificar `typescript ~6.0.3` contra el template Expo.
+- [x] ✅ `typescript ~6.0.3` — verificado (2026-11): `expo-doctor`
+  no lo flaggea y `tsc` trabaja bien con `expo/tsconfig.base`.
+  BONUS doctor: restaurados `expo-font` y
+  `@react-native-picker/picker` (peers requeridos en runtime —
+  quitados por error en Bloque 3; los tests no lo pillan porque
+  jest mockea nativos) y `expo-modules-core` fuera de deps
+  directas. `expo install --fix` alineó 13 paquetes al SDK 57.
+  **21/21 checks**.
 
 ## 5. Tests
 

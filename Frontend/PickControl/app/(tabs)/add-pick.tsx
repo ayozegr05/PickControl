@@ -30,7 +30,7 @@ const AddPick = () => {
   const [loadingInformantes, setLoadingInformantes] = useState(true);
   const [selectedInformante, setSelectedInformante] = useState("");
   const [selectedCasa, setSelectedCasa] = useState("Bet365");
-  const [acierto, setAcierto] = useState("Pending");
+  const [acierto, setAcierto] = useState<Acierto>("Pending");
   const [cantidadApostada, setCantidadApostada] = useState("");
   const [apuesta, setApuesta] = useState("");
   const [tipoDeApuesta, setTipoDeApuesta] = useState("");
@@ -109,6 +109,10 @@ const AddPick = () => {
       Alert.alert("Error", "Selecciona un tipster/canal antes de continuar.");
       return;
     }
+    if (!apuesta.trim()) {
+      Alert.alert("Error", "Escribe la apuesta antes de enviarla.");
+      return;
+    }
 
     // Preparamos los datos que vamos a enviar
     let finalTipoDeApuesta = tipoDeApuesta;
@@ -133,7 +137,7 @@ const AddPick = () => {
         informante: selectedInformante,
         tipoDeApuesta: finalTipoDeApuesta,
         casa: selectedCasa,
-        acierto: acierto as Acierto,
+        acierto,
         cantidadApostada: Number(cantidadApostada) || 0,
         cuota: Number(cuota) || 1,
       });
@@ -145,7 +149,7 @@ const AddPick = () => {
       );
       // Restablecer los estados al valor inicial
       setSelectedCasa("");
-      setAcierto("");
+      setAcierto("Pending");
       setCantidadApostada("");
       setApuesta("");
       setTipoDeApuesta("");
@@ -186,7 +190,7 @@ const AddPick = () => {
           contentContainerStyle={{ paddingBottom: 24 }}
           keyboardShouldPersistTaps="handled"
         >
-          <Text style={styles.text}>Anade tu apuesta</Text>
+          <Text style={styles.text}>Añade tu apuesta</Text>
           {/* Card que contiene el formulario */}
           <View style={styles.card}>
             {/* Campo Apuesta */}
@@ -318,7 +322,7 @@ const AddPick = () => {
 
             {/* Acierto Selector */}
             <RNPickerSelect
-              onValueChange={(value) => setAcierto(value)}
+              onValueChange={(value) => setAcierto(value as Acierto)}
               items={aciertos}
               style={pickerSelectStyles}
               value={acierto}

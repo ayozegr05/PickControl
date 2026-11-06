@@ -141,9 +141,6 @@ const TopBar = () => {
         <View style={[styles.menuOptions, { top: BAR_HEIGHT + insets.top }]}>
           {isAuthenticated ? (
             <>
-              <TouchableOpacity>
-                <Text style={styles.menuText}>Mi Perfil</Text>
-              </TouchableOpacity>
               <TouchableOpacity onPress={() => router.push("/earns")}>
                 <Text style={styles.menuText}>Mis Ganancias</Text>
               </TouchableOpacity>

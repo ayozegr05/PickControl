@@ -799,6 +799,38 @@ def _detect_deporte(text: Optional[str]) -> Optional[str]:
     return None
 
 
+# El LLM devuelve `deporte` en cualquier forma ("Fórmula 1", "f1",
+# "AUTOMOVILISMO") y cada variante creaba una categoría distinta en
+# BD/análisis: se mapea al nombre canónico del catálogo.
+_DEPORTE_ALIASES = {
+    "automovilismo": "automovilismo",
+    "fórmula 1": "automovilismo",
+    "formula 1": "automovilismo",
+    "f1": "automovilismo",
+    "formula one": "automovilismo",
+    "tenis": "tenis",
+    "tennis": "tenis",
+    "fútbol": "fútbol",
+    "futbol": "fútbol",
+    "football": "fútbol",
+    "soccer": "fútbol",
+    "baloncesto": "baloncesto",
+    "basketball": "baloncesto",
+    "basket": "baloncesto",
+    "hockey": "hockey",
+    "ice hockey": "hockey",
+}
+
+
+def _canonical_deporte(deporte: Optional[str]) -> Optional[str]:
+    """Normaliza el deporte al nombre canónico o devuelve el valor tal
+    cual (en minúscula) si es desconocido — nunca inventa categorías."""
+    if not deporte:
+        return None
+    norm = deporte.strip().lower()
+    return _DEPORTE_ALIASES.get(norm, norm)
+
+
 # Cola de cabecera en mayúsculas pegada a la selección ("Menos de 3,5
 # goles ESPAÑA"): el tipster pone "pick + competición" en la misma
 # línea. Solo se recorta si queda texto en minúscula — una selección
@@ -979,6 +1011,8 @@ def _normalize_pick(pick: ExtractedPick, text: str) -> ExtractedPick:
         pick.evento = _fixture_from_slip_ocr(text)
     if pick.es_apuesta and not pick.deporte:
         pick.deporte = _detect_deporte(text)
+    if pick.es_apuesta and pick.deporte:
+        pick.deporte = _canonical_deporte(pick.deporte)
     if pick.es_apuesta and (pick.deporte or "").strip().lower() in _UNSUPPORTED_SPORTS:
         pick.es_apuesta = False
         pick.metodo = "rejected"

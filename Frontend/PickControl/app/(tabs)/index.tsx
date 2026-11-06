@@ -32,15 +32,6 @@ const Main = () => {
     reload,
   } = useInformantes(isAuthenticated);
 
-  const introVideoPlayer = useVideoPlayer(
-    require("../../assets/video/intro.mp4"),
-    (player) => {
-      player.loop = true;
-      player.muted = true;
-      player.play();
-    }
-  );
-
   // El hook ya fetchea al montar (enabled=isAuthenticated): el focus
   // solo fuerza recarga al VOLVER a la pestaña, no en el primer foco.
   const firstFocus = useRef(true);
@@ -76,88 +67,7 @@ const Main = () => {
   }
 
   if (!isAuthenticated) {
-    return (
-      <Screen style={{ paddingHorizontal: 0 }}>
-        <TopBar />
-        <VideoView
-          player={introVideoPlayer}
-          style={styles.video}
-          contentFit="cover"
-          nativeControls={false}
-        />
-        <View style={styles.overlay} />
-
-        {/* Grid de características */}
-        <View style={styles.featuresSection}>
-          <View style={styles.titleContainer}>
-            <MaterialCommunityIcons
-              name="crown"
-              size={40}
-              color={colors.primary}
-              style={styles.titleIcon}
-            />
-            <Text style={styles.sectionTitle}>Toma el Control</Text>
-          </View>
-          <View style={styles.featuresGrid}>
-            <View style={styles.featureCard}>
-              <MaterialCommunityIcons
-                name="chart-areaspline"
-                size={32}
-                color={colors.primary}
-              />
-              <Text style={styles.featureTitle}>Audita Tipsters</Text>
-              <Text style={styles.featureText}>
-                Extrae sus pronósticos y verifica su rentabilidad real
-              </Text>
-            </View>
-
-            <View style={styles.featureCard}>
-              <MaterialCommunityIcons
-                name="account-group"
-                size={32}
-                color={colors.primary}
-              />
-              <Text style={styles.featureTitle}>Ranking Verificado</Text>
-              <Text style={styles.featureText}>
-                Yield y aciertos comprobados por canal
-              </Text>
-            </View>
-
-            <View style={styles.featureCard}>
-              <MaterialCommunityIcons
-                name="bell-alert"
-                size={32}
-                color={colors.primary}
-              />
-              <Text style={styles.featureTitle}>Tu Banco Real</Text>
-              <Text style={styles.featureText}>
-                Registra tus apuestas y compara contra el tipster
-              </Text>
-            </View>
-
-            <View style={styles.featureCard}>
-              <MaterialCommunityIcons
-                name="wallet"
-                size={32}
-                color={colors.primary}
-              />
-              <Text style={styles.featureTitle}>Gestión de Bankroll</Text>
-              <Text style={styles.featureText}>
-                Límites automáticos de riesgo por apuesta
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        <TouchableOpacity
-          style={styles.joinButton}
-          activeOpacity={0.8}
-          onPress={() => router.push("/login")}
-        >
-          <Text style={styles.joinButtonText}>Start</Text>
-        </TouchableOpacity>
-      </Screen>
-    );
+    return <Landing />;
   }
 
   if (loading) {
@@ -439,7 +349,6 @@ const styles = StyleSheet.create({
   },
   featuresSection: {
     marginTop: -50,
-    marginBottom: 655,
     paddingHorizontal: 15,
     position: "absolute",
     top: "20%",
@@ -514,5 +423,103 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 });
+
+// Landing pública (vídeo + features + "Start"). El useVideoPlayer vive
+// aquí dentro: el componente solo se monta sin sesión, así el vídeo
+// no se instancia ni reproduce en loop para usuarios logueados.
+function Landing() {
+  const router = useRouter();
+  const introVideoPlayer = useVideoPlayer(
+    require("../../assets/video/intro.mp4"),
+    (player) => {
+      player.loop = true;
+      player.muted = true;
+      player.play();
+    }
+  );
+
+  return (
+    <Screen style={{ paddingHorizontal: 0 }}>
+      <TopBar />
+      <VideoView
+        player={introVideoPlayer}
+        style={styles.video}
+        contentFit="cover"
+        nativeControls={false}
+      />
+      <View style={styles.overlay} />
+
+      {/* Grid de características */}
+      <View style={styles.featuresSection}>
+        <View style={styles.titleContainer}>
+          <MaterialCommunityIcons
+            name="crown"
+            size={40}
+            color={colors.primary}
+            style={styles.titleIcon}
+          />
+          <Text style={styles.sectionTitle}>Toma el Control</Text>
+        </View>
+        <View style={styles.featuresGrid}>
+          <View style={styles.featureCard}>
+            <MaterialCommunityIcons
+              name="chart-areaspline"
+              size={32}
+              color={colors.primary}
+            />
+            <Text style={styles.featureTitle}>Audita Tipsters</Text>
+            <Text style={styles.featureText}>
+              Extrae sus pronósticos y verifica su rentabilidad real
+            </Text>
+          </View>
+
+          <View style={styles.featureCard}>
+            <MaterialCommunityIcons
+              name="account-group"
+              size={32}
+              color={colors.primary}
+            />
+            <Text style={styles.featureTitle}>Ranking Verificado</Text>
+            <Text style={styles.featureText}>
+              Yield y aciertos comprobados por canal
+            </Text>
+          </View>
+
+          <View style={styles.featureCard}>
+            <MaterialCommunityIcons
+              name="bell-alert"
+              size={32}
+              color={colors.primary}
+            />
+            <Text style={styles.featureTitle}>Tu Banco Real</Text>
+            <Text style={styles.featureText}>
+              Registra tus apuestas y compara contra el tipster
+            </Text>
+          </View>
+
+          <View style={styles.featureCard}>
+            <MaterialCommunityIcons
+              name="wallet"
+              size={32}
+              color={colors.primary}
+            />
+            <Text style={styles.featureTitle}>Gestión de Bankroll</Text>
+            <Text style={styles.featureText}>
+              Límites automáticos de riesgo por apuesta
+            </Text>
+          </View>
+        </View>
+      </View>
+
+      <TouchableOpacity
+        style={styles.joinButton}
+        activeOpacity={0.8}
+        onPress={() => router.push("/login")}
+      >
+        <Text style={styles.joinButtonText}>Start</Text>
+      </TouchableOpacity>
+    </Screen>
+  );
+}
 
 export default Main;
