@@ -2,7 +2,7 @@
 // de parsed-picks (extraído de app/(tabs)/parsed-picks.tsx en Fase D).
 // Lógica pura: traduce ProvidersStatus (marcas del backend) a las
 // filas que renderizan las cards.
-import { ProvidersStatus } from "@/src/api/system.api";
+import { ProvidersStatus } from "@/src/types/system.types";
 
 export type Bloqueo = {
   cooldownHasta: string | null;

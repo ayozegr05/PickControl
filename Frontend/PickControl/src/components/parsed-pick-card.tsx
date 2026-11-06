@@ -10,7 +10,7 @@ import {
   StyleSheet,
   TouchableOpacity,
 } from "react-native";
-import { ParsedPick } from "@/src/api/parsed-picks.api";
+import { ParsedPick } from "@/src/types/parsed-pick.types";
 import {
   formatDateTime as formatDate,
   cleanChannel,

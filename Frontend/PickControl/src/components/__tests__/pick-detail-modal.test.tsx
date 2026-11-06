@@ -5,7 +5,7 @@
 import React from "react";
 import { render, fireEvent } from "@testing-library/react-native";
 import PickDetailModal from "@/src/components/pick-detail-modal";
-import { PickOdds } from "@/src/api/parsed-picks.api";
+import { PickOdds } from "@/src/types/parsed-pick.types";
 import { PickItem } from "@/src/types/pick.types";
 
 const makePick = (over: Partial<PickItem> = {}): PickItem => ({

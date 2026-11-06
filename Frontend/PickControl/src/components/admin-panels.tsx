@@ -11,8 +11,8 @@ import {
   StyleSheet,
   TouchableOpacity,
 } from "react-native";
-import { ProvidersStatus, PicksStatus } from "@/src/api/system.api";
-import { ParsedPick } from "@/src/api/parsed-picks.api";
+import { ProvidersStatus, PicksStatus } from "@/src/types/system.types";
+import { ParsedPick } from "@/src/types/parsed-pick.types";
 import { ProviderRow, OddsProviderRow } from "@/src/utils/providers";
 import {
   formatDateTime as formatDate,

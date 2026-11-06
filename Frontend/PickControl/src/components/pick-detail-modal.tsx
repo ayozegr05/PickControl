@@ -12,7 +12,7 @@ import {
   View,
 } from "react-native";
 import ModalFrame from "@/src/components/modal-frame";
-import { PickOdds } from "@/src/api/parsed-picks.api";
+import { PickOdds } from "@/src/types/parsed-pick.types";
 import { PickItem } from "@/src/types/pick.types";
 import { formatDateShort } from "@/src/utils/format";
 import { colors } from "@/src/theme";

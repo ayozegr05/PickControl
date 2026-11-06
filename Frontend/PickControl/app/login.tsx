@@ -20,6 +20,7 @@ import { useRouter } from "expo-router";
 import { useAuth } from "@/src/context/AuthContext";
 import { login as loginApi, refresh as refreshApi } from "@/src/api/auth.api";
 import { ApiError } from "@/src/api/client";
+import { LoginPayload } from "@/src/types/user.types";
 import {
   getSecureItem,
   removeSecureItem,
@@ -160,7 +161,7 @@ const LoginScreen = () => {
     }
   };
 
-  const handleLogin = async (values: any) => {
+  const handleLogin = async (values: LoginPayload) => {
     try {
       const data = await loginApi({
         email: values.email,
@@ -174,7 +175,7 @@ const LoginScreen = () => {
       // Hacer login con token y nombre
       await login(data.token, data.user.name, data.user.role);
       router.replace("/");
-    } catch (error: any) {
+    } catch (error: unknown) {
       Alert.alert(
         "Error",
         error instanceof ApiError ? error.message : "Credenciales inválidas"

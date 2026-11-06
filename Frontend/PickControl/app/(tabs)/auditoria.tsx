@@ -11,15 +11,16 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
+import { getAnalisisGlobal } from "@/src/api/analisis.api";
 import {
-  getAnalisisGlobal,
   AnalisisGlobal,
   AnalisisCanal,
   StatsBloque,
   OddsBloque,
-} from "@/src/api/analisis.api";
+} from "@/src/types/analisis.types";
 import { metricColor } from "@/src/theme";
 import { cleanChannel } from "@/src/utils/format";
+import { toErrorMessage } from "@/src/utils/errors";
 import { colors } from "@/src/theme";
 
 function StatsLine({ label, stats }: { label: string; stats: StatsBloque }) {
@@ -84,8 +85,8 @@ export default function AuditoriaScreen() {
     try {
       setData(await getAnalisisGlobal());
       setError(null);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(toErrorMessage(err, "Error desconocido"));
     }
   }, []);
 

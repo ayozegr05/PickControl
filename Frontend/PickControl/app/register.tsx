@@ -19,6 +19,9 @@ import { useRouter } from "expo-router";
 import { useAuth } from "@/src/context/AuthContext";
 import { register } from "@/src/api/auth.api";
 import { ApiError } from "@/src/api/client";
+import { RegisterPayload } from "@/src/types/user.types";
+
+type RegisterFormValues = RegisterPayload & { confirmPassword: string };
 
 const RegisterSchema = Yup.object().shape({
   name: Yup.string().required("El nombre es requerido"),
@@ -36,7 +39,7 @@ const RegisterScreen = () => {
   const { login } = useAuth();
   const insets = useSafeAreaInsets();
 
-  const handleRegister = async (values: any) => {
+  const handleRegister = async (values: RegisterFormValues) => {
     try {
       const data = await register({
         name: values.name,
@@ -58,7 +61,7 @@ const RegisterScreen = () => {
           },
         ]
       );
-    } catch (error: any) {
+    } catch (error: unknown) {
       Alert.alert(
         "Error",
         error instanceof ApiError

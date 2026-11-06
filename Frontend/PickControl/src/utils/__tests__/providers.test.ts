@@ -6,7 +6,7 @@ import {
   buildProviderRows,
   buildOddsProviderRows,
 } from "@/src/utils/providers";
-import { ProvidersStatus } from "@/src/api/system.api";
+import { ProvidersStatus } from "@/src/types/system.types";
 
 const baseStatus = (): ProvidersStatus => ({
   rate_limited: {},

@@ -5,7 +5,7 @@
 import React from "react";
 import { render, fireEvent } from "@testing-library/react-native";
 import ParsedPickCard from "@/src/components/parsed-pick-card";
-import { ParsedPick } from "@/src/api/parsed-picks.api";
+import { ParsedPick } from "@/src/types/parsed-pick.types";
 
 const makePick = (over: Partial<ParsedPick> = {}): ParsedPick => ({
   id: 1,

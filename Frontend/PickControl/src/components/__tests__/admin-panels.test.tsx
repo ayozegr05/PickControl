@@ -10,8 +10,8 @@ import {
   DuplicadosCard,
 } from "@/src/components/admin-panels";
 import { ProviderRow, OddsProviderRow } from "@/src/utils/providers";
-import { ProvidersStatus, PicksStatus } from "@/src/api/system.api";
-import { ParsedPick } from "@/src/api/parsed-picks.api";
+import { ProvidersStatus, PicksStatus } from "@/src/types/system.types";
+import { ParsedPick } from "@/src/types/parsed-pick.types";
 
 const providerRow = (over: Partial<ProviderRow> = {}): ProviderRow => ({
   name: "espn",

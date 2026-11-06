@@ -8,7 +8,7 @@ import {
   StyleSheet,
   TouchableOpacity,
 } from "react-native";
-import { ParsedPick } from "@/src/api/parsed-picks.api";
+import { ParsedPick } from "@/src/types/parsed-pick.types";
 import ParsedPickCard, {
   CorregirUpdate,
 } from "@/src/components/parsed-pick-card";

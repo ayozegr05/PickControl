@@ -6,7 +6,8 @@
 // su useFocusEffect (igual que hoy) para evitar doble fetch en el
 // primer foco.
 import { useCallback, useState } from "react";
-import { getParsedPicks, ParsedPick } from "@/src/api/parsed-picks.api";
+import { getParsedPicks } from "@/src/api/parsed-picks.api";
+import { ParsedPick } from "@/src/types/parsed-pick.types";
 import { listInformantes } from "@/src/api/informantes.api";
 
 export const OVERVIEW_PER_CHANNEL = 2;

@@ -5,10 +5,8 @@
 import React from "react";
 import { render, waitFor, fireEvent } from "@testing-library/react-native";
 import ParsedPicksScreen from "@/app/(tabs)/parsed-picks";
-import {
-  getParsedPicks,
-  ParsedPick,
-} from "@/src/api/parsed-picks.api";
+import { getParsedPicks } from "@/src/api/parsed-picks.api";
+import { ParsedPick } from "@/src/types/parsed-pick.types";
 import { listInformantes } from "@/src/api/informantes.api";
 import {
   getProvidersStatus,

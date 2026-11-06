@@ -16,15 +16,17 @@ import {
   getParsedPicks,
   updateParsedPickAcierto,
   anularResiduoPendiente,
-  ParsedPick,
 } from "@/src/api/parsed-picks.api";
+import { ParsedPick } from "@/src/types/parsed-pick.types";
 import { useAuth } from "@/src/context/AuthContext";
 import {
   getProvidersStatus,
   getPicksStatus,
+} from "@/src/api/system.api";
+import {
   ProvidersStatus,
   PicksStatus,
-} from "@/src/api/system.api";
+} from "@/src/types/system.types";
 import { cleanChannel } from "@/src/utils/format";
 import { useParsedPicks } from "@/src/hooks/useParsedPicks";
 import ParsedPickCard from "@/src/components/parsed-pick-card";
@@ -43,6 +45,7 @@ import {
   buildProviderRows,
   buildOddsProviderRows,
 } from "@/src/utils/providers";
+import { toErrorMessage } from "@/src/utils/errors";
 import { colors } from "@/src/theme";
 
 export default function ParsedPicksScreen() {
@@ -122,8 +125,8 @@ export default function ParsedPicksScreen() {
       const updated = await updateParsedPickAcierto(pick.id, update);
       setOverviewPicks((prev) => applyUpdate(prev, updated));
       setChannelPicks((prev) => applyUpdate(prev, updated));
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(toErrorMessage(err, "Error desconocido"));
     }
   };
 
@@ -137,8 +140,8 @@ export default function ParsedPicksScreen() {
     try {
       await updateParsedPickAcierto(pata.id, update);
       await reload();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(toErrorMessage(err, "Error desconocido"));
     }
   };
 
@@ -156,8 +159,8 @@ export default function ParsedPicksScreen() {
             try {
               await anularResiduoPendiente();
               await reload();
-            } catch (err: any) {
-              setError(err.message);
+            } catch (err: unknown) {
+              setError(toErrorMessage(err, "Error desconocido"));
             }
           },
         },

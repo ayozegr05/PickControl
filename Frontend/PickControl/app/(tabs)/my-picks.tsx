@@ -9,6 +9,8 @@ import {
   TouchableOpacity,
   Modal,
   Alert,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -114,7 +116,9 @@ const MyPicksScreen = () => {
   };
 
   // Manejo de scroll para mostrar/ocultar el TopBar
-  const handleScroll = (event: any) => {
+  const handleScroll = (
+    event: NativeSyntheticEvent<NativeScrollEvent>
+  ) => {
     const currentOffset = event.nativeEvent.contentOffset.y;
 
     if (currentOffset > lastScrollY.current) {

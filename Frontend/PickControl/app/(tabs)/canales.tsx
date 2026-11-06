@@ -23,6 +23,7 @@ import {
   setCanalActivo,
 } from "@/src/api/channels.api";
 import { Canal, CanalDisponible } from "@/src/types/channel.types";
+import { toErrorMessage } from "@/src/utils/errors";
 import { colors } from "@/src/theme";
 
 const Canales = () => {
@@ -43,17 +44,17 @@ const Canales = () => {
     setError(null);
     try {
       setCanales(await listCanales());
-    } catch (err: any) {
-      setError(err.message || "Error cargando canales");
+    } catch (err: unknown) {
+      setError(toErrorMessage(err, "Error cargando canales"));
     } finally {
       setLoading(false);
     }
     try {
       setDisponibles(await listCanalesDisponibles());
       setDisponiblesError(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setDisponibles([]);
-      setDisponiblesError(err.message || "No se pudo listar tus canales");
+      setDisponiblesError(toErrorMessage(err, "No se pudo listar tus canales"));
     }
   }, [isAuthenticated]);
 
@@ -67,8 +68,8 @@ const Canales = () => {
     try {
       const updated = await setCanalActivo(canal.id, activo);
       setCanales((prev) => prev.map((c) => (c.id === canal.id ? updated : c)));
-    } catch (err: any) {
-      Alert.alert("Error", err.message || "No se pudo actualizar el canal");
+    } catch (err: unknown) {
+      Alert.alert("Error", toErrorMessage(err, "No se pudo actualizar el canal"));
     }
   };
 
@@ -92,8 +93,8 @@ const Canales = () => {
               } catch {
                 // Si el listener no responde, se refresca al re-entrar.
               }
-            } catch (err: any) {
-              Alert.alert("Error", err.message || "No se pudo quitar el canal");
+            } catch (err: unknown) {
+              Alert.alert("Error", toErrorMessage(err, "No se pudo quitar el canal"));
             }
           },
         },
@@ -108,8 +109,8 @@ const Canales = () => {
       await addCanal(target.trim());
       setNuevoTarget("");
       await load();
-    } catch (err: any) {
-      Alert.alert("Error", err.message || "No se pudo añadir el canal");
+    } catch (err: unknown) {
+      Alert.alert("Error", toErrorMessage(err, "No se pudo añadir el canal"));
     } finally {
       setAdding(false);
     }

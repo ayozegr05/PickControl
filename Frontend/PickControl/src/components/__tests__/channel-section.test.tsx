@@ -4,7 +4,7 @@
 import React from "react";
 import { render, fireEvent } from "@testing-library/react-native";
 import ChannelSection from "@/src/components/channel-section";
-import { ParsedPick } from "@/src/api/parsed-picks.api";
+import { ParsedPick } from "@/src/types/parsed-pick.types";
 
 const pick = (over: Partial<ParsedPick> = {}): ParsedPick => ({
   id: 7,

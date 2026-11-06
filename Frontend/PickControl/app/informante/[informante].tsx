@@ -15,15 +15,17 @@ import { useLocalSearchParams } from "expo-router"; // Obtener los parámetros d
 import { useRouter } from "expo-router";
 import TopBar from "@/src/components/top-bar";
 import { ErrorState } from "@/src/components/inline-error";
-import DateTimePicker from "@react-native-community/datetimepicker";
+import DateTimePicker, {
+  DateTimePickerEvent,
+} from "@react-native-community/datetimepicker";
 import { useInformanteStats } from "@/src/hooks/useInformanteStats";
 import { deletePick, updatePick } from "@/src/api/picks.api";
 import {
   updateParsedPickAcierto,
   jugarParsedPick,
   getPickOdds,
-  PickOdds,
 } from "@/src/api/parsed-picks.api";
+import { PickOdds } from "@/src/types/parsed-pick.types";
 import { ApiError } from "@/src/api/client";
 import { InformanteStats } from "@/src/types/informante.types";
 import { PickItem, Acierto } from "@/src/types/pick.types";
@@ -414,7 +416,10 @@ export default function InformantDetail() {
     }
   };
 
-  const handleDateChange = async (event: any, selectedDate?: Date) => {
+  const handleDateChange = async (
+    event: DateTimePickerEvent,
+    selectedDate?: Date
+  ) => {
     setShowDatePicker(false);
 
     // Si el evento es 'dismissed' o no hay fecha seleccionada, significa que se canceló
