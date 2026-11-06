@@ -2,10 +2,7 @@
 // resultados/cuotas — quién está sin cuota hoy y misses registrados.
 // Los tipos de dominio viven en src/types/system.types.ts.
 import { apiRequest } from "./client";
-import {
-  PicksStatus,
-  ProvidersStatus,
-} from "@/src/types/system.types";
+import { PicksStatus, ProvidersStatus } from "@/src/types/system.types";
 
 export function getProvidersStatus(): Promise<ProvidersStatus> {
   return apiRequest<ProvidersStatus>("/system/providers", { auth: true });

@@ -50,7 +50,11 @@ export function decodeJwtPayload(
       .map((c) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0"))
       .join("");
     const parsed: unknown = JSON.parse(decodeURIComponent(uriEncoded));
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
       return null;
     }
     return parsed as Record<string, unknown>;

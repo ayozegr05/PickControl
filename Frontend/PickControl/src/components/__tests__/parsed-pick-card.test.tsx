@@ -84,17 +84,20 @@ describe("ParsedPickCard", () => {
     [null, "Pendiente"],
     [true, "Acertó"],
     [false, "Falló"],
-  ])("muestra el resultado correcto (acierto=%s → %s)", async (acierto, texto) => {
-    const props = baseProps();
-    const screen = await render(
-      <ParsedPickCard
-        pick={makePick({ acierto: acierto as boolean | null })}
-        {...props}
-      />
-    );
+  ])(
+    "muestra el resultado correcto (acierto=%s → %s)",
+    async (acierto, texto) => {
+      const props = baseProps();
+      const screen = await render(
+        <ParsedPickCard
+          pick={makePick({ acierto: acierto as boolean | null })}
+          {...props}
+        />
+      );
 
-    expect(screen.getByText(new RegExp(`Resultado:.*${texto}`))).toBeTruthy();
-  });
+      expect(screen.getByText(new RegExp(`Resultado:.*${texto}`))).toBeTruthy();
+    }
+  );
 
   it("anulada con motivo muestra 'Anulada · motivo'", async () => {
     const props = baseProps();

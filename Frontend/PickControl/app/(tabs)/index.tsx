@@ -250,10 +250,7 @@ const Main = () => {
                 <View style={styles.cell}>
                   <Text style={styles.label}>Ganancia</Text>
                   <Text
-                    style={[
-                      styles.value,
-                      { color: metricColor(t.ganancias) },
-                    ]}
+                    style={[styles.value, { color: metricColor(t.ganancias) }]}
                   >
                     {t.ganancias.toFixed(2)}u
                   </Text>

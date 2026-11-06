@@ -31,7 +31,10 @@ describe("parseStoredCredential", () => {
 
     const parsed = parseStoredCredential(raw);
     expect(isLegacyCredential(parsed!)).toBe(true);
-    expect(parsed).toEqual({ email: "ana@example.com", password: "supersecreta" });
+    expect(parsed).toEqual({
+      email: "ana@example.com",
+      password: "supersecreta",
+    });
   });
 
   it("rechaza JSON inválido, null y formas sin los campos mínimos", () => {
@@ -41,7 +44,9 @@ describe("parseStoredCredential", () => {
     // Forma nueva sin token
     expect(parseStoredCredential(JSON.stringify({ userName: "X" }))).toBeNull();
     // Forma legacy sin password (ni email)
-    expect(parseStoredCredential(JSON.stringify({ email: "a@b.c" }))).toBeNull();
+    expect(
+      parseStoredCredential(JSON.stringify({ email: "a@b.c" }))
+    ).toBeNull();
     // Password vacía no vale como credencial legacy
     expect(
       parseStoredCredential(JSON.stringify({ email: "a@b.c", password: "" }))

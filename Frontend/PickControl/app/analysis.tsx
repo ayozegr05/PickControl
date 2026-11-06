@@ -226,7 +226,10 @@ export default function Analysis() {
                       <Text
                         style={[
                           styles.statValue,
-                          { color: stats.roi >= 0 ? colors.success : colors.danger },
+                          {
+                            color:
+                              stats.roi >= 0 ? colors.success : colors.danger,
+                          },
                         ]}
                       >
                         {stats.roi.toFixed(1)}%
@@ -239,7 +242,10 @@ export default function Analysis() {
                         style={[
                           styles.statValue,
                           {
-                            color: stats.tendencia >= 0 ? colors.success : colors.danger,
+                            color:
+                              stats.tendencia >= 0
+                                ? colors.success
+                                : colors.danger,
                           },
                         ]}
                       >

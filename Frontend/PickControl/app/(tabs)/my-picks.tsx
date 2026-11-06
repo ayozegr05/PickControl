@@ -49,7 +49,9 @@ const MyPicksScreen = () => {
   const renderPronostico = (acierto: Acierto) => {
     if (acierto === "True") {
       return (
-        <Text style={[styles.icon, { color: colors.success, fontSize: 21 }]}>✅ </Text>
+        <Text style={[styles.icon, { color: colors.success, fontSize: 21 }]}>
+          ✅{" "}
+        </Text>
       );
     } else if (acierto === "False") {
       return <Text style={[styles.icon, { color: colors.danger }]}>❌</Text>;
@@ -231,7 +233,10 @@ const MyPicksScreen = () => {
                   </TouchableOpacity>
                 </View>
                 {informantes.map((informante) => (
-                  <View key={informante} style={[styles.cell, { width: cellWidth }]}>
+                  <View
+                    key={informante}
+                    style={[styles.cell, { width: cellWidth }]}
+                  >
                     <TouchableOpacity
                       onPress={() => handleInformantePress(informante)}
                       style={styles.informanteButton}
@@ -439,7 +444,10 @@ const MyPicksScreen = () => {
                   <Text style={styles.choiceButtonText}>✔️</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.choiceButton, { backgroundColor: colors.danger }]}
+                  style={[
+                    styles.choiceButton,
+                    { backgroundColor: colors.danger },
+                  ]}
                   onPress={() => actualizarApuesta("False")}
                 >
                   <Text style={styles.choiceButtonText}>❌</Text>

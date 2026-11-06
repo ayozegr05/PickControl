@@ -48,9 +48,7 @@ describe("useInformanteStats", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     await rerender({ nombre: "LadyBets" });
-    await waitFor(() =>
-      expect(mockStats).toHaveBeenCalledWith("LadyBets")
-    );
+    await waitFor(() => expect(mockStats).toHaveBeenCalledWith("LadyBets"));
     expect(mockStats).toHaveBeenCalledTimes(2);
   });
 });

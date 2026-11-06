@@ -111,9 +111,7 @@ describe("my-picks screen", () => {
   });
 
   it("el ❓ abre el modal y ✔️ liquida la apuesta vía updatePick", async () => {
-    mockListPicks.mockResolvedValue([
-      makePick({ id: 42, apuesta: "Mi pick" }),
-    ]);
+    mockListPicks.mockResolvedValue([makePick({ id: 42, apuesta: "Mi pick" })]);
     mockUpdatePick.mockResolvedValue(makePick({ id: 42, acierto: "True" }));
 
     const screen = await render(<MyPicksScreen />);
@@ -175,8 +173,6 @@ describe("my-picks screen", () => {
 
     mockListPicks.mockResolvedValue([]);
     await fireEvent.press(screen.getByLabelText("Reintentar"));
-    await waitFor(() =>
-      expect(screen.getByText("Mis Apuestas")).toBeTruthy()
-    );
+    await waitFor(() => expect(screen.getByText("Mis Apuestas")).toBeTruthy());
   });
 });

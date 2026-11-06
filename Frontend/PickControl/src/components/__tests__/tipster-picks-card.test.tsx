@@ -86,10 +86,12 @@ describe("TipsterPicksCard", () => {
     const props = { ...baseProps(), rows: [makePick()] };
     const screen = await render(<TipsterPicksCard {...props} />);
 
-    const findHorizontal = (node: {
-      props?: Record<string, unknown>;
-      children?: (unknown)[] | null;
-    } | null): { props?: Record<string, unknown> } | null => {
+    const findHorizontal = (
+      node: {
+        props?: Record<string, unknown>;
+        children?: unknown[] | null;
+      } | null
+    ): { props?: Record<string, unknown> } | null => {
       if (!node) return null;
       if (node.props?.horizontal === true) return node;
       for (const child of node.children ?? []) {

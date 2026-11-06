@@ -8,10 +8,7 @@ import ParsedPicksScreen from "@/app/(tabs)/parsed-picks";
 import { getParsedPicks } from "@/src/api/parsed-picks.api";
 import { ParsedPick } from "@/src/types/parsed-pick.types";
 import { listInformantes } from "@/src/api/informantes.api";
-import {
-  getProvidersStatus,
-  getPicksStatus,
-} from "@/src/api/system.api";
+import { getProvidersStatus, getPicksStatus } from "@/src/api/system.api";
 
 const mockPush = jest.fn();
 jest.mock("expo-router", () => {
@@ -138,7 +135,9 @@ describe("parsed-picks screen — overview", () => {
     // Chips: "Todos" + cada canal con informante_id.
     expect(screen.getByText("Todos")).toBeTruthy();
     // "Canal A FREE" aparece como chip y como título de sección.
-    expect(screen.getAllByText("Canal A FREE").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("Canal A FREE").length).toBeGreaterThanOrEqual(
+      2
+    );
 
     // Cards del overview: una por pick.
     expect(screen.getByText("Over 2.5 goles")).toBeTruthy();
@@ -158,7 +157,9 @@ describe("parsed-picks screen — overview", () => {
     // "Canal B" existe como título de sección (de listInformantes)…
     expect(screen.getAllByText("Canal B")).toHaveLength(1);
     // …pero su chip NO se renderiza (informanteId null).
-    expect(screen.getByText("Sin picks extraídos con este filtro.")).toBeTruthy();
+    expect(
+      screen.getByText("Sin picks extraídos con este filtro.")
+    ).toBeTruthy();
   });
 });
 
@@ -167,7 +168,9 @@ describe("parsed-picks screen — vista de canal", () => {
     mockGetParsedPicks.mockResolvedValue([makePick()]);
 
     const screen = await render(<ParsedPicksScreen />);
-    await waitFor(() => expect(screen.getAllByText("Canal A FREE").length).toBeGreaterThan(0));
+    await waitFor(() =>
+      expect(screen.getAllByText("Canal A FREE").length).toBeGreaterThan(0)
+    );
 
     const chip = screen.getAllByText("Canal A FREE")[0];
     await fireEvent.press(chip);
@@ -210,11 +213,10 @@ describe("parsed-picks screen — vista de canal", () => {
 describe("parsed-picks screen — panel admin", () => {
   it("isAdmin=true muestra 'Sistema · providers' y la card de duplicadas", async () => {
     mockAuth.isAdmin = true;
-    mockGetParsedPicks.mockImplementation(
-      (q: { soloDuplicados?: boolean }) =>
-        Promise.resolve(
-          q.soloDuplicados ? [makePick({ id: 9, anulada: true })] : [makePick()]
-        )
+    mockGetParsedPicks.mockImplementation((q: { soloDuplicados?: boolean }) =>
+      Promise.resolve(
+        q.soloDuplicados ? [makePick({ id: 9, anulada: true })] : [makePick()]
+      )
     );
     mockProviders.mockResolvedValue({
       rate_limited: {},
@@ -239,9 +241,7 @@ describe("parsed-picks screen — panel admin", () => {
     expect(mockProviders).not.toHaveBeenCalled();
     expect(mockPicksStatus).not.toHaveBeenCalled();
     expect(
-      mockGetParsedPicks.mock.calls.every(
-        (c) => !(c[0] && c[0].soloDuplicados)
-      )
+      mockGetParsedPicks.mock.calls.every((c) => !(c[0] && c[0].soloDuplicados))
     ).toBe(true);
   });
 });

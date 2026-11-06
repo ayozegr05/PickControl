@@ -47,110 +47,109 @@ export default function PickDetailModal({
   return (
     <ModalFrame visible={pick !== null} onClose={onClose}>
       {pick && (
-            <>
-              <Text style={styles.modalTitle}>
-                {pick.apuesta || "(sin nombre)"}
-              </Text>
-              <View style={styles.detailRows}>
-                <Text style={styles.detailRow}>
-                  Resultado:{" "}
-                  {pick.acierto === "True"
-                    ? "Acertó ✅"
-                    : pick.acierto === "False"
-                      ? "Falló ❌"
-                      : "Pendiente ❓"}
-                </Text>
-                {pick.evento ? (
-                  <Text style={styles.detailRow}>Evento: {pick.evento}</Text>
-                ) : null}
-                <Text style={styles.detailRow}>
-                  Mercado: {pick.tipoDeApuesta || "-"}
-                </Text>
-                <Text style={styles.detailRow}>
-                  Cuota:{" "}
-                  {pick.cuota != null ? Number(pick.cuota).toFixed(2) : "—"} ·
-                  Stake:{" "}
-                  {pick.cantidadApostada != null
-                    ? Number(pick.cantidadApostada).toFixed(2)
-                    : "—"}
-                  u
-                </Text>
-                <Text style={styles.detailRow}>
-                  Fecha: {formatDateShort(pick.fecha)}
-                </Text>
-                {pick.casa ? (
-                  <Text style={styles.detailRow}>Casa: {pick.casa}</Text>
-                ) : null}
-              </View>
+        <>
+          <Text style={styles.modalTitle}>
+            {pick.apuesta || "(sin nombre)"}
+          </Text>
+          <View style={styles.detailRows}>
+            <Text style={styles.detailRow}>
+              Resultado:{" "}
+              {pick.acierto === "True"
+                ? "Acertó ✅"
+                : pick.acierto === "False"
+                  ? "Falló ❌"
+                  : "Pendiente ❓"}
+            </Text>
+            {pick.evento ? (
+              <Text style={styles.detailRow}>Evento: {pick.evento}</Text>
+            ) : null}
+            <Text style={styles.detailRow}>
+              Mercado: {pick.tipoDeApuesta || "-"}
+            </Text>
+            <Text style={styles.detailRow}>
+              Cuota: {pick.cuota != null ? Number(pick.cuota).toFixed(2) : "—"}{" "}
+              · Stake:{" "}
+              {pick.cantidadApostada != null
+                ? Number(pick.cantidadApostada).toFixed(2)
+                : "—"}
+              u
+            </Text>
+            <Text style={styles.detailRow}>
+              Fecha: {formatDateShort(pick.fecha)}
+            </Text>
+            {pick.casa ? (
+              <Text style={styles.detailRow}>Casa: {pick.casa}</Text>
+            ) : null}
+          </View>
 
-              {oddsLoading ? (
-                <ActivityIndicator
-                  size="small"
-                  color={colors.primary}
-                  style={{ marginVertical: 8 }}
-                />
-              ) : odds ? (
-                <View style={styles.oddsBox}>
-                  <Text style={styles.oddsTitle}>Cuota de mercado</Text>
-                  {odds.mapeado ? (
-                    <>
-                      <Text style={styles.oddsRow}>
-                        {odds.mercado_api}
-                        {odds.opcion_api ? ` · ${odds.opcion_api}` : ""}
-                        {odds.linea_api ? ` (${odds.linea_api})` : ""}
-                      </Text>
-                      <Text style={styles.oddsRow}>
-                        Tipster {odds.cuota_tipster?.toFixed(2) ?? "-"} ·
-                        Apertura {odds.cuota_apertura?.toFixed(2) ?? "-"} · Al
-                        publicar {odds.cuota_publicacion?.toFixed(2) ?? "-"} ·
-                        Cierre {odds.cuota_cierre?.toFixed(2) ?? "-"}
-                      </Text>
-                      <View style={styles.oddsBadges}>
-                        {odds.cuota_disponible === false && (
-                          <Text style={styles.oddsBadgeInflada}>
-                            ⚠ Cuota inflada
-                          </Text>
-                        )}
-                        {odds.cuota_disponible === true && (
-                          <Text style={styles.oddsBadgeOk}>✓ Cuota real</Text>
-                        )}
-                        {odds.clv_pct !== null && (
-                          <Text
-                            style={
-                              odds.clv_pct >= 0
-                                ? styles.oddsBadgeOk
-                                : styles.oddsBadgeInflada
-                            }
-                          >
-                            CLV {odds.clv_pct > 0 ? "+" : ""}
-                            {odds.clv_pct.toFixed(1)}%
-                          </Text>
-                        )}
-                      </View>
-                    </>
-                  ) : (
-                    <Text style={styles.oddsRowMuted}>
-                      Sin mercado comparable en el proveedor
-                    </Text>
-                  )}
-                </View>
-              ) : null}
-
-              {yaRegistrada ? (
-                <Text style={styles.jugadaText}>
-                  ✓ Ya la tienes registrada en tus apuestas
-                </Text>
-              ) : (
-                <TouchableOpacity
-                  style={styles.jugarButton}
-                  onPress={() => onJugar(pick)}
-                >
-                  <Text style={styles.jugarButtonText}>Yo también la jugué</Text>
-                </TouchableOpacity>
-              )}
-
-              {canCorrect && (
+          {oddsLoading ? (
+            <ActivityIndicator
+              size="small"
+              color={colors.primary}
+              style={{ marginVertical: 8 }}
+            />
+          ) : odds ? (
+            <View style={styles.oddsBox}>
+              <Text style={styles.oddsTitle}>Cuota de mercado</Text>
+              {odds.mapeado ? (
                 <>
+                  <Text style={styles.oddsRow}>
+                    {odds.mercado_api}
+                    {odds.opcion_api ? ` · ${odds.opcion_api}` : ""}
+                    {odds.linea_api ? ` (${odds.linea_api})` : ""}
+                  </Text>
+                  <Text style={styles.oddsRow}>
+                    Tipster {odds.cuota_tipster?.toFixed(2) ?? "-"} · Apertura{" "}
+                    {odds.cuota_apertura?.toFixed(2) ?? "-"} · Al publicar{" "}
+                    {odds.cuota_publicacion?.toFixed(2) ?? "-"} · Cierre{" "}
+                    {odds.cuota_cierre?.toFixed(2) ?? "-"}
+                  </Text>
+                  <View style={styles.oddsBadges}>
+                    {odds.cuota_disponible === false && (
+                      <Text style={styles.oddsBadgeInflada}>
+                        ⚠ Cuota inflada
+                      </Text>
+                    )}
+                    {odds.cuota_disponible === true && (
+                      <Text style={styles.oddsBadgeOk}>✓ Cuota real</Text>
+                    )}
+                    {odds.clv_pct !== null && (
+                      <Text
+                        style={
+                          odds.clv_pct >= 0
+                            ? styles.oddsBadgeOk
+                            : styles.oddsBadgeInflada
+                        }
+                      >
+                        CLV {odds.clv_pct > 0 ? "+" : ""}
+                        {odds.clv_pct.toFixed(1)}%
+                      </Text>
+                    )}
+                  </View>
+                </>
+              ) : (
+                <Text style={styles.oddsRowMuted}>
+                  Sin mercado comparable en el proveedor
+                </Text>
+              )}
+            </View>
+          ) : null}
+
+          {yaRegistrada ? (
+            <Text style={styles.jugadaText}>
+              ✓ Ya la tienes registrada en tus apuestas
+            </Text>
+          ) : (
+            <TouchableOpacity
+              style={styles.jugarButton}
+              onPress={() => onJugar(pick)}
+            >
+              <Text style={styles.jugarButtonText}>Yo también la jugué</Text>
+            </TouchableOpacity>
+          )}
+
+          {canCorrect && (
+            <>
               <Text style={styles.modalText}>Corregir resultado:</Text>
               <View style={styles.detailButtons}>
                 <TouchableOpacity
@@ -176,10 +175,10 @@ export default function PickDetailModal({
                   <Text style={styles.detailButtonText}>Anulada</Text>
                 </TouchableOpacity>
               </View>
-                </>
-              )}
             </>
           )}
+        </>
+      )}
     </ModalFrame>
   );
 }

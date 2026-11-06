@@ -2,12 +2,7 @@
 // app/(tabs)/parsed-picks.tsx en Fase D): cabecera con nombre +
 // "Ver todos →", picks simples y subsecciones Combinadas/Retos.
 import React from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-} from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import { ParsedPick } from "@/src/types/parsed-pick.types";
 import ParsedPickCard, {
   CorregirUpdate,

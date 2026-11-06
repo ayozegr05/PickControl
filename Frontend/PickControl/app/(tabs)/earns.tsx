@@ -165,7 +165,9 @@ const GananciasPage = () => {
               <Animated.Text
                 style={[
                   styles.gananciasText,
-                  { color: totalGanancias >= 0 ? colors.success : colors.danger },
+                  {
+                    color: totalGanancias >= 0 ? colors.success : colors.danger,
+                  },
                 ]}
               >
                 {animatedGanancias} €

@@ -93,7 +93,10 @@ const makeStats = (over: Partial<InformanteStats> = {}): InformanteStats => ({
   porcentajeAciertos: 66.67,
   yieldPct: 12.5,
   apuestas: [],
-  parsedPicks: [makePick({ id: 1 }), makePick({ id: 2, apuesta: "Gana Nadal" })],
+  parsedPicks: [
+    makePick({ id: 1 }),
+    makePick({ id: 2, apuesta: "Gana Nadal" }),
+  ],
   parsedTotalApuestas: 10,
   parsedTotalAciertos: 7,
   parsedGanancias: 8.2,
@@ -118,9 +121,7 @@ describe("[informante] screen", () => {
   it("pide las stats del canal de la ruta y muestra la comparativa", async () => {
     const screen = await render(<InformantDetail />);
 
-    await waitFor(() =>
-      expect(mockGetStats).toHaveBeenCalledWith("Canal A")
-    );
+    await waitFor(() => expect(mockGetStats).toHaveBeenCalledWith("Canal A"));
     expect(screen.getByText("Canal A")).toBeTruthy();
     expect(screen.getByText("Tipster vs. tú")).toBeTruthy();
     expect(screen.getByText("El tipster")).toBeTruthy();
@@ -140,7 +141,15 @@ describe("[informante] screen", () => {
     );
     // Cabeceras de la tabla ("Ganancia" también es label de la
     // comparativa, por eso getAllByText).
-    for (const h of ["Apuesta", "Acierto", "Fecha", "Mercado", "Cuota", "Stake", "Ganancia"]) {
+    for (const h of [
+      "Apuesta",
+      "Acierto",
+      "Fecha",
+      "Mercado",
+      "Cuota",
+      "Stake",
+      "Ganancia",
+    ]) {
       expect(screen.getAllByText(h).length).toBeGreaterThanOrEqual(1);
     }
     expect(screen.getByText("Gana Nadal")).toBeTruthy();

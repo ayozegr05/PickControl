@@ -5,19 +5,11 @@
 // isAdmin y el fetch del estado siguen en la pantalla; la forma de
 // las filas la construye src/utils/providers.ts.
 import React, { useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-} from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import { ProvidersStatus, PicksStatus } from "@/src/types/system.types";
 import { ParsedPick } from "@/src/types/parsed-pick.types";
 import { ProviderRow, OddsProviderRow } from "@/src/utils/providers";
-import {
-  formatDateTime as formatDate,
-  cleanChannel,
-} from "@/src/utils/format";
+import { formatDateTime as formatDate, cleanChannel } from "@/src/utils/format";
 import { colors } from "@/src/theme";
 
 export function ProvidersCard({ rows }: { rows: ProviderRow[] }) {
@@ -260,15 +252,12 @@ export function CuotasCard({
           )}
           {(() => {
             const deudas = [
-              ...Object.entries(
-                status.odds_backfill?.por_fuente ?? {}
-              ).filter(([, n]) => n > 0),
+              ...Object.entries(status.odds_backfill?.por_fuente ?? {}).filter(
+                ([, n]) => n > 0
+              ),
               ...((status.odds_backfill?.llm_pendientes ?? 0) > 0
                 ? ([
-                    [
-                      "llm-odds",
-                      status.odds_backfill?.llm_pendientes ?? 0,
-                    ],
+                    ["llm-odds", status.odds_backfill?.llm_pendientes ?? 0],
                   ] as [string, number][])
                 : []),
             ];
@@ -413,7 +402,9 @@ export function VerificacionCard({
       )}
       {Object.keys(status.rechecks_por_dia ?? {}).length > 0 && (
         <>
-          <Text style={styles.systemSubtitle}>Barrido de anuladas (diario)</Text>
+          <Text style={styles.systemSubtitle}>
+            Barrido de anuladas (diario)
+          </Text>
           {Object.entries(status.rechecks_por_dia ?? {}).map(([dia, r]) => (
             <View key={dia} style={styles.providerRow}>
               <Text style={styles.statSubFlex}>{dia.slice(5)}</Text>

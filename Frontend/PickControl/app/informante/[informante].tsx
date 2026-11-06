@@ -467,7 +467,8 @@ export default function InformantDetail() {
             visible={modalUpdateVisible}
             onClose={() => setModalUpdateVisible(false)}
             onResult={(acierto) => {
-              if (selectedApuesta) actualizarApuesta(selectedApuesta.id, acierto);
+              if (selectedApuesta)
+                actualizarApuesta(selectedApuesta.id, acierto);
             }}
           />
 
@@ -633,7 +634,10 @@ export default function InformantDetail() {
               ? { themeVariant: "light" as const, textColor: colors.primary }
               : {
                   positiveButton: { label: "OK", textColor: colors.primary },
-                  negativeButton: { label: "Cancelar", textColor: colors.primary },
+                  negativeButton: {
+                    label: "Cancelar",
+                    textColor: colors.primary,
+                  },
                 })}
           />
         )}

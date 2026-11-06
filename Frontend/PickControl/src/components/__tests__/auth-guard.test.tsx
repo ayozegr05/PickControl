@@ -43,9 +43,7 @@ describe("AuthGuard", () => {
         <Text>Contenido privado</Text>
       </AuthGuard>
     );
-    expect(screen.getByTestId("redirect").props.children).toBe(
-      "redirect:/"
-    );
+    expect(screen.getByTestId("redirect").props.children).toBe("redirect:/");
     expect(screen.queryByText("Contenido privado")).toBeNull();
   });
 });

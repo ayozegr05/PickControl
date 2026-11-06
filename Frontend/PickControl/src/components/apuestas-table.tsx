@@ -128,7 +128,9 @@ export default function ApuestasTable({
               </View>
               <View style={[styles.tableCell, styles.border]}>
                 <Text style={[styles.cellText, { fontWeight: "bold" }]}>
-                  {apuesta.cuota != null ? Number(apuesta.cuota).toFixed(2) : "—"}
+                  {apuesta.cuota != null
+                    ? Number(apuesta.cuota).toFixed(2)
+                    : "—"}
                 </Text>
               </View>
               <View style={[styles.tableCell, styles.border]}>

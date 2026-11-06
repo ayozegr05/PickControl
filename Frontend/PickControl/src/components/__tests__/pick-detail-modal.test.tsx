@@ -88,7 +88,9 @@ describe("PickDetailModal", () => {
     expect(screen.getByText("Cuota de mercado")).toBeTruthy();
     expect(screen.getByText(/Total de goles · Más de \(2.5\)/)).toBeTruthy();
     expect(
-      screen.getByText(/Tipster 1.90 · Apertura 1.85 · Al publicar 1.88 · Cierre 1.75/)
+      screen.getByText(
+        /Tipster 1.90 · Apertura 1.85 · Al publicar 1.88 · Cierre 1.75/
+      )
     ).toBeTruthy();
     expect(screen.getByText(/✓ Cuota real/)).toBeTruthy();
     expect(screen.getByText(/CLV \+8.5%/)).toBeTruthy();

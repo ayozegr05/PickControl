@@ -55,5 +55,4 @@ describe("earns screen", () => {
     act(() => focusCb());
     expect(mockReload).toHaveBeenCalledTimes(2);
   });
-
 });

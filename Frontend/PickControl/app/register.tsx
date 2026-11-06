@@ -84,106 +84,106 @@ const RegisterScreen = () => {
           contentContainerStyle={{ paddingBottom: 24 }}
           keyboardShouldPersistTaps="handled"
         >
-        <View style={[styles.formContainer, { marginTop: 80 + insets.top }]}>
-          <View style={styles.headerContainer}>
-            <Text style={styles.title}>Crear Cuenta</Text>
-            <Text style={styles.subtitle}>Únete a nuestra comunidad</Text>
-          </View>
+          <View style={[styles.formContainer, { marginTop: 80 + insets.top }]}>
+            <View style={styles.headerContainer}>
+              <Text style={styles.title}>Crear Cuenta</Text>
+              <Text style={styles.subtitle}>Únete a nuestra comunidad</Text>
+            </View>
 
-          <Formik
-            initialValues={{
-              name: "",
-              email: "",
-              password: "",
-              confirmPassword: "",
-            }}
-            validationSchema={RegisterSchema}
-            onSubmit={handleRegister}
-          >
-            {({
-              handleChange,
-              handleSubmit,
-              values,
-              errors,
-              touched,
-              isSubmitting,
-            }) => (
-              <View style={styles.form}>
-                <View style={styles.inputContainer}>
-                  <TextInput
-                    style={styles.input}
-                    onChangeText={handleChange("name")}
-                    value={values.name}
-                    placeholder="Nombre completo"
-                    placeholderTextColor="#95a5a6"
-                  />
-                  {errors.name && touched.name && (
-                    <Text style={styles.errorText}>{errors.name}</Text>
-                  )}
+            <Formik
+              initialValues={{
+                name: "",
+                email: "",
+                password: "",
+                confirmPassword: "",
+              }}
+              validationSchema={RegisterSchema}
+              onSubmit={handleRegister}
+            >
+              {({
+                handleChange,
+                handleSubmit,
+                values,
+                errors,
+                touched,
+                isSubmitting,
+              }) => (
+                <View style={styles.form}>
+                  <View style={styles.inputContainer}>
+                    <TextInput
+                      style={styles.input}
+                      onChangeText={handleChange("name")}
+                      value={values.name}
+                      placeholder="Nombre completo"
+                      placeholderTextColor="#95a5a6"
+                    />
+                    {errors.name && touched.name && (
+                      <Text style={styles.errorText}>{errors.name}</Text>
+                    )}
 
-                  <TextInput
-                    style={styles.input}
-                    onChangeText={handleChange("email")}
-                    value={values.email}
-                    placeholder="Email"
-                    placeholderTextColor="#95a5a6"
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                  />
-                  {errors.email && touched.email && (
-                    <Text style={styles.errorText}>{errors.email}</Text>
-                  )}
+                    <TextInput
+                      style={styles.input}
+                      onChangeText={handleChange("email")}
+                      value={values.email}
+                      placeholder="Email"
+                      placeholderTextColor="#95a5a6"
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                    />
+                    {errors.email && touched.email && (
+                      <Text style={styles.errorText}>{errors.email}</Text>
+                    )}
 
-                  <TextInput
-                    style={styles.input}
-                    onChangeText={handleChange("password")}
-                    value={values.password}
-                    placeholder="Contraseña"
-                    placeholderTextColor="#95a5a6"
-                    secureTextEntry
-                  />
-                  {errors.password && touched.password && (
-                    <Text style={styles.errorText}>{errors.password}</Text>
-                  )}
+                    <TextInput
+                      style={styles.input}
+                      onChangeText={handleChange("password")}
+                      value={values.password}
+                      placeholder="Contraseña"
+                      placeholderTextColor="#95a5a6"
+                      secureTextEntry
+                    />
+                    {errors.password && touched.password && (
+                      <Text style={styles.errorText}>{errors.password}</Text>
+                    )}
 
-                  <TextInput
-                    style={styles.input}
-                    onChangeText={handleChange("confirmPassword")}
-                    value={values.confirmPassword}
-                    placeholder="Confirmar contraseña"
-                    placeholderTextColor="#95a5a6"
-                    secureTextEntry
-                  />
-                  {errors.confirmPassword && touched.confirmPassword && (
-                    <Text style={styles.errorText}>
-                      {errors.confirmPassword}
+                    <TextInput
+                      style={styles.input}
+                      onChangeText={handleChange("confirmPassword")}
+                      value={values.confirmPassword}
+                      placeholder="Confirmar contraseña"
+                      placeholderTextColor="#95a5a6"
+                      secureTextEntry
+                    />
+                    {errors.confirmPassword && touched.confirmPassword && (
+                      <Text style={styles.errorText}>
+                        {errors.confirmPassword}
+                      </Text>
+                    )}
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.button}
+                    onPress={() => handleSubmit()}
+                    disabled={isSubmitting}
+                  >
+                    <Text style={styles.buttonText}>
+                      {isSubmitting ? "Registrando..." : "Registrarse"}
                     </Text>
-                  )}
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.loginLink}
+                    onPress={() => router.push("/login")}
+                  >
+                    <Text style={styles.loginText}>
+                      ¿Ya tienes una cuenta?
+                      <Text style={styles.loginLinkText}> Inicia sesión</Text>
+                    </Text>
+                  </TouchableOpacity>
                 </View>
-
-                <TouchableOpacity
-                  style={styles.button}
-                  onPress={() => handleSubmit()}
-                  disabled={isSubmitting}
-                >
-                  <Text style={styles.buttonText}>
-                    {isSubmitting ? "Registrando..." : "Registrarse"}
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.loginLink}
-                  onPress={() => router.push("/login")}
-                >
-                  <Text style={styles.loginText}>
-                    ¿Ya tienes una cuenta?
-                    <Text style={styles.loginLinkText}> Inicia sesión</Text>
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </Formik>
-        </View>
+              )}
+            </Formik>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </View>

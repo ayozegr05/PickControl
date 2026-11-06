@@ -2,12 +2,7 @@
 // (extraída de app/(tabs)/parsed-picks.tsx en Fase D): "Todos" +
 // un chip por canal con informanteId.
 import React from "react";
-import {
-  ScrollView,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-} from "react-native";
+import { ScrollView, Text, StyleSheet, TouchableOpacity } from "react-native";
 import { colors } from "@/src/theme";
 
 export interface ChannelChip {

@@ -37,18 +37,20 @@ export default function TipsterVsYouCard({
       <View style={styles.compareRow}>
         <Text style={styles.compareLabel}>Yield</Text>
         <Text
-          style={[styles.compareValue, { color: metricColor(tipster.yieldPct) }]}
+          style={[
+            styles.compareValue,
+            { color: metricColor(tipster.yieldPct) },
+          ]}
         >
-          {tipster.totalApuestas > 0
-            ? `${tipster.yieldPct.toFixed(2)}%`
-            : "—"}
+          {tipster.totalApuestas > 0 ? `${tipster.yieldPct.toFixed(2)}%` : "—"}
         </Text>
         <Text
-          style={[styles.compareValue, { color: metricColor(usuario.yieldPct) }]}
+          style={[
+            styles.compareValue,
+            { color: metricColor(usuario.yieldPct) },
+          ]}
         >
-          {usuario.totalApuestas > 0
-            ? `${usuario.yieldPct.toFixed(2)}%`
-            : "—"}
+          {usuario.totalApuestas > 0 ? `${usuario.yieldPct.toFixed(2)}%` : "—"}
         </Text>
       </View>
       <View style={styles.compareRow}>
@@ -82,9 +84,7 @@ export default function TipsterVsYouCard({
             { color: metricColor(tipster.ganancias) },
           ]}
         >
-          {tipster.totalApuestas > 0
-            ? `${tipster.ganancias.toFixed(2)}u`
-            : "—"}
+          {tipster.totalApuestas > 0 ? `${tipster.ganancias.toFixed(2)}u` : "—"}
         </Text>
         <Text
           style={[
@@ -92,9 +92,7 @@ export default function TipsterVsYouCard({
             { color: metricColor(usuario.ganancias) },
           ]}
         >
-          {usuario.totalApuestas > 0
-            ? `${usuario.ganancias.toFixed(2)}€`
-            : "—"}
+          {usuario.totalApuestas > 0 ? `${usuario.ganancias.toFixed(2)}€` : "—"}
         </Text>
       </View>
       <Text style={styles.compareNote}>

@@ -19,14 +19,8 @@ import {
 } from "@/src/api/parsed-picks.api";
 import { ParsedPick } from "@/src/types/parsed-pick.types";
 import { useAuth } from "@/src/context/AuthContext";
-import {
-  getProvidersStatus,
-  getPicksStatus,
-} from "@/src/api/system.api";
-import {
-  ProvidersStatus,
-  PicksStatus,
-} from "@/src/types/system.types";
+import { getProvidersStatus, getPicksStatus } from "@/src/api/system.api";
+import { ProvidersStatus, PicksStatus } from "@/src/types/system.types";
 import { cleanChannel } from "@/src/utils/format";
 import { useParsedPicks } from "@/src/hooks/useParsedPicks";
 import ParsedPickCard from "@/src/components/parsed-pick-card";
@@ -273,92 +267,101 @@ export default function ParsedPicksScreen() {
         onEndReachedThreshold={0.4}
         ListHeaderComponent={
           <>
-        <Text style={styles.title}>Picks extraídos de Telegram</Text>
+            <Text style={styles.title}>Picks extraídos de Telegram</Text>
 
-        <TouchableOpacity
-          style={styles.toggleRow}
-          onPress={toggleShowAll}
-          accessibilityRole="checkbox"
-          accessibilityState={{ checked: showAll }}
-          accessibilityLabel="Ver todos, incluye mensajes descartados por el filtro"
-        >
-          <View style={[styles.checkbox, showAll && styles.checkboxChecked]} />
-          <Text style={styles.toggleLabel}>
-            Ver todos (incluye mensajes descartados por el filtro)
-          </Text>
-        </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.toggleRow}
+              onPress={toggleShowAll}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: showAll }}
+              accessibilityLabel="Ver todos, incluye mensajes descartados por el filtro"
+            >
+              <View
+                style={[styles.checkbox, showAll && styles.checkboxChecked]}
+              />
+              <Text style={styles.toggleLabel}>
+                Ver todos (incluye mensajes descartados por el filtro)
+              </Text>
+            </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.toggleRow}
-          onPress={togglePendientes}
-          accessibilityRole="checkbox"
-          accessibilityState={{ checked: soloPendientes }}
-          accessibilityLabel="Solo pendientes de liquidar"
-        >
-          <View
-            style={[styles.checkbox, soloPendientes && styles.checkboxChecked]}
-          />
-          <Text style={styles.toggleLabel}>Solo pendientes de liquidar</Text>
-        </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.toggleRow}
+              onPress={togglePendientes}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: soloPendientes }}
+              accessibilityLabel="Solo pendientes de liquidar"
+            >
+              <View
+                style={[
+                  styles.checkbox,
+                  soloPendientes && styles.checkboxChecked,
+                ]}
+              />
+              <Text style={styles.toggleLabel}>
+                Solo pendientes de liquidar
+              </Text>
+            </TouchableOpacity>
 
-        {isAdmin && providersStatus !== null && (
-          <ProvidersCard rows={providerRows} />
-        )}
+            {isAdmin && providersStatus !== null && (
+              <ProvidersCard rows={providerRows} />
+            )}
 
-        {isAdmin && providersStatus !== null && (
-          <CuotasCard rows={oddsProviderRows} status={providersStatus} />
-        )}
+            {isAdmin && providersStatus !== null && (
+              <CuotasCard rows={oddsProviderRows} status={providersStatus} />
+            )}
 
-        {isAdmin && picksStatus !== null && (
-          <VerificacionCard
-            status={picksStatus}
-            onAnularResiduo={handleAnularResiduo}
-          />
-        )}
+            {isAdmin && picksStatus !== null && (
+              <VerificacionCard
+                status={picksStatus}
+                onAnularResiduo={handleAnularResiduo}
+              />
+            )}
 
-        {isAdmin && dupPicks.length > 0 && (
-          <DuplicadosCard picks={dupPicks} />
-        )}
+            {isAdmin && dupPicks.length > 0 && (
+              <DuplicadosCard picks={dupPicks} />
+            )}
 
-        {loading && <ActivityIndicator size="large" color={colors.primary} />}
-        {error && <Text style={styles.error}>Error: {error}</Text>}
+            {loading && (
+              <ActivityIndicator size="large" color={colors.primary} />
+            )}
+            {error && <Text style={styles.error}>Error: {error}</Text>}
 
-        {channelGroups.length > 0 && (
-          <ChannelChips
-            groups={channelGroups}
-            selectedId={selectedChannel?.id ?? null}
-            onSelect={selectChannel}
-          />
-        )}
+            {channelGroups.length > 0 && (
+              <ChannelChips
+                groups={channelGroups}
+                selectedId={selectedChannel?.id ?? null}
+                onSelect={selectChannel}
+              />
+            )}
 
-        {selectedChannel === null ? (
-          <>
-            {channelGroups.length === 0 && !loading && (
-              <Text style={styles.emptyText}>
-                Todavía no hay picks extraídos.
+            {selectedChannel === null ? (
+              <>
+                {channelGroups.length === 0 && !loading && (
+                  <Text style={styles.emptyText}>
+                    Todavía no hay picks extraídos.
+                  </Text>
+                )}
+                {channelGroups.map((group) => (
+                  <ChannelSection
+                    key={group.key}
+                    group={group}
+                    cardProps={pickCardProps}
+                    onVerTodos={() =>
+                      group.informanteId !== null &&
+                      selectChannel({
+                        id: group.informanteId,
+                        name: group.name,
+                      })
+                    }
+                  />
+                ))}
+              </>
+            ) : (
+              <Text style={styles.count}>
+                {channelPicks.length} pick{channelPicks.length !== 1 ? "s" : ""}{" "}
+                de {selectedChannel.name}
               </Text>
             )}
-            {channelGroups.map((group) => (
-              <ChannelSection
-                key={group.key}
-                group={group}
-                cardProps={pickCardProps}
-                onVerTodos={() =>
-                  group.informanteId !== null &&
-                  selectChannel({
-                    id: group.informanteId,
-                    name: group.name,
-                  })
-                }
-              />
-            ))}
-          </>
-        ) : (
-          <Text style={styles.count}>
-            {channelPicks.length} pick{channelPicks.length !== 1 ? "s" : ""}{" "}
-            de {selectedChannel.name}
-          </Text>
-        )}
           </>
         }
         ListFooterComponent={

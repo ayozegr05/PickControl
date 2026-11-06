@@ -196,111 +196,111 @@ const LoginScreen = () => {
           contentContainerStyle={{ paddingBottom: 24 }}
           keyboardShouldPersistTaps="handled"
         >
-        <View style={[styles.formContainer, { marginTop: 80 + insets.top }]}>
-          <View style={styles.headerContainer}>
-            <Text style={styles.title}>Bienvenido</Text>
-            <Text style={styles.subtitle}>Inicia sesión para continuar</Text>
-          </View>
+          <View style={[styles.formContainer, { marginTop: 80 + insets.top }]}>
+            <View style={styles.headerContainer}>
+              <Text style={styles.title}>Bienvenido</Text>
+              <Text style={styles.subtitle}>Inicia sesión para continuar</Text>
+            </View>
 
-          {isBiometricSupported && savedCredentials && (
-            <TouchableOpacity
-              style={styles.biometricButton}
-              onPress={handleBiometricAuth}
-            >
-              <MaterialCommunityIcons
-                name="fingerprint"
-                size={30}
-                color={colors.primary}
-              />
-              <Text style={styles.biometricText}>Usar huella dactilar</Text>
-            </TouchableOpacity>
-          )}
-
-          <Formik
-            initialValues={{
-              email: "",
-              password: "",
-            }}
-            validationSchema={LoginSchema}
-            onSubmit={handleLogin}
-          >
-            {({
-              handleChange,
-              handleSubmit,
-              values,
-              errors,
-              touched,
-              isSubmitting,
-            }) => (
-              <View style={styles.form}>
-                <View style={styles.inputContainer}>
-                  <TextInput
-                    style={styles.input}
-                    onChangeText={handleChange("email")}
-                    value={values.email}
-                    placeholder="Email"
-                    placeholderTextColor="#95a5a6"
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                  />
-                  {errors.email && touched.email && (
-                    <Text style={styles.errorText}>{errors.email}</Text>
-                  )}
-
-                  <View style={styles.passwordContainer}>
-                    <TextInput
-                      style={[styles.input, styles.passwordInput]}
-                      onChangeText={handleChange("password")}
-                      value={values.password}
-                      placeholder="Contraseña"
-                      placeholderTextColor="#95a5a6"
-                      secureTextEntry={!showPassword}
-                    />
-                    <TouchableOpacity
-                      style={styles.eyeButton}
-                      onPress={() => setShowPassword((prev) => !prev)}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      accessibilityRole="button"
-                      accessibilityLabel={
-                        showPassword
-                          ? "Ocultar contraseña"
-                          : "Mostrar contraseña"
-                      }
-                    >
-                      <MaterialCommunityIcons
-                        name={showPassword ? "eye-off" : "eye"}
-                        size={22}
-                        color="#95a5a6"
-                      />
-                    </TouchableOpacity>
-                  </View>
-                  {errors.password && touched.password && (
-                    <Text style={styles.errorText}>{errors.password}</Text>
-                  )}
-                </View>
-
-                <TouchableOpacity
-                  style={styles.button}
-                  onPress={() => handleSubmit()}
-                  disabled={isSubmitting}
-                >
-                  <Text style={styles.buttonText}>
-                    {isSubmitting ? "Iniciando sesión..." : "Iniciar Sesión"}
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.registerLink}
-                  onPress={() => router.push("/register")}
-                >
-                  <Text style={styles.registerText}>
-                    ¿No tienes una cuenta?
-                    <Text style={styles.registerLinkText}> Regístrate</Text>
-                  </Text>
-                </TouchableOpacity>
-              </View>
+            {isBiometricSupported && savedCredentials && (
+              <TouchableOpacity
+                style={styles.biometricButton}
+                onPress={handleBiometricAuth}
+              >
+                <MaterialCommunityIcons
+                  name="fingerprint"
+                  size={30}
+                  color={colors.primary}
+                />
+                <Text style={styles.biometricText}>Usar huella dactilar</Text>
+              </TouchableOpacity>
             )}
-          </Formik>
+
+            <Formik
+              initialValues={{
+                email: "",
+                password: "",
+              }}
+              validationSchema={LoginSchema}
+              onSubmit={handleLogin}
+            >
+              {({
+                handleChange,
+                handleSubmit,
+                values,
+                errors,
+                touched,
+                isSubmitting,
+              }) => (
+                <View style={styles.form}>
+                  <View style={styles.inputContainer}>
+                    <TextInput
+                      style={styles.input}
+                      onChangeText={handleChange("email")}
+                      value={values.email}
+                      placeholder="Email"
+                      placeholderTextColor="#95a5a6"
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                    />
+                    {errors.email && touched.email && (
+                      <Text style={styles.errorText}>{errors.email}</Text>
+                    )}
+
+                    <View style={styles.passwordContainer}>
+                      <TextInput
+                        style={[styles.input, styles.passwordInput]}
+                        onChangeText={handleChange("password")}
+                        value={values.password}
+                        placeholder="Contraseña"
+                        placeholderTextColor="#95a5a6"
+                        secureTextEntry={!showPassword}
+                      />
+                      <TouchableOpacity
+                        style={styles.eyeButton}
+                        onPress={() => setShowPassword((prev) => !prev)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        accessibilityRole="button"
+                        accessibilityLabel={
+                          showPassword
+                            ? "Ocultar contraseña"
+                            : "Mostrar contraseña"
+                        }
+                      >
+                        <MaterialCommunityIcons
+                          name={showPassword ? "eye-off" : "eye"}
+                          size={22}
+                          color="#95a5a6"
+                        />
+                      </TouchableOpacity>
+                    </View>
+                    {errors.password && touched.password && (
+                      <Text style={styles.errorText}>{errors.password}</Text>
+                    )}
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.button}
+                    onPress={() => handleSubmit()}
+                    disabled={isSubmitting}
+                  >
+                    <Text style={styles.buttonText}>
+                      {isSubmitting ? "Iniciando sesión..." : "Iniciar Sesión"}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.registerLink}
+                    onPress={() => router.push("/register")}
+                  >
+                    <Text style={styles.registerText}>
+                      ¿No tienes una cuenta?
+                      <Text style={styles.registerLinkText}> Regístrate</Text>
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </Formik>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>

@@ -126,9 +126,7 @@ describe("ProvidersCard", () => {
     );
     expect(s.getByText("espn")).toBeTruthy();
     expect(s.getByText("cooldown")).toBeTruthy();
-    expect(
-      s.getByText(/12\/100 llamadas hoy · 3 no encontrados/)
-    ).toBeTruthy();
+    expect(s.getByText(/12\/100 llamadas hoy · 3 no encontrados/)).toBeTruthy();
   });
 
   it("fila con quota desnuda muestra 'quota hoy'", async () => {
@@ -237,7 +235,9 @@ describe("VerificacionCard", () => {
 
 describe("DuplicadosCard", () => {
   it("colapsada por defecto y expande al pulsar", async () => {
-    const s = await render(<DuplicadosCard picks={[pick(), pick({ id: 8 })]} />);
+    const s = await render(
+      <DuplicadosCard picks={[pick(), pick({ id: 8 })]} />
+    );
     expect(s.getByText("Duplicadas detectadas · 2 ▼")).toBeTruthy();
     expect(s.queryByText(/#7/)).toBeNull();
     await fireEvent.press(s.getByText("Duplicadas detectadas · 2 ▼"));

@@ -7,7 +7,10 @@ import { Platform } from "react-native";
 
 import Constants from "expo-constants";
 
-import { registerDeviceToken, unregisterDeviceToken } from "@/src/api/devices.api";
+import {
+  registerDeviceToken,
+  unregisterDeviceToken,
+} from "@/src/api/devices.api";
 
 type NotificationsModule = typeof import("expo-notifications");
 

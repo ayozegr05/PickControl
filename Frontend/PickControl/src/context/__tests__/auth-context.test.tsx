@@ -59,9 +59,7 @@ describe("AuthContext", () => {
 
   it("isInitializing=true durante checkAuth y false al resolver", async () => {
     let resolve: (v: string | null) => void = () => {};
-    mockGet.mockImplementation(
-      () => new Promise((r) => (resolve = r))
-    );
+    mockGet.mockImplementation(() => new Promise((r) => (resolve = r)));
     const screen = await render(
       <AuthProvider>
         <Probe />

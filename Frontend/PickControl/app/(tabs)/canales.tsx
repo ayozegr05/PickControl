@@ -69,7 +69,10 @@ const Canales = () => {
       const updated = await setCanalActivo(canal.id, activo);
       setCanales((prev) => prev.map((c) => (c.id === canal.id ? updated : c)));
     } catch (err: unknown) {
-      Alert.alert("Error", toErrorMessage(err, "No se pudo actualizar el canal"));
+      Alert.alert(
+        "Error",
+        toErrorMessage(err, "No se pudo actualizar el canal")
+      );
     }
   };
 
@@ -94,7 +97,10 @@ const Canales = () => {
                 // Si el listener no responde, se refresca al re-entrar.
               }
             } catch (err: unknown) {
-              Alert.alert("Error", toErrorMessage(err, "No se pudo quitar el canal"));
+              Alert.alert(
+                "Error",
+                toErrorMessage(err, "No se pudo quitar el canal")
+              );
             }
           },
         },
@@ -167,7 +173,11 @@ const Canales = () => {
                 accessibilityRole="button"
                 accessibilityLabel={`Eliminar canal ${canal.name || canal.target}`}
               >
-                <Ionicons name="trash-outline" size={20} color={colors.danger} />
+                <Ionicons
+                  name="trash-outline"
+                  size={20}
+                  color={colors.danger}
+                />
               </TouchableOpacity>
             </View>
           ))

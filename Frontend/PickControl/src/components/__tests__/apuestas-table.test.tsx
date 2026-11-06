@@ -100,9 +100,7 @@ describe("ApuestasTable", () => {
   it("pendiente muestra ❓ pulsable → onPronostico con la apuesta", async () => {
     const props = baseProps();
     const apuesta = makeApuesta();
-    const screen = await render(
-      <ApuestasTable rows={[apuesta]} {...props} />
-    );
+    const screen = await render(<ApuestasTable rows={[apuesta]} {...props} />);
 
     await fireEvent.press(screen.getByText("❓"));
     expect(props.onPronostico).toHaveBeenCalledWith(apuesta);
@@ -128,9 +126,7 @@ describe("ApuestasTable", () => {
   it("pulsar la fecha avisa con la apuesta (date picker)", async () => {
     const props = baseProps();
     const apuesta = makeApuesta();
-    const screen = await render(
-      <ApuestasTable rows={[apuesta]} {...props} />
-    );
+    const screen = await render(<ApuestasTable rows={[apuesta]} {...props} />);
 
     await fireEvent.press(screen.getByLabelText("Editar fecha"));
     expect(props.onFecha).toHaveBeenCalledWith(apuesta);
@@ -139,9 +135,7 @@ describe("ApuestasTable", () => {
   it("la papelera avisa con la apuesta", async () => {
     const props = baseProps();
     const apuesta = makeApuesta();
-    const screen = await render(
-      <ApuestasTable rows={[apuesta]} {...props} />
-    );
+    const screen = await render(<ApuestasTable rows={[apuesta]} {...props} />);
 
     await fireEvent.press(screen.getByLabelText("Eliminar apuesta"));
     expect(props.onEliminar).toHaveBeenCalledWith(apuesta);

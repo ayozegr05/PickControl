@@ -185,165 +185,165 @@ const AddPick = () => {
           contentContainerStyle={{ paddingBottom: 24 }}
           keyboardShouldPersistTaps="handled"
         >
-        <Text style={styles.text}>Anade tu apuesta</Text>
-        {/* Card que contiene el formulario */}
-        <View style={styles.card}>
-          {/* Campo Apuesta */}
-          <TextInput
-            style={styles.input}
-            placeholder="Apuesta"
-            value={apuesta}
-            onChangeText={setApuesta}
-          />
-
-          {/* Campo Tipo de Apuesta */}
-          <RNPickerSelect
-            onValueChange={(value) => {
-              setTipoDeApuesta(value);
-              if (value === "Doble") {
-                setIsDobleSelected(true);
-                setPrimeraApuestaDoble("");
-                setSegundaApuestaDoble("");
-                setCustomPrimeraApuesta("");
-                setCustomSegundaApuesta("");
-              } else {
-                setIsDobleSelected(false);
-                setPrimeraApuestaDoble("");
-                setSegundaApuestaDoble("");
-                setCustomPrimeraApuesta("");
-                setCustomSegundaApuesta("");
-              }
-            }}
-            items={tiposDeApuesta}
-            style={pickerSelectStyles}
-            value={tipoDeApuesta}
-            placeholder={{ label: "Selecciona tipo de apuesta", value: null }}
-          />
-
-          {tipoDeApuesta === "Otro" && (
+          <Text style={styles.text}>Anade tu apuesta</Text>
+          {/* Card que contiene el formulario */}
+          <View style={styles.card}>
+            {/* Campo Apuesta */}
             <TextInput
               style={styles.input}
-              placeholder="Escribe el tipo de apuesta"
-              value={customPrimeraApuesta}
-              onChangeText={setCustomPrimeraApuesta}
+              placeholder="Apuesta"
+              value={apuesta}
+              onChangeText={setApuesta}
             />
-          )}
 
-          {isDobleSelected && (
-            <>
-              <Text style={[styles.label, { color: "white", marginTop: 10 }]}>
-                Primera apuesta:
-              </Text>
-              <RNPickerSelect
-                onValueChange={setPrimeraApuestaDoble}
-                items={tiposDeApuestaSinDoble}
-                style={pickerSelectStyles}
-
-                value={primeraApuestaDoble}
-                placeholder={{
-                  label: "Selecciona primera apuesta",
-                  value: null,
-                }}
-              />
-              {primeraApuestaDoble === "Otro" && (
-                <TextInput
-                  style={styles.input}
-                  placeholder="Escribe la primera apuesta"
-                  value={customPrimeraApuesta}
-                  onChangeText={setCustomPrimeraApuesta}
-                />
-              )}
-
-              <Text style={[styles.label, { color: "white", marginTop: 10 }]}>
-                Segunda apuesta:
-              </Text>
-              <RNPickerSelect
-                onValueChange={setSegundaApuestaDoble}
-                items={tiposDeApuestaSinDoble}
-                style={pickerSelectStyles}
-                value={segundaApuestaDoble}
-                placeholder={{
-                  label: "Selecciona segunda apuesta",
-                  value: null,
-                }}
-              />
-              {segundaApuestaDoble === "Otro" && (
-                <TextInput
-                  style={styles.input}
-                  placeholder="Escribe la segunda apuesta"
-                  value={customSegundaApuesta}
-                  onChangeText={setCustomSegundaApuesta}
-                />
-              )}
-            </>
-          )}
-
-          {/* Informante Selector */}
-          {loadingInformantes ? (
-            <ActivityIndicator
-              size="small"
-              color={colors.primary}
-              style={{ marginVertical: 10 }}
-            />
-          ) : informantes.length === 0 ? (
-            <Text
-              style={[
-                styles.label,
-                { color: colors.danger, marginVertical: 10 },
-              ]}
-            >
-              No hay tipsters/canales registrados todavía.
-            </Text>
-          ) : (
+            {/* Campo Tipo de Apuesta */}
             <RNPickerSelect
-              onValueChange={(value) => setSelectedInformante(value)}
-              items={informantes}
+              onValueChange={(value) => {
+                setTipoDeApuesta(value);
+                if (value === "Doble") {
+                  setIsDobleSelected(true);
+                  setPrimeraApuestaDoble("");
+                  setSegundaApuestaDoble("");
+                  setCustomPrimeraApuesta("");
+                  setCustomSegundaApuesta("");
+                } else {
+                  setIsDobleSelected(false);
+                  setPrimeraApuestaDoble("");
+                  setSegundaApuestaDoble("");
+                  setCustomPrimeraApuesta("");
+                  setCustomSegundaApuesta("");
+                }
+              }}
+              items={tiposDeApuesta}
               style={pickerSelectStyles}
-              value={selectedInformante}
+              value={tipoDeApuesta}
+              placeholder={{ label: "Selecciona tipo de apuesta", value: null }}
             />
-          )}
 
-          {/* Casa de Apuestas Selector */}
-          <RNPickerSelect
-            onValueChange={(value) => setSelectedCasa(value)}
-            items={casas}
-            style={pickerSelectStyles}
-            value={selectedCasa}
-          />
+            {tipoDeApuesta === "Otro" && (
+              <TextInput
+                style={styles.input}
+                placeholder="Escribe el tipo de apuesta"
+                value={customPrimeraApuesta}
+                onChangeText={setCustomPrimeraApuesta}
+              />
+            )}
 
-          {/* Acierto Selector */}
-          <RNPickerSelect
-            onValueChange={(value) => setAcierto(value)}
-            items={aciertos}
-            style={pickerSelectStyles}
-            value={acierto}
-          />
+            {isDobleSelected && (
+              <>
+                <Text style={[styles.label, { color: "white", marginTop: 10 }]}>
+                  Primera apuesta:
+                </Text>
+                <RNPickerSelect
+                  onValueChange={setPrimeraApuestaDoble}
+                  items={tiposDeApuestaSinDoble}
+                  style={pickerSelectStyles}
 
-          {/* Cantidad Apostada */}
-          <View style={styles.inputContainer}>
+                  value={primeraApuestaDoble}
+                  placeholder={{
+                    label: "Selecciona primera apuesta",
+                    value: null,
+                  }}
+                />
+                {primeraApuestaDoble === "Otro" && (
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Escribe la primera apuesta"
+                    value={customPrimeraApuesta}
+                    onChangeText={setCustomPrimeraApuesta}
+                  />
+                )}
+
+                <Text style={[styles.label, { color: "white", marginTop: 10 }]}>
+                  Segunda apuesta:
+                </Text>
+                <RNPickerSelect
+                  onValueChange={setSegundaApuestaDoble}
+                  items={tiposDeApuestaSinDoble}
+                  style={pickerSelectStyles}
+                  value={segundaApuestaDoble}
+                  placeholder={{
+                    label: "Selecciona segunda apuesta",
+                    value: null,
+                  }}
+                />
+                {segundaApuestaDoble === "Otro" && (
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Escribe la segunda apuesta"
+                    value={customSegundaApuesta}
+                    onChangeText={setCustomSegundaApuesta}
+                  />
+                )}
+              </>
+            )}
+
+            {/* Informante Selector */}
+            {loadingInformantes ? (
+              <ActivityIndicator
+                size="small"
+                color={colors.primary}
+                style={{ marginVertical: 10 }}
+              />
+            ) : informantes.length === 0 ? (
+              <Text
+                style={[
+                  styles.label,
+                  { color: colors.danger, marginVertical: 10 },
+                ]}
+              >
+                No hay tipsters/canales registrados todavía.
+              </Text>
+            ) : (
+              <RNPickerSelect
+                onValueChange={(value) => setSelectedInformante(value)}
+                items={informantes}
+                style={pickerSelectStyles}
+                value={selectedInformante}
+              />
+            )}
+
+            {/* Casa de Apuestas Selector */}
+            <RNPickerSelect
+              onValueChange={(value) => setSelectedCasa(value)}
+              items={casas}
+              style={pickerSelectStyles}
+              value={selectedCasa}
+            />
+
+            {/* Acierto Selector */}
+            <RNPickerSelect
+              onValueChange={(value) => setAcierto(value)}
+              items={aciertos}
+              style={pickerSelectStyles}
+              value={acierto}
+            />
+
+            {/* Cantidad Apostada */}
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={[styles.input, styles.inputWithPrefix]}
+                placeholder="Cantidad Apostada"
+                keyboardType="numeric"
+                value={cantidadApostada}
+                onChangeText={setCantidadApostada}
+              />
+              <Text style={styles.prefix}>€</Text>
+            </View>
+
             <TextInput
-              style={[styles.input, styles.inputWithPrefix]}
-              placeholder="Cantidad Apostada"
+              style={styles.input}
+              placeholder="Cuota"
               keyboardType="numeric"
-              value={cantidadApostada}
-              onChangeText={setCantidadApostada}
+              value={cuota}
+              onChangeText={(text) => setCuota(text)}
             />
-            <Text style={styles.prefix}>€</Text>
+
+            {/* Botón de Enviar Apuesta con TouchableOpacity */}
+            <TouchableOpacity style={styles.button} onPress={handleSubmit}>
+              <Text style={styles.buttonText}>Enviar Apuesta</Text>
+            </TouchableOpacity>
           </View>
-
-          <TextInput
-            style={styles.input}
-            placeholder="Cuota"
-            keyboardType="numeric"
-            value={cuota}
-            onChangeText={(text) => setCuota(text)}
-          />
-
-          {/* Botón de Enviar Apuesta con TouchableOpacity */}
-          <TouchableOpacity style={styles.button} onPress={handleSubmit}>
-            <Text style={styles.buttonText}>Enviar Apuesta</Text>
-          </TouchableOpacity>
-        </View>
         </ScrollView>
       </KeyboardAvoidingView>
 

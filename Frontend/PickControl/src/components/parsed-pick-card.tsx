@@ -4,17 +4,9 @@
 // combinada con corrección por pata. La lógica de negocio (qué PATCH
 // enviar y qué recargar) sigue en la pantalla vía callbacks.
 import React from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-} from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import { ParsedPick } from "@/src/types/parsed-pick.types";
-import {
-  formatDateTime as formatDate,
-  cleanChannel,
-} from "@/src/utils/format";
+import { formatDateTime as formatDate, cleanChannel } from "@/src/utils/format";
 import { colors } from "@/src/theme";
 
 export type CorregirUpdate = {
@@ -176,45 +168,45 @@ export default function ParsedPickCard({
           )}
 
           {canCorrect && (
-          <View style={styles.acertoButtons}>
-            <TouchableOpacity
-              style={[styles.acertoButton, styles.acertoButtonTrue]}
-              onPress={() => onCorregir(pick, { acierto: true })}
-              accessibilityRole="button"
-              accessibilityLabel="Marcar pick como acertado"
-            >
-              <Text style={styles.acertoButtonText}>Acertó</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.acertoButton, styles.acertoButtonFalse]}
-              onPress={() => onCorregir(pick, { acierto: false })}
-              accessibilityRole="button"
-              accessibilityLabel="Marcar pick como fallado"
-            >
-              <Text style={styles.acertoButtonText}>Falló</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.acertoButton, styles.acertoButtonAnulada]}
-              onPress={() => onCorregir(pick, { anulada: true })}
-              accessibilityRole="button"
-              accessibilityLabel="Marcar pick como anulado"
-            >
-              <Text style={styles.acertoButtonText}>Anulada</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.acertoButton, styles.acertoButtonPending]}
-              onPress={() =>
-                onCorregir(pick, {
-                  acierto: null,
-                  anulada: false,
-                })
-              }
-              accessibilityRole="button"
-              accessibilityLabel="Marcar pick como pendiente"
-            >
-              <Text style={styles.acertoButtonText}>Pendiente</Text>
-            </TouchableOpacity>
-          </View>
+            <View style={styles.acertoButtons}>
+              <TouchableOpacity
+                style={[styles.acertoButton, styles.acertoButtonTrue]}
+                onPress={() => onCorregir(pick, { acierto: true })}
+                accessibilityRole="button"
+                accessibilityLabel="Marcar pick como acertado"
+              >
+                <Text style={styles.acertoButtonText}>Acertó</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.acertoButton, styles.acertoButtonFalse]}
+                onPress={() => onCorregir(pick, { acierto: false })}
+                accessibilityRole="button"
+                accessibilityLabel="Marcar pick como fallado"
+              >
+                <Text style={styles.acertoButtonText}>Falló</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.acertoButton, styles.acertoButtonAnulada]}
+                onPress={() => onCorregir(pick, { anulada: true })}
+                accessibilityRole="button"
+                accessibilityLabel="Marcar pick como anulado"
+              >
+                <Text style={styles.acertoButtonText}>Anulada</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.acertoButton, styles.acertoButtonPending]}
+                onPress={() =>
+                  onCorregir(pick, {
+                    acierto: null,
+                    anulada: false,
+                  })
+                }
+                accessibilityRole="button"
+                accessibilityLabel="Marcar pick como pendiente"
+              >
+                <Text style={styles.acertoButtonText}>Pendiente</Text>
+              </TouchableOpacity>
+            </View>
           )}
         </View>
       )}

@@ -1,11 +1,6 @@
 // TopBar.tsx
 import React, { useState, useEffect } from "react";
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-} from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
@@ -97,7 +92,10 @@ const TopBar = () => {
                 <Text
                   style={[
                     styles.subText,
-                    { color: gananciasTotal >= 0 ? colors.success : colors.danger },
+                    {
+                      color:
+                        gananciasTotal >= 0 ? colors.success : colors.danger,
+                    },
                   ]}
                 >
                   {gananciasTotal.toFixed(2)}€

@@ -47,9 +47,9 @@ describe("redirectTarget", () => {
 
     it("expulsa a la landing desde pantallas sueltas protegidas", () => {
       expect(redirectTarget(["analysis"], auth(false))).toBe("/");
-      expect(
-        redirectTarget(["informante", "[informante]"], auth(false))
-      ).toBe("/");
+      expect(redirectTarget(["informante", "[informante]"], auth(false))).toBe(
+        "/"
+      );
     });
   });
 
