@@ -176,15 +176,17 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   (`metricColor`/`nivelRiesgo`/agregaciones), `providers.ts`; hooks
   `useApiData`/`usePicks`/`useInformantes`/`useInformanteStats`/
   `useParsedPicks` en `src/hooks/` — todas las pantallas cableadas.
-- [ ] 🟡 **Dead code** (parcialmente resuelto 2026-11): quitados
-  `calcularGananciaAcumulada`/`agruparDatos`/`screenWidth`/`Dimensions`
-  y los estilos de chart de `[informante]` (el LineChart ya no
-  existía en el JSX), `renderPronostico`, ~90 estilos huérfanos de
-  los dos monstruos y el `console.log` de render de my-picks.
-  Quedan: `index.js` raíz, `scrollY`/`visible` en top-bar,
-  `handleScroll`/`showTopBar` en my-picks, estilos copiados de index.
-- [ ] 🟡 **`try/catch` alrededor de JSX** (`index.tsx:71-164`) — no
-  captura errores de render; el `catch` es inalcanzable.
+- [x] ✅ **Dead code** — resuelto en el Bloque 3 (2026-11): además de
+  lo anterior, borrados `index.js` raíz (entry real =
+  `expo-router/entry`), `react-native.config.js` vacío,
+  `scripts/reset-project.js`, el mecanismo muerto de ocultar TopBar
+  (`scrollY`/`visible` en top-bar — `Animated.Value` jamás animado —
+  y `showTopBar`/`handleScroll`/`lastScrollY` en my-picks),
+  `selectedInformante` en analysis, desestructuraciones sin uso en
+  `[informante]`, import `InformanteStats` sin uso.
+- [x] ✅ **`try/catch` alrededor de JSX** (`index.tsx`) — eliminado:
+  crear elementos no renderiza hijos, el `catch` era inalcanzable;
+  quitada también la UI de fallback muerta.
 - [ ] 🟡 `console.log` de debug → **0** (quitados los ~7 de render/
   handlers; `console.error`/`warn` en catches se quedan — son
   diagnóstico). También quitadas 11 deps sin uso: `dotlottie-react`,
@@ -234,23 +236,23 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
 
 ## 4. Dependencias / configuración
 
-- [ ] 🟡 **Sin uso** (verificado por grep): `dotenv`+`expo-dotenv`+
-  `expo-env` (las 3; Expo carga `.env` nativo), `victory-native`
-  (solo la usa piechart muerto), `numeral`, `prop-types`,
-  `@lottiefiles/dotlottie-react`, `react-native-webview`, `expo-blur`,
-  `expo-haptics`, `expo-symbols`, `expo-system-ui`, `expo-web-browser`,
-  `expo-font` (plugin + ttf sin `useFonts`), `@types/yup` (yup 1.x trae
-  tipos), `expo-build-tools` (tercero sin referencias).
+- [x] ✅ **Deps sin uso** — resuelto en el Bloque 3 (2026-11): quitados
+  `expo-system-ui`, `expo-web-browser`, `expo-font` (+ ttf sin
+  `useFonts`), `expo-build-tools`, `test-renderer` (duplicaba
+  `react-test-renderer`) y `@react-native-picker/picker` (0 usos —
+  el picker vivo es `react-native-picker-select`).
 - [ ] 🟡 **`google-services.json` referenciado en `app.json:21` pero
   fuera del repo** (ni en `.gitignore`) → build con FCM depende de un
   archivo invisible. Documentar o mover a EAS secrets.
-- [ ] 🟡 **`npm run lint` probablemente no aplica config**: `.eslintrc.json`
-  legacy vs flat config esperada por `expo lint`; `react-hooks` en
-  plugins pero sin reglas activadas (`rules-of-hooks`/`exhaustive-deps`
-  no se evalúan).
-- [ ] 🟡 `metro.config.js` monkey-patchea `util.styleText` sin comentario.
-- [ ] 🟡 `react-native.config.js` vacío; `scripts/reset-project.js` y
-  README boilerplate de create-expo-app.
+- [x] ✅ **`npm run lint` no aplicaba config** — FALSO POSITIVO
+  (verificado en Bloque 3): eslint 8.57 lee `.eslintrc.json` legacy
+  correctamente; `expo lint` reporta warnings reales (se usó para
+  cazar 9 restos de dead code). La nota de "flat config" aplica solo
+  si se sube a eslint 9.
+- [x] ✅ `metro.config.js` monkey-patch — documentado (workaround de
+  `util.styleText` con array de formatos en Node ≥20 para @expo/cli).
+- [x] ✅ `react-native.config.js` vacío y `scripts/reset-project.js` —
+  borrados (Bloque 3). README boilerplate pendiente de reescritura.
 - [ ] 🔵 Verificar `typescript ~6.0.3` contra el template Expo.
 
 ## 5. Tests

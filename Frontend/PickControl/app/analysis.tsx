@@ -32,7 +32,6 @@ interface Apuesta {
 export default function Analysis() {
   const [apuestas, setApuestas] = useState<Apuesta[]>([]);
   const [informantes, setInformantes] = useState<string[]>([]);
-  const [selectedInformante, setSelectedInformante] = useState<string>("");
   const [inversionDiaria, setInversionDiaria] = useState("10");
   const [apuestasPorDia, setApuestasPorDia] = useState("1");
   const [pendientes, setPendientes] = useState(0);

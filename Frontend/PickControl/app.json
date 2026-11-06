@@ -38,9 +38,7 @@
       ],
       "expo-asset",
       "@react-native-community/datetimepicker",
-      "expo-font",
       "expo-status-bar",
-      "expo-web-browser",
       "expo-video",
       "expo-notifications",
       "expo-secure-store"

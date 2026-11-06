@@ -5,7 +5,6 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  Animated,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -20,8 +19,6 @@ import { colors } from "@/src/theme";
 const BAR_HEIGHT = 60;
 
 const TopBar = () => {
-  const [scrollY] = useState(new Animated.Value(0));
-  const [visible, setVisible] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [gananciasTotal, setGananciasTotal] = useState(0);
   const router = useRouter();
@@ -52,21 +49,6 @@ const TopBar = () => {
     }
   }, [isAuthenticated]);
 
-  useEffect(() => {
-    const scrollListener = scrollY.addListener(({ value }) => {
-      if (value > 50 && visible) {
-        setVisible(false);
-      }
-      if (value < -50 && !visible) {
-        setVisible(true);
-      }
-    });
-
-    return () => {
-      scrollY.removeListener(scrollListener);
-    };
-  }, [scrollY, visible]);
-
   const toggleMenu = () => {
     setMenuOpen(!menuOpen);
   };
@@ -94,12 +76,12 @@ const TopBar = () => {
   };
 
   return (
-    <Animated.View
+    <View
       style={[
         styles.topBar,
         {
           paddingTop: insets.top,
-          height: (visible ? BAR_HEIGHT : 0) + insets.top,
+          height: BAR_HEIGHT + insets.top,
         },
       ]}
     >
@@ -170,7 +152,7 @@ const TopBar = () => {
           ) : null}
         </View>
       )}
-    </Animated.View>
+    </View>
   );
 };
 

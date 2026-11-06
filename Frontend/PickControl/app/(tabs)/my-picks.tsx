@@ -9,8 +9,6 @@ import {
   TouchableOpacity,
   Modal,
   Alert,
-  NativeScrollEvent,
-  NativeSyntheticEvent,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -40,8 +38,6 @@ const MyPicksScreen = () => {
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedApuesta, setSelectedApuesta] = useState<PickItem | null>(null);
   const [ranking, setRanking] = useState<RankingItem[]>([]); // Estado para el ranking
-  const [showTopBar, setShowTopBar] = useState(true); // Estado para controlar la visibilidad de TopBar
-  const lastScrollY = useRef(0); // Para guardar la última posición de scroll
   const scrollViewRef = useRef<ScrollView>(null); // Referencia para el ScrollView
 
   const router = useRouter();
@@ -113,23 +109,6 @@ const MyPicksScreen = () => {
     } catch (error) {
       console.error("Error al actualizar la apuesta:", error);
     }
-  };
-
-  // Manejo de scroll para mostrar/ocultar el TopBar
-  const handleScroll = (
-    event: NativeSyntheticEvent<NativeScrollEvent>
-  ) => {
-    const currentOffset = event.nativeEvent.contentOffset.y;
-
-    if (currentOffset > lastScrollY.current) {
-      // Si estamos desplazándonos hacia arriba
-      setShowTopBar(true);
-    } else if (currentOffset < lastScrollY.current && currentOffset > 50) {
-      // Si estamos desplazándonos hacia abajo
-      setShowTopBar(false);
-    }
-
-    lastScrollY.current = currentOffset; // Actualizamos la posición del scroll
   };
 
   const filtrarApuestas = (periodo: "semana" | "mes" | "todo") => {
@@ -227,8 +206,6 @@ const MyPicksScreen = () => {
               }
             : null,
         ]}
-        onScroll={handleScroll}
-        scrollEventThrottle={16}
       >
         {/* Tabla de pronósticos */}
         <View style={[styles.cardContainer, { marginTop: 80 + insets.top }]}>

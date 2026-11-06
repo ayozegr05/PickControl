@@ -3,7 +3,7 @@
 // canal + filtros showAll/soloPendientes que van al backend.
 // El hook NO auto-fetchea: la pantalla dispara reload() desde su
 // useFocusEffect (como hace hoy), así no hay doble fetch al montar.
-import { renderHook, waitFor, act } from "@testing-library/react-native";
+import { renderHook, act } from "@testing-library/react-native";
 import { getParsedPicks } from "@/src/api/parsed-picks.api";
 import { listInformantes } from "@/src/api/informantes.api";
 import { useParsedPicks } from "../useParsedPicks";

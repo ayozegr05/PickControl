@@ -27,7 +27,6 @@ import {
 } from "@/src/api/parsed-picks.api";
 import { PickOdds } from "@/src/types/parsed-pick.types";
 import { ApiError } from "@/src/api/client";
-import { InformanteStats } from "@/src/types/informante.types";
 import { PickItem, Acierto } from "@/src/types/pick.types";
 import { gananciaApuesta } from "@/src/utils/picks";
 import PickDetailModal from "@/src/components/pick-detail-modal";
@@ -127,13 +126,7 @@ export default function InformantDetail() {
 
   useEffect(() => {
     if (data) {
-      const {
-        totalApuestas,
-        totalAciertos,
-        porcentajeAciertos,
-        apuestas: apuestasData,
-      } = data;
-      setApuestas(apuestasData);
+      setApuestas(data.apuestas);
     }
   }, [data]);
 
@@ -218,12 +211,7 @@ export default function InformantDetail() {
   }
 
   // Extraemos los datos de la respuesta
-  const {
-    totalApuestas,
-    totalAciertos,
-    porcentajeAciertos,
-    apuestas: apuestasData,
-  } = data;
+  const { totalApuestas, totalAciertos, porcentajeAciertos } = data;
 
   // Picks de Telegram: solo lectura, sin tocar el modal de edición.
   // Anulada (void) es un estado cerrado distinto de pendiente: los

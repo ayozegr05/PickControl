@@ -73,100 +73,88 @@ const Main = () => {
   }
 
   if (!isAuthenticated) {
-    try {
-      return (
-        <View style={[styles.container, { paddingHorizontal: 0 }]}>
-          <TopBar />
-          <VideoView
-            player={introVideoPlayer}
-            style={styles.video}
-            contentFit="cover"
-            nativeControls={false}
-          />
-          <View style={styles.overlay} />
+    return (
+      <View style={[styles.container, { paddingHorizontal: 0 }]}>
+        <TopBar />
+        <VideoView
+          player={introVideoPlayer}
+          style={styles.video}
+          contentFit="cover"
+          nativeControls={false}
+        />
+        <View style={styles.overlay} />
 
-          {/* Grid de características */}
-          <View style={styles.featuresSection}>
-            <View style={styles.titleContainer}>
+        {/* Grid de características */}
+        <View style={styles.featuresSection}>
+          <View style={styles.titleContainer}>
+            <MaterialCommunityIcons
+              name="crown"
+              size={40}
+              color={colors.primary}
+              style={styles.titleIcon}
+            />
+            <Text style={styles.sectionTitle}>Toma el Control</Text>
+          </View>
+          <View style={styles.featuresGrid}>
+            <View style={styles.featureCard}>
               <MaterialCommunityIcons
-                name="crown"
-                size={40}
+                name="chart-areaspline"
+                size={32}
                 color={colors.primary}
-                style={styles.titleIcon}
               />
-              <Text style={styles.sectionTitle}>Toma el Control</Text>
+              <Text style={styles.featureTitle}>Audita Tipsters</Text>
+              <Text style={styles.featureText}>
+                Extrae sus pronósticos y verifica su rentabilidad real
+              </Text>
             </View>
-            <View style={styles.featuresGrid}>
-              <View style={styles.featureCard}>
-                <MaterialCommunityIcons
-                  name="chart-areaspline"
-                  size={32}
-                  color={colors.primary}
-                />
-                <Text style={styles.featureTitle}>Audita Tipsters</Text>
-                <Text style={styles.featureText}>
-                  Extrae sus pronósticos y verifica su rentabilidad real
-                </Text>
-              </View>
 
-              <View style={styles.featureCard}>
-                <MaterialCommunityIcons
-                  name="account-group"
-                  size={32}
-                  color={colors.primary}
-                />
-                <Text style={styles.featureTitle}>Ranking Verificado</Text>
-                <Text style={styles.featureText}>
-                  Yield y aciertos comprobados por canal
-                </Text>
-              </View>
+            <View style={styles.featureCard}>
+              <MaterialCommunityIcons
+                name="account-group"
+                size={32}
+                color={colors.primary}
+              />
+              <Text style={styles.featureTitle}>Ranking Verificado</Text>
+              <Text style={styles.featureText}>
+                Yield y aciertos comprobados por canal
+              </Text>
+            </View>
 
-              <View style={styles.featureCard}>
-                <MaterialCommunityIcons
-                  name="bell-alert"
-                  size={32}
-                  color={colors.primary}
-                />
-                <Text style={styles.featureTitle}>Tu Banco Real</Text>
-                <Text style={styles.featureText}>
-                  Registra tus apuestas y compara contra el tipster
-                </Text>
-              </View>
+            <View style={styles.featureCard}>
+              <MaterialCommunityIcons
+                name="bell-alert"
+                size={32}
+                color={colors.primary}
+              />
+              <Text style={styles.featureTitle}>Tu Banco Real</Text>
+              <Text style={styles.featureText}>
+                Registra tus apuestas y compara contra el tipster
+              </Text>
+            </View>
 
-              <View style={styles.featureCard}>
-                <MaterialCommunityIcons
-                  name="wallet"
-                  size={32}
-                  color={colors.primary}
-                />
-                <Text style={styles.featureTitle}>Gestión de Bankroll</Text>
-                <Text style={styles.featureText}>
-                  Límites automáticos de riesgo por apuesta
-                </Text>
-              </View>
+            <View style={styles.featureCard}>
+              <MaterialCommunityIcons
+                name="wallet"
+                size={32}
+                color={colors.primary}
+              />
+              <Text style={styles.featureTitle}>Gestión de Bankroll</Text>
+              <Text style={styles.featureText}>
+                Límites automáticos de riesgo por apuesta
+              </Text>
             </View>
           </View>
+        </View>
 
-          <TouchableOpacity
-            style={styles.joinButton}
-            activeOpacity={0.8}
-            onPress={() => router.push("/login")}
-          >
-            <Text style={styles.joinButtonText}>Start</Text>
-          </TouchableOpacity>
-        </View>
-      );
-    } catch (error) {
-      console.error("Error al cargar el recurso del video:", error);
-      return (
-        <View style={[styles.container, { paddingHorizontal: 0 }]}>
-          <TopBar />
-          <View style={styles.videoContainer}>
-            <Text style={{ color: "white" }}>Error al cargar el video</Text>
-          </View>
-        </View>
-      );
-    }
+        <TouchableOpacity
+          style={styles.joinButton}
+          activeOpacity={0.8}
+          onPress={() => router.push("/login")}
+        >
+          <Text style={styles.joinButtonText}>Start</Text>
+        </TouchableOpacity>
+      </View>
+    );
   }
 
   if (loading) {
