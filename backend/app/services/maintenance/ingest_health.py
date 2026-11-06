@@ -64,7 +64,10 @@ class IngestHealth:
 
     raws_ventana: int
     fotos_sin_ocr: int
-    raws_sin_procesar: int
+    # Total de fotos en la ventana — da magnitud al contador de fallos
+    # ("25 de 44" se lee muy distinto que "25 fotos" a secas).
+    fotos_ventana: int = 0
+    raws_sin_procesar: int = 0
     # Timestamp del raw más reciente (None = BD sin raws: sistema
     # recién instalado, no alerta).
     ultimo_raw: datetime | None = None
@@ -94,6 +97,14 @@ async def check_ingest_health(session) -> IngestHealth:
             )
         )
     ).scalar()
+    fotos_ventana = (
+        await session.exec(
+            select(func.count(TelegramRawMessage.id)).where(
+                TelegramRawMessage.received_at.between(window, settled),
+                TelegramRawMessage.media_path != None,  # noqa: E711
+            )
+        )
+    ).scalar()
     raws_sin_procesar = (
         await session.exec(
             select(func.count(TelegramRawMessage.id)).where(
@@ -108,6 +119,7 @@ async def check_ingest_health(session) -> IngestHealth:
     return IngestHealth(
         raws_ventana=raws_ventana,
         fotos_sin_ocr=fotos_sin_ocr,
+        fotos_ventana=fotos_ventana,
         raws_sin_procesar=raws_sin_procesar,
         ultimo_raw=ultimo_raw,
     )
@@ -133,10 +145,18 @@ def _build_problems(health: IngestHealth) -> list[IngestProblem]:
     el fallo grave (listener)."""
     problems: list[IngestProblem] = []
     if health.fotos_sin_ocr >= _OCR_FAIL_THRESHOLD:
+        pct = (
+            f" ({round(health.fotos_sin_ocr * 100 / health.fotos_ventana)}%)"
+            if health.fotos_ventana
+            else ""
+        )
         problems.append(
             IngestProblem(
                 kind="ocr",
-                title=f"📷 {health.fotos_sin_ocr} fotos sin leer (OCR)",
+                title=(
+                    f"📷 {health.fotos_sin_ocr} de {health.fotos_ventana} "
+                    f"fotos sin leer (OCR){pct}"
+                ),
                 cause=(
                     "Los lectores de imágenes no responden: la cuota "
                     "diaria de Gemini está agotada y/o el respaldo de "

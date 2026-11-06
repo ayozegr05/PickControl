@@ -14,7 +14,8 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
   - `app/services/telegram/` — Telethon (cuenta de usuario): `client.py`,
     `handlers.py` (NewMessage + Album), `catchup.py` (rellena huecos al arrancar),
     `processor.py` (persistencia + dedup), `pick_extractor.py` (pre-filtro →
-    reglas → LLM `gpt-4o-mini`), `ocr.py` (OpenAI vision).
+    reglas → cascada LLM gratis `compat_llm`), `ocr.py` (Gemini vision →
+    visión OpenAI-compatible OpenRouter).
   - `app/services/results/` — verificador de resultados por deporte:
     ESPN (`espn.py`, gratis sin key) va PRIMERO en los tres deportes —
     fútbol (~46 ligas: marcador FT/HT + stats de equipo + props de
@@ -68,9 +69,10 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     enlaces — `url_context` solo queda como plan B cuando la página de
     resultados es ilegible. Los saltos 2/3 descargan esas páginas
     nosotros y la extracción texto→JSON va PRIMERO por `compat_llm.py`
-    (cascada OpenAI-compatible gratis: Groq `llama-3.3-70b` → Cerebras →
-    OpenRouter `:free`, keys `GROQ_API_KEY`/`CEREBRAS_API_KEY`/
-    `OPENROUTER_API_KEY`, cooldown por endpoint con hint del 429) —
+    (cascada OpenAI-compatible gratis: Groq `gpt-oss-120b` (+ pool de
+    ingesta propio `qwen3.8-27b`) → OpenRouter `:free`, keys
+    `GROQ_API_KEY`/`OPENROUTER_API_KEY`, cooldown por endpoint con
+    hint del 429) —
     Gemini solo extrae cuando toda la cascada está seca. Fases:
     `find_postponed_match` devuelve SOLO estados no jugados
     (cancelled/postponed/walkover) con cita obligatoria; `find_match`
@@ -214,9 +216,9 @@ media en `backend/media/telegram/`.
   al terminar (ver `.windsurfrules`).
 - Windows: cuidado con CP1252 al imprimir emojis en consola
   (`sys.stdout.reconfigure(encoding='utf-8')`).
-- Los errores 429 de OpenAI (TPM) dejan raws sin OCR — cubierto:
-  `openai_retry.call_with_retry` (backoff largo guiado por el hint
-  "try again in Xs"; `credit_balance_exhausted` no reintenta) y el ciclo
-  de rescate (`maintenance/rescue.py`: `retry_pending_ocr` →
+- Los 429 de los providers OCR/LLM dejan raws sin leer — cubierto por
+  la cascada con cooldown por endpoint (`compat_llm`, visión de `ocr.py`)
+  y el ciclo de rescate (`maintenance/rescue.py`: `retry_pending_ocr` →
   `reprocess_pending_raws` → `retry_incomplete_picks`, cada 6h en
-  `lifecycle.py`, ventana `rescue_max_age_days`).
+  `lifecycle.py`, ventana `rescue_max_age_days`; media sin fichero:
+  `scripts/rescue_missing_media.py`).

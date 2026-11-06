@@ -58,6 +58,7 @@ class TestCheckIngestHealth:
         h = await ih.check_ingest_health(session)
         assert h.raws_ventana == 5
         assert h.fotos_sin_ocr == 2
+        assert h.fotos_ventana == 3
         assert h.raws_sin_procesar == 1
 
     async def test_bd_vacia_ceros(self, session):
@@ -193,11 +194,19 @@ class TestBuildProblems:
     falla, no solo que "la ingesta está caída"."""
 
     def test_fotos_sin_ocr_problema_ocr(self):
-        h = ih.IngestHealth(raws_ventana=44, fotos_sin_ocr=25, raws_sin_procesar=0)
+        h = ih.IngestHealth(
+            raws_ventana=44,
+            fotos_sin_ocr=25,
+            fotos_ventana=44,
+            raws_sin_procesar=0,
+        )
         problems = ih._build_problems(h)
         assert [p.kind for p in problems] == ["ocr"]
         p = problems[0]
         assert "25" in p.title
+        # El % acompaña a la cifra exacta para dar magnitud.
+        assert "44" in p.title
+        assert "57%" in p.title
         # Causa: los lectores de imágenes no responden.
         assert "lector" in p.cause.lower() or "Gemini" in p.cause
         # Impacto honesto: picks que llegan como foto no se interpretan.
