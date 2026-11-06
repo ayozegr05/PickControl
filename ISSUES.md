@@ -238,9 +238,13 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
 
 - [x] ✅ **Deps sin uso** — resuelto en el Bloque 3 (2026-11): quitados
   `expo-system-ui`, `expo-web-browser`, `expo-font` (+ ttf sin
-  `useFonts`), `expo-build-tools`, `test-renderer` (duplicaba
-  `react-test-renderer`) y `@react-native-picker/picker` (0 usos —
-  el picker vivo es `react-native-picker-select`).
+  `useFonts`), `expo-build-tools` y `@react-native-picker/picker`
+  (0 usos — el picker vivo es `react-native-picker-select`).
+  `test-renderer` NO era muerto (RNTL lo importa internamente) —
+  restaurado tras pillarlo `npm ci` limpio. `.npmrc` con
+  `legacy-peer-deps=true`: conflicto estructural de SDK 57
+  (drawer→reanimated 4→worklets 0.13 vs `expo-modules-core`
+  peerOptional ≤0.10) que tumbaba `npm ci` en CI.
 - [ ] 🟡 **`google-services.json` referenciado en `app.json:21` pero
   fuera del repo** (ni en `.gitignore`) → build con FCM depende de un
   archivo invisible. Documentar o mover a EAS secrets.
