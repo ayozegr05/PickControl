@@ -125,15 +125,23 @@ async def crear_apuesta(
     return await _to_pick_read(session, pick)
 
 
-@router.put("/apuesta/{pick_id}", response_model=PickRead)
+@router.put("/apuestas/{pick_id}", response_model=PickRead)
+@router.put(
+    "/apuesta/{pick_id}",
+    response_model=PickRead,
+    deprecated=True,
+    include_in_schema=False,
+)
 async def actualizar_apuesta(
     pick_id: int,
     payload: PickUpdate,
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> PickRead:
-    """Equivalente a `router.put("/apuesta/:id", ...)`. Requiere ser el
-    dueño de la apuesta o admin (ver nota de hardening arriba)."""
+    """PUT /apuestas/{id} canónico (plural como el resto del recurso);
+    /apuesta/{id} queda como alias oculto por compat con clientes
+    antiguos. Requiere ser el dueño de la apuesta o admin (ver nota de
+    hardening arriba)."""
     pick = await session.get(Pick, pick_id)
     if pick is None:
         raise HTTPException(

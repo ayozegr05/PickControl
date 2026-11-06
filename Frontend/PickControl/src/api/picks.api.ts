@@ -93,7 +93,7 @@ export async function updatePick(
   id: number,
   payload: PickUpdatePayload
 ): Promise<PickItem> {
-  const raw = await apiRequest<RawPick>(`/apuesta/${id}`, {
+  const raw = await apiRequest<RawPick>(`/apuestas/${id}`, {
     method: "PUT",
     auth: true,
     body: {

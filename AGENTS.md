@@ -141,6 +141,9 @@ cuenta Telegram dedicada, deploy, backups, cuotas de providers).
     `fivedollar_data/` para re-traducción offline. Ver ROADMAP §5.
 - **Frontend** `Frontend/PickControl/` — Expo + React Native + TypeScript,
   Expo Router (`app/screens/`, `app/dynamic-routes/`), cliente en `src/api/`.
+  `google-services.json` (FCM) es requerido por `app.json` pero está
+  gitignored: vive solo en local — pedirlo al equipo o montarlo como
+  EAS secret en builds de nube.
 
 ## Comandos
 

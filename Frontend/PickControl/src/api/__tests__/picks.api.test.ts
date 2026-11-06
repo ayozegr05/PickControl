@@ -1,6 +1,12 @@
 // Caracterización del mapper snake_case→camelCase de /apuestas:
 // es la frontera backend↔UI y maneja nulls de picks de Telegram.
-import { RawPick, toPickItem } from "../picks.api";
+import { RawPick, toPickItem, updatePick, deletePick } from "../picks.api";
+import { apiRequest } from "../client";
+
+jest.mock("../client", () => ({
+  apiRequest: jest.fn(),
+}));
+const apiRequestMock = apiRequest as jest.MockedFunction<typeof apiRequest>;
 
 // client.ts importa el storage seguro (expo-secure-store / AsyncStorage);
 // el mapper es puro — mockeamos la dependencia nativa.
@@ -66,5 +72,27 @@ describe("toPickItem", () => {
     expect(item.motivoAnulada).toBe("push");
     expect(item.parsedPickId).toBe(7);
     expect(item.ganancia).toBe(15.5);
+  });
+});
+
+describe("endpoints canónicos (plural /apuestas)", () => {
+  beforeEach(() => apiRequestMock.mockReset());
+
+  it("updatePick pega a PUT /apuestas/{id}", async () => {
+    apiRequestMock.mockResolvedValue(rawBase);
+    await updatePick(42, { acierto: "True", fecha: "2026-10-28" });
+    expect(apiRequestMock).toHaveBeenCalledWith(
+      "/apuestas/42",
+      expect.objectContaining({ method: "PUT" })
+    );
+  });
+
+  it("deletePick pega a DELETE /apuestas/{id}", async () => {
+    apiRequestMock.mockResolvedValue(undefined);
+    await deletePick(42);
+    expect(apiRequestMock).toHaveBeenCalledWith(
+      "/apuestas/42",
+      expect.objectContaining({ method: "DELETE" })
+    );
   });
 });

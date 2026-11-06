@@ -2,6 +2,8 @@ import React, { useCallback, useState } from "react";
 import {
   Alert,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
   Switch,
@@ -130,120 +132,129 @@ const Canales = () => {
   return (
     <Screen>
       <TopBar />
-      <ScrollView
-        contentContainerStyle={[
-          styles.scroll,
-          { paddingTop: 80 + insets.top, paddingBottom: 24 },
-        ]}
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <ScreenTitle size={28} style={styles.title}>
-          Canales
-        </ScreenTitle>
-        <ScreenSubtitle size={14} style={styles.subtitle}>
-          Canales de Telegram que el sistema monitoriza para extraer picks.
-          Quitar un canal no borra su historial.
-        </ScreenSubtitle>
+        <ScrollView
+          contentContainerStyle={[
+            styles.scroll,
+            { paddingTop: 80 + insets.top, paddingBottom: 24 },
+          ]}
+          keyboardShouldPersistTaps="handled"
+        >
+          <ScreenTitle size={28} style={styles.title}>
+            Canales
+          </ScreenTitle>
+          <ScreenSubtitle size={14} style={styles.subtitle}>
+            Canales de Telegram que el sistema monitoriza para extraer picks.
+            Quitar un canal no borra su historial.
+          </ScreenSubtitle>
 
-        <Text style={styles.sectionTitle}>Monitorizados</Text>
-        {loading ? (
-          <ActivityIndicator size="large" color={colors.primary} />
-        ) : error ? (
-          <Text style={styles.error}>{error}</Text>
-        ) : canales.length === 0 ? (
-          <Text style={styles.empty}>No hay canales configurados.</Text>
-        ) : (
-          canales.map((canal) => (
-            <Card key={canal.id} style={styles.card}>
-              <View style={styles.cardInfo}>
-                <Text style={styles.cardName}>
-                  {canal.name || canal.target}
-                </Text>
-                <Text style={styles.cardMeta}>
-                  {canal.username
-                    ? `@${canal.username}`
-                    : (canal.channelId ?? canal.target)}
-                </Text>
-              </View>
-              <Switch
-                value={canal.activo}
-                onValueChange={(v) => handleToggle(canal, v)}
-                trackColor={{ false: colors.border, true: colors.primary }}
-                thumbColor={colors.text}
-                accessibilityLabel={`Activar canal ${canal.name || canal.target}`}
-                accessibilityState={{ checked: canal.activo }}
-              />
-              <TouchableOpacity
-                onPress={() => handleDelete(canal)}
-                style={styles.deleteButton}
-                accessibilityRole="button"
-                accessibilityLabel={`Eliminar canal ${canal.name || canal.target}`}
-              >
-                <Ionicons
-                  name="trash-outline"
-                  size={20}
-                  color={colors.danger}
+          <Text style={styles.sectionTitle}>Monitorizados</Text>
+          {loading ? (
+            <ActivityIndicator size="large" color={colors.primary} />
+          ) : error ? (
+            <Text style={styles.error}>{error}</Text>
+          ) : canales.length === 0 ? (
+            <Text style={styles.empty}>No hay canales configurados.</Text>
+          ) : (
+            canales.map((canal) => (
+              <Card key={canal.id} style={styles.card}>
+                <View style={styles.cardInfo}>
+                  <Text style={styles.cardName}>
+                    {canal.name || canal.target}
+                  </Text>
+                  <Text style={styles.cardMeta}>
+                    {canal.username
+                      ? `@${canal.username}`
+                      : (canal.channelId ?? canal.target)}
+                  </Text>
+                </View>
+                <Switch
+                  value={canal.activo}
+                  onValueChange={(v) => handleToggle(canal, v)}
+                  trackColor={{ false: colors.border, true: colors.primary }}
+                  thumbColor={colors.text}
+                  accessibilityLabel={`Activar canal ${canal.name || canal.target}`}
+                  accessibilityState={{ checked: canal.activo }}
                 />
-              </TouchableOpacity>
-            </Card>
-          ))
-        )}
+                <TouchableOpacity
+                  onPress={() => handleDelete(canal)}
+                  style={styles.deleteButton}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Eliminar canal ${canal.name || canal.target}`}
+                >
+                  <Ionicons
+                    name="trash-outline"
+                    size={20}
+                    color={colors.danger}
+                  />
+                </TouchableOpacity>
+              </Card>
+            ))
+          )}
 
-        <Text style={styles.sectionTitle}>Añadir por enlace o id</Text>
-        <View style={styles.addRow}>
-          <TextInput
-            style={styles.input}
-            placeholder="t.me/canal, @canal o id"
-            placeholderTextColor={colors.textMuted}
-            value={nuevoTarget}
-            onChangeText={setNuevoTarget}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <TouchableOpacity
-            style={styles.addButton}
-            onPress={() => handleAdd(nuevoTarget)}
-            disabled={adding || !nuevoTarget.trim()}
-          >
-            {adding ? (
-              <ActivityIndicator size="small" color={colors.text} />
-            ) : (
-              <Ionicons name="add" size={24} color={colors.text} />
-            )}
-          </TouchableOpacity>
-        </View>
+          <Text style={styles.sectionTitle}>Añadir por enlace o id</Text>
+          <View style={styles.addRow}>
+            <TextInput
+              style={styles.input}
+              placeholder="t.me/canal, @canal o id"
+              placeholderTextColor={colors.textMuted}
+              value={nuevoTarget}
+              onChangeText={setNuevoTarget}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity
+              style={styles.addButton}
+              onPress={() => handleAdd(nuevoTarget)}
+              disabled={adding || !nuevoTarget.trim()}
+            >
+              {adding ? (
+                <ActivityIndicator size="small" color={colors.text} />
+              ) : (
+                <Ionicons name="add" size={24} color={colors.text} />
+              )}
+            </TouchableOpacity>
+          </View>
 
-        <Text style={styles.sectionTitle}>Tus canales de Telegram</Text>
-        {disponiblesError ? (
-          <Text style={styles.muted}>{disponiblesError}</Text>
-        ) : noMonitorizados.length === 0 ? (
-          <Text style={styles.muted}>
-            No hay más canales disponibles en tu cuenta.
-          </Text>
-        ) : (
-          noMonitorizados.map((d) => (
-            <Card key={d.channelId} style={styles.card}>
-              <View style={styles.cardInfo}>
-                <Text style={styles.cardName}>{d.name}</Text>
-                <Text style={styles.cardMeta}>
-                  {d.username ? `@${d.username}` : d.channelId}
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={styles.monitorButton}
-                onPress={() => handleAdd(d.username ?? String(d.channelId))}
-                disabled={adding}
-              >
-                <Text style={styles.monitorButtonText}>Monitorizar</Text>
-              </TouchableOpacity>
-            </Card>
-          ))
-        )}
-      </ScrollView>
+          <Text style={styles.sectionTitle}>Tus canales de Telegram</Text>
+          {disponiblesError ? (
+            <Text style={styles.muted}>{disponiblesError}</Text>
+          ) : noMonitorizados.length === 0 ? (
+            <Text style={styles.muted}>
+              No hay más canales disponibles en tu cuenta.
+            </Text>
+          ) : (
+            noMonitorizados.map((d) => (
+              <Card key={d.channelId} style={styles.card}>
+                <View style={styles.cardInfo}>
+                  <Text style={styles.cardName}>{d.name}</Text>
+                  <Text style={styles.cardMeta}>
+                    {d.username ? `@${d.username}` : d.channelId}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.monitorButton}
+                  onPress={() => handleAdd(d.username ?? String(d.channelId))}
+                  disabled={adding}
+                >
+                  <Text style={styles.monitorButtonText}>Monitorizar</Text>
+                </TouchableOpacity>
+              </Card>
+            ))
+          )}
+        </ScrollView>
+      </KeyboardAvoidingView>
     </Screen>
   );
 };
 
 const styles = StyleSheet.create({
+  flex: {
+    flex: 1,
+  },
   scroll: {
     paddingHorizontal: 16,
   },

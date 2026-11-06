@@ -165,6 +165,62 @@ class TestActualizarPick:
         assert response.status_code == 404
 
 
+class TestActualizarPickPlural:
+    """PUT /apuestas/{id} es la forma canónica; /apuesta/{id} queda como
+    alias deprecado por compat con clientes viejos."""
+
+    async def test_actualizar_propia_apuesta_plural(
+        self, client: AsyncClient, auth_headers, crear_canal
+    ):
+        await crear_canal(PICK_CREATE["informante"])
+        create = await client.post(
+            "/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers
+        )
+        pick_id = create.json()["id"]
+
+        update = await client.put(
+            f"/api/v1/apuestas/{pick_id}",
+            json={"acierto": "True"},
+            headers=auth_headers,
+        )
+        assert update.status_code == 200
+        assert update.json()["ganancia"] == 15.0
+
+    async def test_actualizar_apuesta_ajena_prohibido_plural(
+        self, client: AsyncClient, auth_headers, crear_canal
+    ):
+        await crear_canal(PICK_CREATE["informante"])
+        create = await client.post(
+            "/api/v1/apuestas", json=PICK_CREATE, headers=auth_headers
+        )
+        pick_id = create.json()["id"]
+
+        payload_b = {"name": "Otro", "email": "otro@example.com", "password": "otra123"}
+        await client.post("/api/v1/auth/register", json=payload_b)
+        login_b = await client.post(
+            "/api/v1/auth/login",
+            json={"email": payload_b["email"], "password": payload_b["password"]},
+        )
+        headers_b = {"Authorization": f"Bearer {login_b.json()['token']}"}
+
+        update = await client.put(
+            f"/api/v1/apuestas/{pick_id}",
+            json={"acierto": "True"},
+            headers=headers_b,
+        )
+        assert update.status_code == 403
+
+    async def test_actualizar_pick_inexistente_plural(
+        self, client: AsyncClient, auth_headers
+    ):
+        response = await client.put(
+            "/api/v1/apuestas/9999",
+            json={"acierto": "True"},
+            headers=auth_headers,
+        )
+        assert response.status_code == 404
+
+
 class TestEliminarPick:
     async def test_eliminar_propia_apuesta(
         self, client: AsyncClient, auth_headers, crear_canal

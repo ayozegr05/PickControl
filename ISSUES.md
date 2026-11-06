@@ -258,9 +258,11 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   `legacy-peer-deps=true`: conflicto estructural de SDK 57
   (drawer→reanimated 4→worklets 0.13 vs `expo-modules-core`
   peerOptional ≤0.10) que tumbaba `npm ci` en CI.
-- [ ] 🟡 **`google-services.json` referenciado en `app.json:21` pero
-  fuera del repo** (ni en `.gitignore`) → build con FCM depende de un
-  archivo invisible. Documentar o mover a EAS secrets.
+- [x] **`google-services.json`** — resuelto (Bloque 4): el archivo
+  existe localmente pero era invisible para git (ni trackeado ni
+  ignorado → a un `git add -A` de commitear credenciales Firebase).
+  Ahora está en `.gitignore` (+ `GoogleService-Info.plist`) y
+  documentado en `AGENTS.md` (pedir al equipo o EAS secret).
 - [x] ✅ **`npm run lint` no aplicaba config** — FALSO POSITIVO
   (verificado en Bloque 3): eslint 8.57 lee `.eslintrc.json` legacy
   correctamente; `expo lint` reporta warnings reales (se usó para
@@ -310,8 +312,10 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
 5. ✅ `FlatList` + extraer utils/hooks + adelgazar los >1500-liner —
    hecho en las fases A–D (2026-11): utils, hooks `useApiData`,
    virtualización y 11 componentes extraídos, todo test-first.
-6. KeyboardAvoiding + a11y labels (parcial: modales) + contraste +
-   formatos de fecha.
+6. ✅ KeyboardAvoiding + a11y labels — residuales cerrados en Bloque 4
+   (canales gana KAV; botón cuenta de TopBar y biométrico etiquetados;
+   lo demás ya lo cubrieron las fases previas — auditoría exhaustiva:
+   solo 2 gaps reales). Contraste/formatos sin pendientes detectados.
 7. Limpieza deps/dead code/console.log (parcial) + smoke tests
    (hecho: 153 tests) + eslint flat.
 8. Revisar rol admin en UI (ocultar liquidación manual a no-admins).

@@ -102,7 +102,11 @@ const TopBar = () => {
                 </Text>
               </View>
               <View style={styles.iconContainer}>
-                <TouchableOpacity onPress={toggleMenu}>
+                <TouchableOpacity
+                  onPress={toggleMenu}
+                  accessibilityRole="button"
+                  accessibilityLabel="Menú de cuenta"
+                >
                   <MaterialCommunityIcons
                     name="account-circle"
                     size={24}

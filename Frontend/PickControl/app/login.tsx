@@ -212,6 +212,7 @@ const LoginScreen = () => {
               <TouchableOpacity
                 style={styles.biometricButton}
                 onPress={handleBiometricAuth}
+                accessibilityRole="button"
               >
                 <MaterialCommunityIcons
                   name="fingerprint"
