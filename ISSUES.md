@@ -190,8 +190,10 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   diagnóstico). También quitadas 11 deps sin uso: `dotlottie-react`,
   `@types/yup` (yup 1.x trae tipos), `numeral`, `prop-types`,
   `dotenv`, `expo-dotenv`, `expo-env`, `expo-blur`, `expo-haptics`,
-  `expo-symbols`, `react-native-webview`. Quedan `any`×28 y
-  `as any` en `router.push` pese a `typedRoutes: true`.
+  `expo-symbols`, `react-native-webview`. `any` de producción
+  eliminados (Bloque 1, 2026-11): catches → `unknown` +
+  `toErrorMessage`, handlers tipados (NativeScrollEvent,
+  DateTimePickerEvent, payloads Formik).
 - [x] ✅ **Fetchs sin cancelación** — resuelto en Fase B: `useApiData`
   cancela updates al desmontar y refetchea si cambia el fetcher;
   todas las pantallas lo usan. Además `usePicks`/`useInformantes`
@@ -224,8 +226,11 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   resto → `/`; con sesión, login/register → `/`. La pantalla protegida
   ni se renderiza (cero flash). Queda abierto solo lo cosmético:
   rutas `/screens/…`/`/dynamic-routes/…` feas en URL; `scheme:"myapp"`.
-- [ ] 🔵 Tipos repartidos entre `src/types/` y los `.api.ts`;
-  `PUT /apuesta/{id}` singular vs `/apuestas` plural.
+- [x] ✅ Tipos repartidos entre `src/types/` y los `.api.ts` —
+  resuelto (Bloque 1): tipos de dominio en `src/types/`
+  (`parsed-pick`, `analisis`, `system`); en `.api.ts` solo payloads
+  de request y wire types. Queda `PUT /apuesta/{id}` singular vs
+  `/apuestas` plural.
 
 ## 4. Dependencias / configuración
 
