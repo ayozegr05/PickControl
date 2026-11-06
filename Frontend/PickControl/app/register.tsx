@@ -1,9 +1,11 @@
 import React from "react";
 import { colors } from "@/src/theme";
+import { Screen } from "@/src/components/screen";
+import { ScreenTitle, ScreenSubtitle } from "@/src/components/typography";
+import { FormInput } from "@/src/components/form-input";
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
@@ -73,7 +75,7 @@ const RegisterScreen = () => {
   };
 
   return (
-    <View style={styles.container}>
+    <Screen>
       <TopBar />
       <KeyboardAvoidingView
         style={styles.flex}
@@ -86,8 +88,12 @@ const RegisterScreen = () => {
         >
           <View style={[styles.formContainer, { marginTop: 80 + insets.top }]}>
             <View style={styles.headerContainer}>
-              <Text style={styles.title}>Crear Cuenta</Text>
-              <Text style={styles.subtitle}>Únete a nuestra comunidad</Text>
+              <ScreenTitle size={28} style={styles.title}>
+                Crear Cuenta
+              </ScreenTitle>
+              <ScreenSubtitle size={16} style={styles.subtitle}>
+                Únete a nuestra comunidad
+              </ScreenSubtitle>
             </View>
 
             <Formik
@@ -110,8 +116,7 @@ const RegisterScreen = () => {
               }) => (
                 <View style={styles.form}>
                   <View style={styles.inputContainer}>
-                    <TextInput
-                      style={styles.input}
+                    <FormInput
                       onChangeText={handleChange("name")}
                       value={values.name}
                       placeholder="Nombre completo"
@@ -121,8 +126,7 @@ const RegisterScreen = () => {
                       <Text style={styles.errorText}>{errors.name}</Text>
                     )}
 
-                    <TextInput
-                      style={styles.input}
+                    <FormInput
                       onChangeText={handleChange("email")}
                       value={values.email}
                       placeholder="Email"
@@ -134,8 +138,7 @@ const RegisterScreen = () => {
                       <Text style={styles.errorText}>{errors.email}</Text>
                     )}
 
-                    <TextInput
-                      style={styles.input}
+                    <FormInput
                       onChangeText={handleChange("password")}
                       value={values.password}
                       placeholder="Contraseña"
@@ -146,8 +149,7 @@ const RegisterScreen = () => {
                       <Text style={styles.errorText}>{errors.password}</Text>
                     )}
 
-                    <TextInput
-                      style={styles.input}
+                    <FormInput
                       onChangeText={handleChange("confirmPassword")}
                       value={values.confirmPassword}
                       placeholder="Confirmar contraseña"
@@ -186,17 +188,13 @@ const RegisterScreen = () => {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-    </View>
+    </Screen>
   );
 };
 
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
-  },
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
   },
   formContainer: {
     flex: 1,
@@ -221,14 +219,9 @@ const styles = StyleSheet.create({
     marginVertical: 40,
   },
   title: {
-    fontSize: 28,
-    fontWeight: "bold",
-    color: colors.primary,
     marginBottom: 10,
   },
   subtitle: {
-    fontSize: 16,
-    color: colors.textSecondary,
     textAlign: "center",
   },
   form: {
@@ -236,16 +229,6 @@ const styles = StyleSheet.create({
   },
   inputContainer: {
     marginBottom: 20,
-  },
-  input: {
-    backgroundColor: colors.surfaceAlt,
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 15,
-    borderWidth: 1,
-    borderColor: colors.border,
-    fontSize: 16,
-    color: colors.text,
   },
   errorText: {
     color: colors.danger,

@@ -1,5 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { colors } from "@/src/theme";
+import { Screen } from "@/src/components/screen";
+import { ScreenTitle } from "@/src/components/typography";
+import { Card } from "@/src/components/card";
 import {
   View,
   Text,
@@ -194,19 +197,19 @@ export default function InformantDetail() {
   // sin stats.
   if (error && !data) {
     return (
-      <View style={styles.container}>
+      <Screen style={styles.container} tone="black">
         <ErrorState onRetry={reload} />
-      </View>
+      </Screen>
     );
   }
   // Si no hay datos, mostramos un mensaje de error
   if (!data) {
     return (
-      <View style={styles.container}>
+      <Screen style={styles.container} tone="black">
         <Text style={styles.errorText}>
           No se encontraron datos para este informante.
         </Text>
-      </View>
+      </Screen>
     );
   }
 
@@ -441,7 +444,9 @@ export default function InformantDetail() {
         <ScrollView
           contentContainerStyle={[styles.scrollView, { paddingBottom: 24 }]}
         >
-          <Text style={styles.title}>{informante}</Text>
+          <ScreenTitle size={32} style={styles.title}>
+            {informante}
+          </ScreenTitle>
 
           {/* Comparativa: lo que publica el tipster vs tu resultado real */}
           <TipsterVsYouCard
@@ -494,7 +499,7 @@ export default function InformantDetail() {
           />
 
           {/* Tus apuestas manuales siguiendo a este tipster */}
-          <View style={styles.card}>
+          <Card variant="glass">
             <Text style={styles.cardTitle}>Mis apuestas siguiéndolo</Text>
             <Text style={styles.cardSubtitle}>
               Las que has registrado manualmente
@@ -590,7 +595,7 @@ export default function InformantDetail() {
                 onEliminar={handleEliminarPress}
               />
             )}
-          </View>
+          </Card>
         </ScrollView>
 
         <DeletePickModal
@@ -648,8 +653,6 @@ export default function InformantDetail() {
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
-    backgroundColor: colors.black,
     padding: 20,
   },
   scrollView: {
@@ -677,23 +680,9 @@ const styles = StyleSheet.create({
     height: "100%",
   },
   title: {
-    fontSize: 32,
-    fontWeight: "bold",
     marginBottom: 30,
     marginTop: 60,
     textAlign: "center",
-    color: colors.primary,
-  },
-  card: {
-    backgroundColor: "rgba(33, 33, 33, 0.5)",
-    padding: 20,
-    borderRadius: 10,
-    shadowColor: colors.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
-    marginBottom: 20,
   },
   cardTitle: {
     fontSize: 25,

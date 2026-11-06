@@ -6,6 +6,7 @@ import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { metricColor } from "@/src/theme";
 import { colors } from "@/src/theme";
+import { Card } from "@/src/components/card";
 
 export interface ColumnaComparativa {
   yieldPct: number;
@@ -25,7 +26,7 @@ export default function TipsterVsYouCard({
   usuario,
 }: TipsterVsYouCardProps) {
   return (
-    <View style={styles.card}>
+    <Card variant="glass">
       <Text style={[styles.cardTitle, { marginBottom: 12 }]}>
         Tipster vs. tú
       </Text>
@@ -98,22 +99,11 @@ export default function TipsterVsYouCard({
       <Text style={styles.compareNote}>
         El tipster: unidades (u) según su stake · Tú: euros que has apostado
       </Text>
-    </View>
+    </Card>
   );
 }
 
 const styles = StyleSheet.create({
-  card: {
-    backgroundColor: "rgba(33, 33, 33, 0.5)",
-    padding: 20,
-    borderRadius: 10,
-    shadowColor: colors.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
-    marginBottom: 20,
-  },
   cardTitle: {
     fontSize: 25,
     fontWeight: "bold",

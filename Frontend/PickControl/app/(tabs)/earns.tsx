@@ -12,6 +12,8 @@ import {
   totalGanancias as sumarGanancias,
 } from "@/src/utils/picks";
 import { colors } from "@/src/theme";
+import { Screen } from "@/src/components/screen";
+import { ScreenTitle } from "@/src/components/typography";
 
 const GananciasPage = () => {
   const { apuestas, loading: fetching, error, reload } = usePicks();
@@ -125,10 +127,12 @@ const GananciasPage = () => {
   }, [isLoading, dataLoaded, totalGanancias]);
 
   return (
-    <View style={styles.container}>
+    <Screen tone="black">
       <TopBar />
       <View style={[styles.titleContainer, { marginTop: 80 + insets.top }]}>
-        <Text style={styles.title}>Mis Ganancias</Text>
+        <ScreenTitle size={35} style={styles.title}>
+          Mis Ganancias
+        </ScreenTitle>
         <Ionicons
           name="wallet"
           size={35}
@@ -231,15 +235,11 @@ const GananciasPage = () => {
           </>
         )}
       </ScrollView>
-    </View>
+    </Screen>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.black,
-  },
   scrollView: {
     flex: 1,
     paddingHorizontal: 20,
@@ -252,9 +252,6 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   title: {
-    fontSize: 35,
-    fontWeight: "bold",
-    color: colors.primary,
     marginRight: 10,
   },
   titleIcon: {

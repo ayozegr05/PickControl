@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { colors } from "@/src/theme";
+import { Screen } from "@/src/components/screen";
 import {
   Text,
   View,
@@ -187,15 +188,15 @@ const MyPicksScreen = () => {
   // aquí solo queda el estado de error de red.
   if (error && apuestas.length === 0) {
     return (
-      <View style={styles.container}>
+      <Screen>
         <TopBar />
         <ErrorState onRetry={reload} />
-      </View>
+      </Screen>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <Screen>
       <TopBar />
       <ScrollView
         ref={scrollViewRef}
@@ -457,15 +458,11 @@ const MyPicksScreen = () => {
           </View>
         </Modal>
       )}
-    </View>
+    </Screen>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
   botbarContainer: {
     flex: 1,
   },

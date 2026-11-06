@@ -8,6 +8,7 @@ import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import { ParsedPick } from "@/src/types/parsed-pick.types";
 import { formatDateTime as formatDate, cleanChannel } from "@/src/utils/format";
 import { colors } from "@/src/theme";
+import { Card } from "@/src/components/card";
 
 export type CorregirUpdate = {
   acierto?: boolean | null;
@@ -97,7 +98,7 @@ export default function ParsedPickCard({
   );
 
   return (
-    <View style={styles.card}>
+    <Card variant="outlined">
       <Text style={styles.cardTitle}>{pick.apuesta || "Sin apuesta"}</Text>
       <Text style={styles.cardDate}>
         {formatDate(pick.fecha_evento ?? pick.created_at)}
@@ -222,19 +223,11 @@ export default function ParsedPickCard({
           {(pick.patas ?? []).map(renderPataRow)}
         </View>
       )}
-    </View>
+    </Card>
   );
 }
 
 const styles = StyleSheet.create({
-  card: {
-    backgroundColor: colors.background,
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-    borderColor: colors.border,
-    borderWidth: 1,
-  },
   cardTitle: {
     color: colors.text,
     fontSize: 16,

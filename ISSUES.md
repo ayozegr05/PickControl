@@ -172,8 +172,17 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   `warning`/`warningBg`, `successBg`, `dangerBg`, `info`/`infoBg`,
   `purple`/`purpleBg`/`purpleText` (retos/combinadas) y
   `medalGold`/`medalSilver`/`medalBronze`. Textos de botón sobre
-  color saturado unificados a `onPrimary`. Quedan los estilos
-  `container/card/input/title` repetidos (componentes base).
+  color saturado unificados a `onPrimary`.
+- [x] ✅ **Componentes base** — resuelto en Bloque 2b (2026-11):
+  `src/components/screen.tsx` (`<Screen tone>`: flex+`background`/`black`,
+  migradas las 11 pantallas), `card.tsx` (`<Card variant>`:
+  default/glass/alt/outlined + `onPress` opcional — glass idéntico ×3
+  en informante/tipster-cards unificado), `typography.tsx`
+  (`<ScreenTitle size>`/`<ScreenSubtitle size>` — el fontSize heredado
+  varía por pantalla y se parametriza sin cambio visual) y
+  `form-input.tsx` (input de auth de login/register). Los estilos
+  `styles.title`/`card`/etc. que quedan son solo extras locales
+  (márgenes, layout) — el token lo aplica el componente.
 - [x] ✅ **Duplicación de utilidades** — resuelto en Fase A/B
   (2026-11): `src/utils/format.ts` (`cleanChannel`, `formatDate*`),
   `picks.ts` (`gananciaApuesta`, `iconoAnulada`), `estadisticas.ts`

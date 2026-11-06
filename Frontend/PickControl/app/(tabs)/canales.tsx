@@ -25,6 +25,9 @@ import {
 import { Canal, CanalDisponible } from "@/src/types/channel.types";
 import { toErrorMessage } from "@/src/utils/errors";
 import { colors } from "@/src/theme";
+import { Screen } from "@/src/components/screen";
+import { ScreenTitle, ScreenSubtitle } from "@/src/components/typography";
+import { Card } from "@/src/components/card";
 
 const Canales = () => {
   const [canales, setCanales] = useState<Canal[]>([]);
@@ -125,7 +128,7 @@ const Canales = () => {
   const noMonitorizados = disponibles.filter((d) => !d.monitorizado);
 
   return (
-    <View style={styles.container}>
+    <Screen>
       <TopBar />
       <ScrollView
         contentContainerStyle={[
@@ -133,11 +136,13 @@ const Canales = () => {
           { paddingTop: 80 + insets.top, paddingBottom: 24 },
         ]}
       >
-        <Text style={styles.title}>Canales</Text>
-        <Text style={styles.subtitle}>
+        <ScreenTitle size={28} style={styles.title}>
+          Canales
+        </ScreenTitle>
+        <ScreenSubtitle size={14} style={styles.subtitle}>
           Canales de Telegram que el sistema monitoriza para extraer picks.
           Quitar un canal no borra su historial.
-        </Text>
+        </ScreenSubtitle>
 
         <Text style={styles.sectionTitle}>Monitorizados</Text>
         {loading ? (
@@ -148,7 +153,7 @@ const Canales = () => {
           <Text style={styles.empty}>No hay canales configurados.</Text>
         ) : (
           canales.map((canal) => (
-            <View key={canal.id} style={styles.card}>
+            <Card key={canal.id} style={styles.card}>
               <View style={styles.cardInfo}>
                 <Text style={styles.cardName}>
                   {canal.name || canal.target}
@@ -179,7 +184,7 @@ const Canales = () => {
                   color={colors.danger}
                 />
               </TouchableOpacity>
-            </View>
+            </Card>
           ))
         )}
 
@@ -216,7 +221,7 @@ const Canales = () => {
           </Text>
         ) : (
           noMonitorizados.map((d) => (
-            <View key={d.channelId} style={styles.card}>
+            <Card key={d.channelId} style={styles.card}>
               <View style={styles.cardInfo}>
                 <Text style={styles.cardName}>{d.name}</Text>
                 <Text style={styles.cardMeta}>
@@ -230,31 +235,22 @@ const Canales = () => {
               >
                 <Text style={styles.monitorButtonText}>Monitorizar</Text>
               </TouchableOpacity>
-            </View>
+            </Card>
           ))
         )}
       </ScrollView>
-    </View>
+    </Screen>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
   scroll: {
     paddingHorizontal: 16,
   },
   title: {
-    color: colors.primary,
-    fontSize: 28,
-    fontWeight: "bold",
     marginBottom: 8,
   },
   subtitle: {
-    color: colors.textSecondary,
-    fontSize: 14,
     marginBottom: 16,
   },
   sectionTitle: {
@@ -280,9 +276,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   card: {
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: 14,
     marginBottom: 10,
     flexDirection: "row",
     alignItems: "center",

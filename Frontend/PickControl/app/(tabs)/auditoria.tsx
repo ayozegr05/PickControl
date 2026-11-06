@@ -22,6 +22,9 @@ import { metricColor } from "@/src/theme";
 import { cleanChannel } from "@/src/utils/format";
 import { toErrorMessage } from "@/src/utils/errors";
 import { colors } from "@/src/theme";
+import { Screen } from "@/src/components/screen";
+import { ScreenTitle, ScreenSubtitle } from "@/src/components/typography";
+import { Card } from "@/src/components/card";
 
 function StatsLine({ label, stats }: { label: string; stats: StatsBloque }) {
   return (
@@ -109,7 +112,7 @@ export default function AuditoriaScreen() {
         ? canal.cuota_media_mia - canal.cuota_media_tipster
         : null;
     return (
-      <View key={canal.informante_id} style={styles.card}>
+      <Card key={canal.informante_id} variant="outlined">
         <TouchableOpacity
           onPress={() =>
             router.push({
@@ -147,12 +150,12 @@ export default function AuditoriaScreen() {
         )}
 
         {canal.odds && <OddsLine odds={canal.odds} />}
-      </View>
+      </Card>
     );
   };
 
   return (
-    <View style={styles.container}>
+    <Screen tone="black">
       <TopBar />
       <ScrollView
         contentContainerStyle={[
@@ -167,10 +170,12 @@ export default function AuditoriaScreen() {
           />
         }
       >
-        <Text style={styles.title}>Análisis global</Text>
-        <Text style={styles.subtitle}>
+        <ScreenTitle size={22} style={styles.title}>
+          Análisis global
+        </ScreenTitle>
+        <ScreenSubtitle size={13} style={styles.subtitle}>
           Lo que publican los tipsters vs lo que tú jugaste
-        </Text>
+        </ScreenSubtitle>
 
         {loading && <ActivityIndicator size="large" color={colors.primary} />}
         {error && <Text style={styles.error}>Error: {error}</Text>}
@@ -178,16 +183,16 @@ export default function AuditoriaScreen() {
         {data && (
           <>
             {/* Resumen global */}
-            <View style={styles.card}>
+            <Card variant="outlined">
               <Text style={styles.sectionTitle}>Resumen</Text>
               <StatsLine label="Tipsters" stats={data.totales_tipster} />
               <StatsLine label="Yo" stats={data.totales_yo} />
               {data.totales_odds && <OddsLine odds={data.totales_odds} />}
-            </View>
+            </Card>
 
             {/* Por deporte */}
             {data.deportes.length > 0 && (
-              <View style={styles.card}>
+              <Card variant="outlined">
                 <Text style={styles.sectionTitle}>Por deporte</Text>
                 {data.deportes.map((d) => (
                   <View key={d.deporte} style={styles.deporteRow}>
@@ -196,7 +201,7 @@ export default function AuditoriaScreen() {
                     <StatsLine label="Yo" stats={d.yo} />
                   </View>
                 ))}
-              </View>
+              </Card>
             )}
 
             {/* Ranking por canal */}
@@ -220,27 +225,18 @@ export default function AuditoriaScreen() {
           </>
         )}
       </ScrollView>
-    </View>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.black,
-  },
   scroll: {
     paddingHorizontal: 16,
   },
   title: {
-    color: colors.primary,
-    fontSize: 22,
-    fontWeight: "bold",
     marginBottom: 4,
   },
   subtitle: {
-    color: colors.textSecondary,
-    fontSize: 13,
     marginBottom: 16,
   },
   sectionTitle: {
@@ -257,14 +253,6 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     marginTop: 6,
     marginBottom: 8,
-  },
-  card: {
-    backgroundColor: colors.background,
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-    borderColor: colors.border,
-    borderWidth: 1,
   },
   cardTitle: {
     color: colors.text,

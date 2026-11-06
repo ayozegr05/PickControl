@@ -17,6 +17,7 @@ import { Acierto, MotivoAnulada, PickItem } from "@/src/types/pick.types";
 import { gananciaApuesta, iconoAnulada } from "@/src/utils/picks";
 import { formatDateShort } from "@/src/utils/format";
 import { colors } from "@/src/theme";
+import { Card } from "@/src/components/card";
 
 export interface CombinadasStats {
   total: number;
@@ -100,7 +101,7 @@ export default function TipsterPicksCard({
   >({});
 
   return (
-    <View style={styles.card}>
+    <Card variant="glass">
       <Text style={[styles.cardTitle, { color: colors.primary }]}>
         Picks del tipster
       </Text>
@@ -346,22 +347,11 @@ export default function TipsterPicksCard({
           })}
         </View>
       )}
-    </View>
+    </Card>
   );
 }
 
 const styles = StyleSheet.create({
-  card: {
-    backgroundColor: "rgba(33, 33, 33, 0.5)",
-    padding: 20,
-    borderRadius: 10,
-    shadowColor: colors.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
-    marginBottom: 20,
-  },
   cardTitle: {
     fontSize: 25,
     fontWeight: "bold",

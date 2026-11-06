@@ -20,6 +20,8 @@ import {
   nivelRiesgo,
 } from "@/src/utils/picks";
 import { colors } from "@/src/theme";
+import { Screen } from "@/src/components/screen";
+import { ScreenTitle } from "@/src/components/typography";
 
 interface Apuesta {
   Fecha: string;
@@ -97,15 +99,18 @@ export default function Analysis() {
     );
 
   return (
-    <View
-      style={[
-        styles.container,
-        { paddingTop: 60 + insets.top, paddingBottom: 60 + insets.bottom },
-      ]}
+    <Screen
+      tone="black"
+      style={{
+        paddingTop: 60 + insets.top,
+        paddingBottom: 60 + insets.bottom,
+      }}
     >
       <TopBar />
       <ScrollView style={styles.scrollView}>
-        <Text style={styles.title}>Análisis de Rentabilidad</Text>
+        <ScreenTitle size={24} style={styles.title}>
+          Análisis de Rentabilidad
+        </ScreenTitle>
 
         {/* Selector de inversión diaria */}
         <View style={styles.inputContainer}>
@@ -289,25 +294,16 @@ export default function Analysis() {
           </View>
         )}
       </ScrollView>
-    </View>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.black,
-    paddingBottom: 60,
-    paddingTop: 60,
-  },
   scrollView: {
     flex: 1,
     padding: 15,
   },
   title: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: colors.primary,
     marginBottom: 20,
     textAlign: "center",
   },

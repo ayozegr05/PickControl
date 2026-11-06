@@ -17,6 +17,9 @@ import { useInformantes } from "@/src/hooks/useInformantes";
 import DonutChart from "@/src/components/donut-chart";
 import { metricColor } from "@/src/theme";
 import { colors } from "@/src/theme";
+import { Screen } from "@/src/components/screen";
+import { ScreenTitle, ScreenSubtitle } from "@/src/components/typography";
+import { Card } from "@/src/components/card";
 
 const Main = () => {
   const router = useRouter();
@@ -63,18 +66,18 @@ const Main = () => {
   // pública (vídeo + "Start") en cada cold start.
   if (isInitializing) {
     return (
-      <View style={styles.container}>
+      <Screen>
         <TopBar />
         <View style={styles.center}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
-      </View>
+      </Screen>
     );
   }
 
   if (!isAuthenticated) {
     return (
-      <View style={[styles.container, { paddingHorizontal: 0 }]}>
+      <Screen style={{ paddingHorizontal: 0 }}>
         <TopBar />
         <VideoView
           player={introVideoPlayer}
@@ -153,34 +156,34 @@ const Main = () => {
         >
           <Text style={styles.joinButtonText}>Start</Text>
         </TouchableOpacity>
-      </View>
+      </Screen>
     );
   }
 
   if (loading) {
     return (
-      <View style={styles.container}>
+      <Screen>
         <TopBar />
         <View style={styles.center}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
-      </View>
+      </Screen>
     );
   }
 
   if (error) {
     return (
-      <View style={styles.container}>
+      <Screen>
         <TopBar />
         <View style={styles.center}>
           <Text style={styles.error}>Error: {error}</Text>
         </View>
-      </View>
+      </Screen>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <Screen>
       <TopBar />
       <ScrollView
         contentContainerStyle={[
@@ -188,16 +191,18 @@ const Main = () => {
           { paddingTop: 80 + insets.top, paddingBottom: 24 },
         ]}
       >
-        <Text style={styles.title}>Tipsters / Canales</Text>
-        <Text style={styles.subtitle}>
+        <ScreenTitle size={28} style={styles.title}>
+          Tipsters / Canales
+        </ScreenTitle>
+        <ScreenSubtitle size={14} style={styles.subtitle}>
           Rentabilidad verificada de cada tipster. Toca uno para ver su
           historial.
-        </Text>
+        </ScreenSubtitle>
         {tipsters.length === 0 ? (
           <Text style={styles.empty}>No hay informantes registrados.</Text>
         ) : (
           tipsters.map((t, index) => (
-            <TouchableOpacity
+            <Card
               key={t.informante}
               style={styles.card}
               onPress={() => handleTipsterPress(t.informante)}
@@ -267,19 +272,15 @@ const Main = () => {
                   <Text style={styles.footerValue}>{t.parsedTotal}</Text>
                 </Text>
               </View>
-            </TouchableOpacity>
+            </Card>
           ))
         )}
       </ScrollView>
-    </View>
+    </Screen>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
   center: {
     flex: 1,
     justifyContent: "center",
@@ -294,14 +295,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   title: {
-    color: colors.primary,
-    fontSize: 28,
-    fontWeight: "bold",
     marginBottom: 8,
   },
   subtitle: {
-    color: colors.textSecondary,
-    fontSize: 14,
     marginBottom: 16,
   },
   empty: {
@@ -311,9 +307,6 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
   card: {
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: 14,
     marginBottom: 12,
   },
   header: {

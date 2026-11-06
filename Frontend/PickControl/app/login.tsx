@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { colors } from "@/src/theme";
+import { Screen } from "@/src/components/screen";
+import { ScreenTitle, ScreenSubtitle } from "@/src/components/typography";
+import { FormInput } from "@/src/components/form-input";
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   Alert,
@@ -185,7 +187,7 @@ const LoginScreen = () => {
   };
 
   return (
-    <View style={styles.container}>
+    <Screen>
       <TopBar />
       <KeyboardAvoidingView
         style={styles.flex}
@@ -198,8 +200,12 @@ const LoginScreen = () => {
         >
           <View style={[styles.formContainer, { marginTop: 80 + insets.top }]}>
             <View style={styles.headerContainer}>
-              <Text style={styles.title}>Bienvenido</Text>
-              <Text style={styles.subtitle}>Inicia sesión para continuar</Text>
+              <ScreenTitle size={28} style={styles.title}>
+                Bienvenido
+              </ScreenTitle>
+              <ScreenSubtitle size={16} style={styles.subtitle}>
+                Inicia sesión para continuar
+              </ScreenSubtitle>
             </View>
 
             {isBiometricSupported && savedCredentials && (
@@ -234,8 +240,7 @@ const LoginScreen = () => {
               }) => (
                 <View style={styles.form}>
                   <View style={styles.inputContainer}>
-                    <TextInput
-                      style={styles.input}
+                    <FormInput
                       onChangeText={handleChange("email")}
                       value={values.email}
                       placeholder="Email"
@@ -248,8 +253,8 @@ const LoginScreen = () => {
                     )}
 
                     <View style={styles.passwordContainer}>
-                      <TextInput
-                        style={[styles.input, styles.passwordInput]}
+                      <FormInput
+                        style={styles.passwordInput}
                         onChangeText={handleChange("password")}
                         value={values.password}
                         placeholder="Contraseña"
@@ -304,15 +309,11 @@ const LoginScreen = () => {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-    </View>
+    </Screen>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
   flex: {
     flex: 1,
   },
@@ -339,14 +340,9 @@ const styles = StyleSheet.create({
     marginVertical: 40,
   },
   title: {
-    fontSize: 28,
-    fontWeight: "bold",
-    color: colors.primary,
     marginBottom: 10,
   },
   subtitle: {
-    fontSize: 16,
-    color: colors.textSecondary,
     textAlign: "center",
   },
   form: {
@@ -354,16 +350,6 @@ const styles = StyleSheet.create({
   },
   inputContainer: {
     marginBottom: 20,
-  },
-  input: {
-    backgroundColor: colors.surfaceAlt,
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 15,
-    borderWidth: 1,
-    borderColor: colors.border,
-    fontSize: 16,
-    color: colors.text,
   },
   passwordContainer: {
     position: "relative",

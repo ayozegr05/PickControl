@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { colors } from "@/src/theme";
+import { Screen } from "@/src/components/screen";
 import {
   View,
   Text,
@@ -171,7 +172,7 @@ const AddPick = () => {
   };
 
   return (
-    <View style={[styles.container, { paddingTop: 20 + insets.top }]}>
+    <Screen style={[styles.container, { paddingTop: 20 + insets.top }]}>
       <TopBar />
 
       {/* ScrollView para asegurar que todo el formulario sea accesible en dispositivos mas pequenos */}
@@ -352,7 +353,7 @@ const AddPick = () => {
       </KeyboardAvoidingView>
 
       {/* Bottom Bar */}
-    </View>
+    </Screen>
   );
 };
 
@@ -363,7 +364,6 @@ const styles = StyleSheet.create({
     width: "100%",
   },
   container: {
-    flex: 1,
     justifyContent: "flex-start",
     alignItems: "center",
     paddingTop: 20, // Espacio adicional en la parte superior

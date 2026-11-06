@@ -41,6 +41,8 @@ import {
 } from "@/src/utils/providers";
 import { toErrorMessage } from "@/src/utils/errors";
 import { colors } from "@/src/theme";
+import { Screen } from "@/src/components/screen";
+import { ScreenTitle } from "@/src/components/typography";
 
 export default function ParsedPicksScreen() {
   const {
@@ -236,7 +238,7 @@ export default function ParsedPicksScreen() {
   );
 
   return (
-    <View style={styles.container}>
+    <Screen tone="black">
       <TopBar />
       <FlatList
         data={channelRows}
@@ -267,7 +269,9 @@ export default function ParsedPicksScreen() {
         onEndReachedThreshold={0.4}
         ListHeaderComponent={
           <>
-            <Text style={styles.title}>Picks extraídos de Telegram</Text>
+            <ScreenTitle size={22} style={styles.title}>
+              Picks extraídos de Telegram
+            </ScreenTitle>
 
             <TouchableOpacity
               style={styles.toggleRow}
@@ -380,22 +384,15 @@ export default function ParsedPicksScreen() {
           ) : null
         }
       />
-    </View>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.black,
-  },
   scroll: {
     paddingHorizontal: 16,
   },
   title: {
-    color: colors.primary,
-    fontSize: 22,
-    fontWeight: "bold",
     marginBottom: 16,
   },
   error: {
