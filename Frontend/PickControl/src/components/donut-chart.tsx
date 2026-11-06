@@ -29,7 +29,7 @@ export default function DonutChart({
           cx={size / 2}
           cy={size / 2}
           r={radius}
-          stroke="#3a3a3a"
+          stroke={colors.input}
           strokeWidth={strokeWidth}
           fill="none"
         />
@@ -64,7 +64,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   text: {
-    color: "#fff",
+    color: colors.text,
     fontSize: 13,
     fontWeight: "bold",
   },

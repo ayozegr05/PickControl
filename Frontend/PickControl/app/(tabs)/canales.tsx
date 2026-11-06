@@ -162,8 +162,8 @@ const Canales = () => {
               <Switch
                 value={canal.activo}
                 onValueChange={(v) => handleToggle(canal, v)}
-                trackColor={{ false: "#555", true: colors.primary }}
-                thumbColor="#fff"
+                trackColor={{ false: colors.border, true: colors.primary }}
+                thumbColor={colors.text}
                 accessibilityLabel={`Activar canal ${canal.name || canal.target}`}
                 accessibilityState={{ checked: canal.activo }}
               />
@@ -188,7 +188,7 @@ const Canales = () => {
           <TextInput
             style={styles.input}
             placeholder="t.me/canal, @canal o id"
-            placeholderTextColor="#888"
+            placeholderTextColor={colors.textMuted}
             value={nuevoTarget}
             onChangeText={setNuevoTarget}
             autoCapitalize="none"
@@ -200,9 +200,9 @@ const Canales = () => {
             disabled={adding || !nuevoTarget.trim()}
           >
             {adding ? (
-              <ActivityIndicator size="small" color="#fff" />
+              <ActivityIndicator size="small" color={colors.text} />
             ) : (
-              <Ionicons name="add" size={24} color="#fff" />
+              <Ionicons name="add" size={24} color={colors.text} />
             )}
           </TouchableOpacity>
         </View>
@@ -241,7 +241,7 @@ const Canales = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#1a1a1a",
+    backgroundColor: colors.background,
   },
   scroll: {
     paddingHorizontal: 16,
@@ -253,25 +253,25 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   subtitle: {
-    color: "#aaa",
+    color: colors.textSecondary,
     fontSize: 14,
     marginBottom: 16,
   },
   sectionTitle: {
-    color: "#fff",
+    color: colors.text,
     fontSize: 18,
     fontWeight: "bold",
     marginTop: 20,
     marginBottom: 10,
   },
   empty: {
-    color: "#aaa",
+    color: colors.textSecondary,
     fontSize: 15,
     textAlign: "center",
     marginTop: 10,
   },
   muted: {
-    color: "#888",
+    color: colors.textMuted,
     fontSize: 14,
     marginBottom: 8,
   },
@@ -280,7 +280,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   card: {
-    backgroundColor: "#2a2a2a",
+    backgroundColor: colors.surface,
     borderRadius: 12,
     padding: 14,
     marginBottom: 10,
@@ -292,12 +292,12 @@ const styles = StyleSheet.create({
     marginRight: 10,
   },
   cardName: {
-    color: "#fff",
+    color: colors.text,
     fontSize: 16,
     fontWeight: "bold",
   },
   cardMeta: {
-    color: "#888",
+    color: colors.textMuted,
     fontSize: 12,
     marginTop: 2,
   },
@@ -311,11 +311,11 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    backgroundColor: "#2a2a2a",
+    backgroundColor: colors.surface,
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    color: "#fff",
+    color: colors.text,
     fontSize: 15,
   },
   addButton: {
@@ -333,7 +333,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   monitorButtonText: {
-    color: "#fff",
+    color: colors.onPrimary,
     fontWeight: "bold",
     fontSize: 13,
   },

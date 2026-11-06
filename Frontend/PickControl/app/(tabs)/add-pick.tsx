@@ -231,7 +231,9 @@ const AddPick = () => {
 
             {isDobleSelected && (
               <>
-                <Text style={[styles.label, { color: "white", marginTop: 10 }]}>
+                <Text
+                  style={[styles.label, { color: colors.text, marginTop: 10 }]}
+                >
                   Primera apuesta:
                 </Text>
                 <RNPickerSelect
@@ -254,7 +256,9 @@ const AddPick = () => {
                   />
                 )}
 
-                <Text style={[styles.label, { color: "white", marginTop: 10 }]}>
+                <Text
+                  style={[styles.label, { color: colors.text, marginTop: 10 }]}
+                >
                   Segunda apuesta:
                 </Text>
                 <RNPickerSelect
@@ -369,7 +373,7 @@ const styles = StyleSheet.create({
     fontSize: 32,
     marginTop: 50,
     fontWeight: "bold",
-    color: "white",
+    color: colors.text,
     marginBottom: 20,
     textAlign: "center",
   },
@@ -384,7 +388,7 @@ const styles = StyleSheet.create({
     padding: 35, // Aumentamos el padding dentro de la card
     borderRadius: 10,
     backgroundColor: colors.surface, // Color verde oscuro para la card
-    shadowColor: "#000",
+    shadowColor: colors.black,
     shadowOffset: { width: 0, height: 4 }, // Aumentamos el tamaño de la sombra
     shadowOpacity: 0.2, // Aumentamos la opacidad para que se vea más fuerte
     shadowRadius: 8, // Aumentamos el radio para que la sombra sea más difusa
@@ -447,7 +451,7 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 16,
     marginBottom: 5,
-    color: "white",
+    color: colors.text,
   },
 });
 

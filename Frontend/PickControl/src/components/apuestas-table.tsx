@@ -58,7 +58,7 @@ function PronosticoIcon({
   }
   return (
     <TouchableOpacity onPress={onPress}>
-      <Text style={[styles.icon, { color: "gray" }]}>❓</Text>
+      <Text style={[styles.icon, { color: colors.textMuted }]}>❓</Text>
     </TouchableOpacity>
   );
 }
@@ -176,12 +176,12 @@ export default function ApuestasTable({
 
 const styles = StyleSheet.create({
   table: {
-    backgroundColor: "#2e2e2e",
+    backgroundColor: colors.surface,
     borderRadius: 10,
-    borderColor: "white",
+    borderColor: colors.text,
     padding: 15,
     marginBottom: 20,
-    shadowColor: "#000",
+    shadowColor: colors.black,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 4,
@@ -195,7 +195,7 @@ const styles = StyleSheet.create({
   tableRow: {
     flexDirection: "row",
     borderBottomWidth: 1,
-    borderBottomColor: "#444",
+    borderBottomColor: colors.border,
   },
   tableHeaderCell: {
     width: 150, // Ajusta el tamaño de cada celda
@@ -233,7 +233,7 @@ const styles = StyleSheet.create({
   },
   border: {
     borderWidth: 1,
-    borderColor: "#555",
+    borderColor: colors.border,
   },
   evenRow: {
     backgroundColor: colors.surfaceAlt,

@@ -153,7 +153,10 @@ export default function PickDetailModal({
               <Text style={styles.modalText}>Corregir resultado:</Text>
               <View style={styles.detailButtons}>
                 <TouchableOpacity
-                  style={[styles.detailButton, { backgroundColor: "#1e3a24" }]}
+                  style={[
+                    styles.detailButton,
+                    { backgroundColor: colors.successBg },
+                  ]}
                   onPress={() =>
                     onCorregir(pick, { acierto: true, anulada: false })
                   }
@@ -161,7 +164,10 @@ export default function PickDetailModal({
                   <Text style={styles.detailButtonText}>✅ Acertó</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.detailButton, { backgroundColor: "#3a1e1e" }]}
+                  style={[
+                    styles.detailButton,
+                    { backgroundColor: colors.dangerBg },
+                  ]}
                   onPress={() =>
                     onCorregir(pick, { acierto: false, anulada: false })
                   }
@@ -169,7 +175,10 @@ export default function PickDetailModal({
                   <Text style={styles.detailButtonText}>❌ Falló</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.detailButton, { backgroundColor: "#2a2a2a" }]}
+                  style={[
+                    styles.detailButton,
+                    { backgroundColor: colors.surface },
+                  ]}
                   onPress={() => onCorregir(pick, { anulada: true })}
                 >
                   <Text style={styles.detailButtonText}>Anulada</Text>
@@ -187,13 +196,13 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 24,
     fontWeight: "bold",
-    color: "white",
+    color: colors.text,
     marginTop: 20,
     marginBottom: 15,
   },
   modalText: {
     fontSize: 18,
-    color: "white",
+    color: colors.text,
     marginBottom: 20,
     textAlign: "center",
   },
@@ -203,15 +212,15 @@ const styles = StyleSheet.create({
   },
   detailRow: {
     fontSize: 15,
-    color: "#ddd",
+    color: colors.textSecondary,
     marginBottom: 6,
   },
   oddsBox: {
     alignSelf: "stretch",
-    backgroundColor: "#141414",
+    backgroundColor: colors.bar,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#333",
+    borderColor: colors.border,
     padding: 10,
     marginBottom: 10,
   },
@@ -224,12 +233,12 @@ const styles = StyleSheet.create({
   },
   oddsRow: {
     fontSize: 13,
-    color: "#ddd",
+    color: colors.textSecondary,
     marginBottom: 3,
   },
   oddsRowMuted: {
     fontSize: 13,
-    color: "#888",
+    color: colors.textMuted,
   },
   oddsBadges: {
     flexDirection: "row",
@@ -258,10 +267,10 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: "#555",
+    borderColor: colors.border,
   },
   detailButtonText: {
-    color: "white",
+    color: colors.text,
     fontSize: 13,
     fontWeight: "bold",
   },
@@ -275,7 +284,7 @@ const styles = StyleSheet.create({
     alignSelf: "center",
   },
   jugarButtonText: {
-    color: "#0d0d0d",
+    color: colors.onPrimary,
     fontSize: 15,
     fontWeight: "bold",
   },

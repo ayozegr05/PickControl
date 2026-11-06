@@ -34,7 +34,7 @@ export default function DeletePickModal({
             <MaterialCommunityIcons
               name="trash-can-outline"
               size={26}
-              color="white"
+              color={colors.text}
             />
           </Text>
         </TouchableOpacity>
@@ -47,13 +47,13 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 24,
     fontWeight: "bold",
-    color: "white",
+    color: colors.text,
     marginTop: 20,
     marginBottom: 15,
   },
   modalText: {
     fontSize: 18,
-    color: "white",
+    color: colors.text,
     marginBottom: 20,
     textAlign: "center",
   },
@@ -72,7 +72,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 10,
   },
   modalButtonText: {
-    color: "white",
+    color: colors.onPrimary,
     fontSize: 16,
     fontWeight: "bold",
   },

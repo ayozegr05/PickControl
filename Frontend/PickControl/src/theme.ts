@@ -18,6 +18,25 @@ export const colors = {
   textMuted: "#777777",
   success: "#4caf50",
   danger: "#f44336",
+  // Negro puro: overlays y fondos de vídeo (más oscuro que `background`).
+  black: "#000000",
+  // Ámbar semántico (avisos, pendientes, cuotas) y su fondo tintado.
+  warning: "#ff9800",
+  warningBg: "#332a1a",
+  // Fondos tintados de acierto/fallo (badges, filas de resultado).
+  successBg: "#1e3a24",
+  dangerBg: "#3a1e1e",
+  // Información/enlaces en dark y su fondo tintado.
+  info: "#7ab3ff",
+  infoBg: "#2d3a4f",
+  // Acento morado de retos/combinadas y su familia de fondos/texto.
+  purple: "#b388ff",
+  purpleBg: "#2a2140",
+  purpleText: "#e8e0f5",
+  // Medallas del ranking de informantes.
+  medalGold: "#b8860b",
+  medalSilver: "#7d8590",
+  medalBronze: "#8c5a2b",
 } as const;
 
 export type ColorName = keyof typeof colors;

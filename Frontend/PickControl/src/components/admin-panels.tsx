@@ -464,15 +464,15 @@ export function DuplicadosCard({ picks }: { picks: ParsedPick[] }) {
 
 const styles = StyleSheet.create({
   systemCard: {
-    backgroundColor: "#141821",
-    borderColor: "#2d3a4f",
+    backgroundColor: colors.infoBg,
+    borderColor: colors.infoBg,
     borderWidth: 1,
     borderRadius: 8,
     padding: 12,
     marginBottom: 14,
   },
   systemTitle: {
-    color: "#7ab3ff",
+    color: colors.info,
     fontSize: 13,
     fontWeight: "bold",
     textTransform: "uppercase",
@@ -480,7 +480,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   systemSubtitle: {
-    color: "#6f8299",
+    color: colors.info,
     fontSize: 11,
     fontWeight: "bold",
     textTransform: "uppercase",
@@ -498,7 +498,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   providerName: {
-    color: "#ddd",
+    color: colors.textSecondary,
     fontSize: 13,
     flex: 1,
   },
@@ -527,33 +527,33 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
   providerWarn: {
-    color: "#ff9800",
+    color: colors.warning,
     fontSize: 12,
     fontWeight: "bold",
   },
   providerMeta: {
-    color: "#9a9a9a",
+    color: colors.textSecondary,
     fontSize: 11,
     marginTop: 1,
   },
   statLabel: {
-    color: "#9aa4b2",
+    color: colors.info,
     fontSize: 13,
     flex: 1,
   },
   statSub: {
-    color: "#9a9a9a",
+    color: colors.textSecondary,
     fontSize: 11,
     marginTop: 1,
     marginBottom: 4,
   },
   statSubFlex: {
-    color: "#9a9a9a",
+    color: colors.textSecondary,
     fontSize: 11,
     flex: 1,
   },
   statValue: {
-    color: "#ddd",
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: "600",
   },
@@ -573,10 +573,10 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: "#333",
+    borderTopColor: colors.border,
   },
   funnelHint: {
-    color: "#9a9a9a",
+    color: colors.textSecondary,
     fontSize: 10,
     fontStyle: "italic",
     marginBottom: 6,

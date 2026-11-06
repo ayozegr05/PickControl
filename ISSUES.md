@@ -164,12 +164,16 @@ Leyenda: 🔴 crítico · 🟡 mejorable · 🔵 cosmético · ✅ resuelto
   lista de canal de parsed-picks virtualizada con `onEndReached`,
   tablas de my-picks e `[informante]` (simples + "Mis apuestas") con
   `FlatList` en contenedor acotado.
-- [ ] 🟡 **Sin tema centralizado** (parcial, 2026-11): migrados TODOS
-  los literales de marca y semánticos — `#ff9f1c`×66 → `primary`,
-  `"orange"` → `primary`, `#ffba57` → `primarySoft` (nuevo token),
-  `#4caf50`/`"green"` → `success`, `#f44336`/`"red"` → `danger`.
-  Quedan neutros (`"black"`/`#000`/`#0d0d0d`, grises `#2e2e2e`/`#444`/
-  `#555` de tablas) y estilos `container/card/input/title` repetidos.
+- [x] ✅ **Tema centralizado** (Bloque 2, 2026-11): CERO literales de
+  color fuera de `theme.ts`. Neutros migrados (`"black"`/`#000`/`#0d0d0d`
+  → `black`/`onPrimary`, grises → `surface`/`surfaceAlt`/`input`/`border`/
+  `textSecondary`/`textMuted`, `white`/`#fff` → `text`/`onPrimary`) y
+  tokens semánticos nuevos para lo que era literal "suelto":
+  `warning`/`warningBg`, `successBg`, `dangerBg`, `info`/`infoBg`,
+  `purple`/`purpleBg`/`purpleText` (retos/combinadas) y
+  `medalGold`/`medalSilver`/`medalBronze`. Textos de botón sobre
+  color saturado unificados a `onPrimary`. Quedan los estilos
+  `container/card/input/title` repetidos (componentes base).
 - [x] ✅ **Duplicación de utilidades** — resuelto en Fase A/B
   (2026-11): `src/utils/format.ts` (`cleanChannel`, `formatDate*`),
   `picks.ts` (`gananciaApuesta`, `iconoAnulada`), `estadisticas.ts`

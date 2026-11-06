@@ -115,7 +115,7 @@ const RegisterScreen = () => {
                       onChangeText={handleChange("name")}
                       value={values.name}
                       placeholder="Nombre completo"
-                      placeholderTextColor="#95a5a6"
+                      placeholderTextColor={colors.textMuted}
                     />
                     {errors.name && touched.name && (
                       <Text style={styles.errorText}>{errors.name}</Text>
@@ -126,7 +126,7 @@ const RegisterScreen = () => {
                       onChangeText={handleChange("email")}
                       value={values.email}
                       placeholder="Email"
-                      placeholderTextColor="#95a5a6"
+                      placeholderTextColor={colors.textMuted}
                       keyboardType="email-address"
                       autoCapitalize="none"
                     />
@@ -139,7 +139,7 @@ const RegisterScreen = () => {
                       onChangeText={handleChange("password")}
                       value={values.password}
                       placeholder="Contraseña"
-                      placeholderTextColor="#95a5a6"
+                      placeholderTextColor={colors.textMuted}
                       secureTextEntry
                     />
                     {errors.password && touched.password && (
@@ -151,7 +151,7 @@ const RegisterScreen = () => {
                       onChangeText={handleChange("confirmPassword")}
                       value={values.confirmPassword}
                       placeholder="Confirmar contraseña"
-                      placeholderTextColor="#95a5a6"
+                      placeholderTextColor={colors.textMuted}
                       secureTextEntry
                     />
                     {errors.confirmPassword && touched.confirmPassword && (
@@ -196,17 +196,17 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    backgroundColor: "#1a1a1a",
+    backgroundColor: colors.background,
   },
   formContainer: {
     flex: 1,
     justifyContent: "center",
     paddingHorizontal: 20,
-    backgroundColor: "#2d2d2d",
+    backgroundColor: colors.surface,
     marginTop: 80,
     marginHorizontal: 20,
     borderRadius: 20,
-    shadowColor: "#000",
+    shadowColor: colors.black,
     shadowOffset: {
       width: 0,
       height: 4,
@@ -228,7 +228,7 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 16,
-    color: "#bbb",
+    color: colors.textSecondary,
     textAlign: "center",
   },
   form: {
@@ -238,17 +238,17 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   input: {
-    backgroundColor: "#3d3d3d",
+    backgroundColor: colors.surfaceAlt,
     borderRadius: 10,
     padding: 15,
     marginBottom: 15,
     borderWidth: 1,
-    borderColor: "#4d4d4d",
+    borderColor: colors.border,
     fontSize: 16,
-    color: "#fff",
+    color: colors.text,
   },
   errorText: {
-    color: "#ff6b6b",
+    color: colors.danger,
     fontSize: 14,
     marginTop: -12,
     marginBottom: 10,
@@ -260,7 +260,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: "center",
     marginTop: 20,
-    shadowColor: "#000",
+    shadowColor: colors.black,
     shadowOffset: {
       width: 0,
       height: 2,
@@ -279,7 +279,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   loginText: {
-    color: "#bbb",
+    color: colors.textSecondary,
     fontSize: 14,
   },
   loginLinkText: {

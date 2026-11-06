@@ -238,7 +238,7 @@ const GananciasPage = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "black",
+    backgroundColor: colors.black,
   },
   scrollView: {
     flex: 1,
@@ -262,7 +262,7 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 20,
-    color: "white",
+    color: colors.text,
     marginBottom: 20,
     fontWeight: "bold",
     marginTop: 20,
@@ -294,13 +294,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: "#1E1E1E",
+    backgroundColor: colors.background,
     padding: 15,
     borderRadius: 10,
     marginBottom: 10,
   },
   itemName: {
-    color: "white",
+    color: colors.text,
     fontSize: 16,
     fontWeight: "500",
   },
@@ -338,7 +338,7 @@ const styles = StyleSheet.create({
     marginTop: 40,
   },
   loadingText: {
-    color: "#FFFFFF",
+    color: colors.text,
     fontSize: 18,
     textAlign: "left",
     marginBottom: -70,

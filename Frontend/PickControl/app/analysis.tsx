@@ -117,7 +117,7 @@ export default function Analysis() {
               onChangeText={setInversionDiaria}
               keyboardType="numeric"
               placeholder="10"
-              placeholderTextColor="#666"
+              placeholderTextColor={colors.textMuted}
             />
           </View>
           <View style={styles.inputGroup}>
@@ -128,7 +128,7 @@ export default function Analysis() {
               onChangeText={setApuestasPorDia}
               keyboardType="numeric"
               placeholder="1"
-              placeholderTextColor="#666"
+              placeholderTextColor={colors.textMuted}
             />
           </View>
         </View>
@@ -273,7 +273,7 @@ export default function Analysis() {
                             nivelRiesgo(stats) === "BAJO"
                               ? colors.success
                               : nivelRiesgo(stats) === "MEDIO"
-                                ? "#FFC107"
+                                ? colors.warning
                                 : colors.danger,
                         },
                       ]}
@@ -296,7 +296,7 @@ export default function Analysis() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "black",
+    backgroundColor: colors.black,
     paddingBottom: 60,
     paddingTop: 60,
   },
@@ -313,7 +313,7 @@ const styles = StyleSheet.create({
   },
   inputContainer: {
     marginBottom: 20,
-    backgroundColor: "#1E1E1E",
+    backgroundColor: colors.background,
     padding: 15,
     borderRadius: 10,
     gap: 15,
@@ -324,15 +324,15 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   input: {
-    backgroundColor: "#2C2C2C",
-    color: "#FFFFFF",
+    backgroundColor: colors.surface,
+    color: colors.text,
     padding: 10,
     borderRadius: 5,
     width: 100,
     textAlign: "right",
   },
   label: {
-    color: "#FFFFFF",
+    color: colors.text,
     fontSize: 16,
     marginRight: 10,
   },
@@ -340,7 +340,7 @@ const styles = StyleSheet.create({
     gap: 15,
   },
   informanteCard: {
-    backgroundColor: "#1E1E1E",
+    backgroundColor: colors.background,
     borderRadius: 10,
     padding: 15,
     marginBottom: 15,
@@ -348,7 +348,7 @@ const styles = StyleSheet.create({
   informanteName: {
     fontSize: 20,
     fontWeight: "bold",
-    color: "#FFFFFF",
+    color: colors.text,
   },
   headerContainer: {
     flexDirection: "row",
@@ -357,7 +357,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   statsButton: {
-    backgroundColor: "#2A2A2A",
+    backgroundColor: colors.surface,
     borderRadius: 20,
     padding: 8,
     paddingHorizontal: 12,
@@ -384,35 +384,35 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   statLabel: {
-    color: "#BBBBBB",
+    color: colors.textSecondary,
     fontSize: 14,
     marginBottom: 5,
   },
   statValue: {
-    color: "#FFFFFF",
+    color: colors.text,
     fontSize: 18,
     fontWeight: "bold",
   },
   windowCaption: {
-    color: "#9a9a9a",
+    color: colors.textSecondary,
     fontSize: 11,
     fontStyle: "italic",
     textAlign: "right",
     marginTop: 4,
   },
   statDetail: {
-    color: "#888888",
+    color: colors.textMuted,
     fontSize: 12,
     marginTop: 2,
   },
   projectionContainer: {
-    backgroundColor: "#2A2A2A",
+    backgroundColor: colors.surface,
     borderRadius: 8,
     padding: 12,
     marginTop: 10,
   },
   projectionTitle: {
-    color: "#FFFFFF",
+    color: colors.text,
     fontSize: 16,
     marginBottom: 8,
   },
@@ -422,7 +422,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   projectionDetail: {
-    color: "#BBBBBB",
+    color: colors.textSecondary,
     fontSize: 14,
     marginBottom: 8,
   },
@@ -433,7 +433,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   riskText: {
-    color: "#FFFFFF",
+    color: colors.text,
     fontSize: 12,
     fontWeight: "bold",
   },
@@ -447,7 +447,7 @@ const styles = StyleSheet.create({
     marginTop: -60,
   },
   loadingText: {
-    color: "#FFFFFF",
+    color: colors.text,
     fontSize: 18,
     textAlign: "left",
     marginBottom: -70,
@@ -469,22 +469,22 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
   retryButton: {
-    backgroundColor: "#2A2A2A",
+    backgroundColor: colors.surface,
     padding: 10,
     borderRadius: 5,
   },
   retryButtonText: {
-    color: "#FFFFFF",
+    color: colors.text,
     fontSize: 14,
   },
   emptyText: {
-    color: "#FFFFFF",
+    color: colors.text,
     fontSize: 16,
     marginBottom: 8,
     textAlign: "center",
   },
   emptyHint: {
-    color: "#888888",
+    color: colors.textMuted,
     fontSize: 13,
     textAlign: "center",
     maxWidth: 300,

@@ -63,7 +63,7 @@ function PronosticoTelegram({
 }) {
   if (anulada) {
     return (
-      <Text style={[styles.icon, { color: "gray" }]}>
+      <Text style={[styles.icon, { color: colors.textMuted }]}>
         {iconoAnulada(motivoAnulada)}
       </Text>
     );
@@ -78,7 +78,7 @@ function PronosticoTelegram({
   if (acierto === "False") {
     return <Text style={[styles.icon, { color: colors.danger }]}>❌</Text>;
   }
-  return <Text style={[styles.icon, { color: "gray" }]}>❓</Text>;
+  return <Text style={[styles.icon, { color: colors.textMuted }]}>❓</Text>;
 }
 
 export default function TipsterPicksCard({
@@ -308,7 +308,7 @@ export default function TipsterPicksCard({
                       <MaterialCommunityIcons
                         name={abierta ? "chevron-up" : "chevron-down"}
                         size={22}
-                        color="#b388ff"
+                        color={colors.purple}
                       />
                     </TouchableOpacity>
                   )}
@@ -355,7 +355,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(33, 33, 33, 0.5)",
     padding: 20,
     borderRadius: 10,
-    shadowColor: "#000",
+    shadowColor: colors.black,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 4,
@@ -371,7 +371,7 @@ const styles = StyleSheet.create({
   },
   cardSubtitle: {
     fontSize: 13,
-    color: "#999",
+    color: colors.textSecondary,
     textAlign: "center",
     marginTop: -20,
     marginBottom: 15,
@@ -383,12 +383,12 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 18,
-    color: "white",
+    color: colors.text,
   },
   value: {
     fontSize: 16,
     fontWeight: "bold",
-    color: "white",
+    color: colors.text,
   },
   telegramButton: {
     backgroundColor: colors.primary,
@@ -400,24 +400,24 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   telegramButtonText: {
-    color: "#1a1a1a",
+    color: colors.background,
     fontWeight: "bold",
     fontSize: 14,
   },
   emptyText: {
     fontSize: 15,
-    color: "#aaa",
+    color: colors.textSecondary,
     textAlign: "center",
     marginVertical: 15,
     fontStyle: "italic",
   },
   table: {
-    backgroundColor: "#2e2e2e",
+    backgroundColor: colors.surface,
     borderRadius: 10,
-    borderColor: "white",
+    borderColor: colors.text,
     padding: 15,
     marginBottom: 20,
-    shadowColor: "#000",
+    shadowColor: colors.black,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 4,
@@ -430,7 +430,7 @@ const styles = StyleSheet.create({
   tableRow: {
     flexDirection: "row",
     borderBottomWidth: 1,
-    borderBottomColor: "#444",
+    borderBottomColor: colors.border,
   },
   tableHeaderCell: {
     width: 150, // Ajusta el tamaño de cada celda
@@ -464,7 +464,7 @@ const styles = StyleSheet.create({
   },
   eventoText: {
     fontSize: 11,
-    color: "#999",
+    color: colors.textSecondary,
     marginTop: 2,
   },
   icon: {
@@ -473,7 +473,7 @@ const styles = StyleSheet.create({
   },
   border: {
     borderWidth: 1,
-    borderColor: "#555",
+    borderColor: colors.border,
   },
   evenRow: {
     backgroundColor: colors.surfaceAlt,
@@ -484,11 +484,11 @@ const styles = StyleSheet.create({
   retosSection: {
     marginTop: 16,
     borderTopWidth: 1,
-    borderTopColor: "#333",
+    borderTopColor: colors.border,
     paddingTop: 12,
   },
   retosTitle: {
-    color: "#b388ff",
+    color: colors.purple,
     fontSize: 16,
     fontWeight: "bold",
     textTransform: "uppercase",
@@ -496,20 +496,20 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   retoRow: {
-    backgroundColor: "#1a1425",
-    borderColor: "#3a2d55",
+    backgroundColor: colors.purpleBg,
+    borderColor: colors.purpleBg,
     borderWidth: 1,
     borderRadius: 8,
     padding: 10,
     marginBottom: 8,
   },
   retoText: {
-    color: "#fff",
+    color: colors.text,
     fontSize: 14,
     fontWeight: "bold",
   },
   retoMeta: {
-    color: "#aaa",
+    color: colors.textSecondary,
     fontSize: 12,
     marginTop: 4,
   },
@@ -527,7 +527,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: "#2a2140",
+    borderTopColor: colors.purpleBg,
     paddingLeft: 8,
   },
   pataIcono: {
@@ -535,11 +535,11 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   pataText: {
-    color: "#e8e0f5",
+    color: colors.purpleText,
     fontSize: 13,
   },
   pataMeta: {
-    color: "#888",
+    color: colors.textMuted,
     fontSize: 11,
     marginTop: 2,
   },

@@ -228,15 +228,15 @@ export default function ParsedPickCard({
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: "#1a1a1a",
+    backgroundColor: colors.background,
     borderRadius: 8,
     padding: 12,
     marginBottom: 12,
-    borderColor: "#333",
+    borderColor: colors.border,
     borderWidth: 1,
   },
   cardTitle: {
-    color: "#fff",
+    color: colors.text,
     fontSize: 16,
     fontWeight: "bold",
     marginBottom: 4,
@@ -247,12 +247,12 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   cardMeta: {
-    color: "#aaa",
+    color: colors.textSecondary,
     fontSize: 13,
     marginBottom: 2,
   },
   explanation: {
-    color: "#ccc",
+    color: colors.textSecondary,
     fontSize: 12,
     marginTop: 8,
   },
@@ -260,7 +260,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: "#333",
+    borderTopColor: colors.border,
   },
   acertoTrue: {
     color: colors.success,
@@ -275,7 +275,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
   acertoAnulada: {
-    color: "#9e9e9e",
+    color: colors.textSecondary,
     fontWeight: "bold",
   },
   acertoButtons: {
@@ -290,31 +290,31 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   acertoButtonTrue: {
-    backgroundColor: "#1e3a24",
+    backgroundColor: colors.successBg,
     borderColor: colors.success,
     borderWidth: 1,
   },
   acertoButtonFalse: {
-    backgroundColor: "#3a1e1e",
+    backgroundColor: colors.dangerBg,
     borderColor: colors.danger,
     borderWidth: 1,
   },
   acertoButtonAnulada: {
-    backgroundColor: "#2a2a2a",
-    borderColor: "#9e9e9e",
+    backgroundColor: colors.surface,
+    borderColor: colors.textSecondary,
     borderWidth: 1,
   },
   acertoButtonPending: {
-    backgroundColor: "#332a1a",
+    backgroundColor: colors.warningBg,
     borderColor: colors.primary,
     borderWidth: 1,
   },
   acertoButtonText: {
-    color: "#fff",
+    color: colors.text,
     fontSize: 12,
   },
   fueraVentana: {
-    color: "#ff9800",
+    color: colors.warning,
     fontSize: 11,
     fontStyle: "italic",
     marginTop: 2,
@@ -324,14 +324,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: 6,
     borderTopWidth: 1,
-    borderTopColor: "#2a2a2a",
+    borderTopColor: colors.surface,
   },
   pataText: {
-    color: "#e5e5e5",
+    color: colors.textSecondary,
     fontSize: 13,
   },
   pataMeta: {
-    color: "#888",
+    color: colors.textMuted,
     fontSize: 11,
     marginTop: 2,
   },

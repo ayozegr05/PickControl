@@ -63,7 +63,7 @@ export default function JugarModal({
       <TextInput
         style={styles.jugarInput}
         placeholder="Cantidad apostada (obligatorio)"
-        placeholderTextColor="#888"
+        placeholderTextColor={colors.textMuted}
         keyboardType="numeric"
         value={cantidad}
         onChangeText={setCantidad}
@@ -71,7 +71,7 @@ export default function JugarModal({
       <TextInput
         style={styles.jugarInput}
         placeholder="Cuota conseguida (opcional)"
-        placeholderTextColor="#888"
+        placeholderTextColor={colors.textMuted}
         keyboardType="numeric"
         value={cuota}
         onChangeText={setCuota}
@@ -79,7 +79,7 @@ export default function JugarModal({
       <TextInput
         style={styles.jugarInput}
         placeholder="Casa (opcional)"
-        placeholderTextColor="#888"
+        placeholderTextColor={colors.textMuted}
         value={casa}
         onChangeText={setCasa}
       />
@@ -90,7 +90,7 @@ export default function JugarModal({
         disabled={loading}
       >
         {loading ? (
-          <ActivityIndicator size="small" color="white" />
+          <ActivityIndicator size="small" color={colors.text} />
         ) : (
           <Text style={styles.jugarButtonText}>Registrar apuesta</Text>
         )}
@@ -103,12 +103,12 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 24,
     fontWeight: "bold",
-    color: "white",
+    color: colors.text,
     marginTop: 20,
     marginBottom: 15,
   },
   jugarHint: {
-    color: "#aaa",
+    color: colors.textSecondary,
     fontSize: 12,
     textAlign: "center",
     marginBottom: 12,
@@ -116,12 +116,12 @@ const styles = StyleSheet.create({
   jugarInput: {
     alignSelf: "stretch",
     height: 44,
-    backgroundColor: "white",
+    backgroundColor: colors.surface,
     borderRadius: 6,
     paddingHorizontal: 10,
     marginVertical: 6,
     fontSize: 15,
-    color: "#000",
+    color: colors.onPrimary,
   },
   jugarButton: {
     backgroundColor: colors.primary,
@@ -133,7 +133,7 @@ const styles = StyleSheet.create({
     alignSelf: "center",
   },
   jugarButtonText: {
-    color: "#0d0d0d",
+    color: colors.onPrimary,
     fontSize: 15,
     fontWeight: "bold",
   },

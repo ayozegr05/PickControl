@@ -44,7 +44,11 @@ export default function ModalFrame({
             accessibilityLabel="Cerrar"
           >
             <Text style={styles.closeButtonText}>
-              <MaterialCommunityIcons name="close" size={26} color="white" />
+              <MaterialCommunityIcons
+                name="close"
+                size={26}
+                color={colors.text}
+              />
             </Text>
           </TouchableOpacity>
           {children}
@@ -62,7 +66,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0, 0, 0, 0.7)",
   },
   modalContent: {
-    backgroundColor: "#303030",
+    backgroundColor: colors.surfaceAlt,
     borderRadius: 15,
     padding: 20,
     width: "80%",
@@ -83,7 +87,7 @@ const styles = StyleSheet.create({
     zIndex: 1,
   },
   closeButtonText: {
-    color: "white",
+    color: colors.onPrimary,
     fontSize: 16,
     fontWeight: "bold",
   },

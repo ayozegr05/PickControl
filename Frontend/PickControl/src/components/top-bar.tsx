@@ -88,7 +88,7 @@ const TopBar = () => {
           <View style={styles.rightSection}>
             <View style={styles.userContainer}>
               <View style={styles.gananciasContainer}>
-                <FontAwesome name="bank" size={20} color="white" />
+                <FontAwesome name="bank" size={20} color={colors.text} />
                 <Text
                   style={[
                     styles.subText,
@@ -106,7 +106,7 @@ const TopBar = () => {
                   <MaterialCommunityIcons
                     name="account-circle"
                     size={24}
-                    color="white"
+                    color={colors.text}
                   />
                 </TouchableOpacity>
                 {isAuthenticated && (
@@ -160,14 +160,14 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    backgroundColor: "#2d2d2d",
+    backgroundColor: colors.surface,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 15,
     zIndex: 1000,
     elevation: 5,
-    shadowColor: "#000",
+    shadowColor: colors.black,
     shadowOffset: {
       width: 0,
       height: 2,
@@ -175,7 +175,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     borderBottomWidth: 1,
-    borderBottomColor: "#3d3d3d",
+    borderBottomColor: colors.border,
   },
   content: {
     flex: 1,
@@ -206,7 +206,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   subText: {
-    color: "#fff",
+    color: colors.text,
     fontSize: 12,
     marginTop: 4,
   },
@@ -220,12 +220,12 @@ const styles = StyleSheet.create({
     top: 60,
     right: 0,
     alignItems: "flex-end",
-    backgroundColor: "#3d3d3d",
+    backgroundColor: colors.surfaceAlt,
     width: 150,
     padding: 10,
     borderRadius: 8,
     elevation: 5,
-    shadowColor: "#000",
+    shadowColor: colors.black,
     shadowOffset: {
       width: 0,
       height: 2,
@@ -233,10 +233,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     borderWidth: 1,
-    borderColor: "#3d3d3d",
+    borderColor: colors.surfaceAlt,
   },
   menuText: {
-    color: "#fff",
+    color: colors.text,
     padding: 10,
     fontSize: 16,
   },
@@ -249,7 +249,7 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
     marginLeft: 1,
     elevation: 2,
-    shadowColor: "#000",
+    shadowColor: colors.black,
     shadowOffset: {
       width: 0,
       height: 1,
@@ -269,7 +269,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
   userTitle: {
-    color: "white",
+    color: colors.text,
     fontSize: 12,
     fontWeight: "bold",
   },

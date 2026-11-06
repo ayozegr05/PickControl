@@ -72,8 +72,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   channelChip: {
-    backgroundColor: "#1a1a1a",
-    borderColor: "#333",
+    backgroundColor: colors.background,
+    borderColor: colors.border,
     borderWidth: 1,
     borderRadius: 20,
     paddingHorizontal: 14,
@@ -85,11 +85,11 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
   },
   channelChipText: {
-    color: "#aaa",
+    color: colors.textSecondary,
     fontSize: 13,
   },
   chipTextActive: {
-    color: "#0d0d0d",
+    color: colors.onPrimary,
     fontWeight: "bold",
   },
 });

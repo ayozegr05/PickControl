@@ -227,7 +227,7 @@ export default function AuditoriaScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0d0d0d",
+    backgroundColor: colors.black,
   },
   scroll: {
     paddingHorizontal: 16,
@@ -239,7 +239,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   subtitle: {
-    color: "#aaa",
+    color: colors.textSecondary,
     fontSize: 13,
     marginBottom: 16,
   },
@@ -259,15 +259,15 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   card: {
-    backgroundColor: "#1a1a1a",
+    backgroundColor: colors.background,
     borderRadius: 8,
     padding: 12,
     marginBottom: 12,
-    borderColor: "#333",
+    borderColor: colors.border,
     borderWidth: 1,
   },
   cardTitle: {
-    color: "#fff",
+    color: colors.text,
     fontSize: 16,
     fontWeight: "bold",
     marginBottom: 8,
@@ -278,35 +278,35 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   statsLineLabel: {
-    color: "#888",
+    color: colors.textMuted,
     fontSize: 13,
     width: 70,
   },
   statsLineValue: {
-    color: "#ddd",
+    color: colors.textSecondary,
     fontSize: 13,
     flexShrink: 1,
   },
   jugadasText: {
-    color: "#9e9e9e",
+    color: colors.textSecondary,
     fontSize: 12,
     marginTop: 6,
   },
   deporteRow: {
     borderTopWidth: 1,
-    borderTopColor: "#333",
+    borderTopColor: colors.border,
     paddingTop: 8,
     marginTop: 4,
   },
   deporteName: {
-    color: "#b388ff",
+    color: colors.purple,
     fontSize: 14,
     fontWeight: "bold",
     textTransform: "capitalize",
     marginBottom: 4,
   },
   emptyText: {
-    color: "#aaa",
+    color: colors.textSecondary,
     fontSize: 14,
     marginTop: 12,
   },
@@ -321,7 +321,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   linkButtonText: {
-    color: "#ffcf8a",
+    color: colors.primarySoft,
     fontSize: 14,
     fontWeight: "bold",
   },

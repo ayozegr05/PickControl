@@ -387,7 +387,7 @@ export default function ParsedPicksScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0d0d0d",
+    backgroundColor: colors.black,
   },
   scroll: {
     paddingHorizontal: 16,
@@ -404,12 +404,12 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   emptyText: {
-    color: "#aaa",
+    color: colors.textSecondary,
     fontSize: 14,
     marginTop: 12,
   },
   retosTitle: {
-    color: "#b388ff",
+    color: colors.purple,
     fontSize: 15,
     fontWeight: "bold",
     textTransform: "uppercase",
@@ -418,12 +418,12 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   count: {
-    color: "#aaa",
+    color: colors.textSecondary,
     fontSize: 14,
     marginBottom: 12,
   },
   loadMore: {
-    backgroundColor: "#1a1a1a",
+    backgroundColor: colors.background,
     borderColor: colors.primary,
     borderWidth: 1,
     borderRadius: 8,
@@ -446,7 +446,7 @@ const styles = StyleSheet.create({
     height: 18,
     borderRadius: 4,
     borderWidth: 1,
-    borderColor: "#666",
+    borderColor: colors.textMuted,
     marginRight: 8,
   },
   checkboxChecked: {
@@ -454,7 +454,7 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
   },
   toggleLabel: {
-    color: "#aaa",
+    color: colors.textSecondary,
     fontSize: 13,
     flexShrink: 1,
   },

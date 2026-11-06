@@ -31,7 +31,11 @@ export default function UpdatePickModal({
           accessibilityLabel="Apuesta acertada"
         >
           <Text style={styles.modalButtonText}>
-            <MaterialCommunityIcons name="check" size={26} color="white" />
+            <MaterialCommunityIcons
+              name="check"
+              size={26}
+              color={colors.text}
+            />
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -40,7 +44,11 @@ export default function UpdatePickModal({
           accessibilityLabel="Apuesta fallada"
         >
           <Text style={styles.modalButtonText}>
-            <MaterialCommunityIcons name="close" size={32} color="white" />
+            <MaterialCommunityIcons
+              name="close"
+              size={32}
+              color={colors.text}
+            />
           </Text>
         </TouchableOpacity>
       </View>
@@ -52,13 +60,13 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 24,
     fontWeight: "bold",
-    color: "white",
+    color: colors.text,
     marginTop: 20,
     marginBottom: 15,
   },
   modalText: {
     fontSize: 18,
-    color: "white",
+    color: colors.text,
     marginBottom: 20,
     textAlign: "center",
   },
@@ -77,7 +85,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 10,
   },
   modalButtonText: {
-    color: "white",
+    color: colors.onPrimary,
     fontSize: 16,
     fontWeight: "bold",
   },

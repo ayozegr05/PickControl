@@ -464,7 +464,7 @@ const MyPicksScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#1a1a1a",
+    backgroundColor: colors.background,
   },
   botbarContainer: {
     flex: 1,
@@ -473,9 +473,9 @@ const styles = StyleSheet.create({
     flexGrow: 1,
   },
   cardContainer: {
-    backgroundColor: "#303030",
+    backgroundColor: colors.surfaceAlt,
     borderRadius: 10,
-    shadowColor: "#000",
+    shadowColor: colors.black,
     alignItems: "center",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.8,
@@ -487,7 +487,7 @@ const styles = StyleSheet.create({
     maxHeight: 500, // Añadido maxHeight
   },
   card: {
-    backgroundColor: "#303030",
+    backgroundColor: colors.surfaceAlt,
     borderRadius: 10,
     padding: 15,
     marginTop: 20,
@@ -495,7 +495,7 @@ const styles = StyleSheet.create({
     maxHeight: 300, // Añadido maxHeight
   },
   rankingContainer: {
-    backgroundColor: "#303030",
+    backgroundColor: colors.surfaceAlt,
     borderRadius: 10,
     padding: 15,
     marginTop: 20,
@@ -551,7 +551,7 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontSize: 24,
     fontWeight: "bold",
-    color: "white",
+    color: colors.text,
     marginBottom: 10,
     textAlign: "center",
   },
@@ -596,7 +596,7 @@ const styles = StyleSheet.create({
   pendingText: {
     fontSize: 16,
     fontWeight: "bold",
-    color: "white",
+    color: colors.text,
     textAlign: "center",
   },
 
@@ -612,26 +612,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 5,
     paddingVertical: 5,
     marginTop: 10,
-    backgroundColor: "white",
+    backgroundColor: colors.surface,
     borderRadius: 5,
   },
 
   updateButtonText: {
     fontSize: 18,
     fontWeight: "bold",
-    color: "black",
+    color: colors.onPrimary,
   },
 
   videoContainer: {
     flex: 1,
-    backgroundColor: "#1a1a1a",
+    backgroundColor: colors.background,
     width: "100%",
     position: "relative",
   },
   video: {
     width: "100%",
     height: "100%",
-    backgroundColor: "#1a1a1a",
+    backgroundColor: colors.background,
   },
   overlay: {
     ...StyleSheet.absoluteFill,
@@ -648,7 +648,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#000",
+    shadowColor: colors.black,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 10,
@@ -657,7 +657,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255, 255, 255, 0.2)",
   },
   joinButtonText: {
-    color: "#fff",
+    color: colors.onPrimary,
     fontSize: 20,
     fontWeight: "700",
     textTransform: "uppercase",
@@ -673,7 +673,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0, 0, 0, 0.5)",
   },
   modalContent: {
-    backgroundColor: "white",
+    backgroundColor: colors.surface,
     borderRadius: 10,
     padding: 20,
     alignItems: "center",
@@ -695,7 +695,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   choiceButtonText: {
-    color: "white",
+    color: colors.onPrimary,
     fontSize: 18,
     fontWeight: "bold",
   },
@@ -712,7 +712,7 @@ const styles = StyleSheet.create({
   },
   closeButtonText: {
     fontSize: 18,
-    color: "white",
+    color: colors.onPrimary,
   },
   rankingItem: {
     flexDirection: "row",
@@ -724,7 +724,7 @@ const styles = StyleSheet.create({
   rankingText: {
     fontSize: 16,
     fontWeight: "bold",
-    color: "white",
+    color: colors.text,
   },
   rankingPercentage: {
     fontSize: 16,
@@ -762,7 +762,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 30,
     fontWeight: "900",
-    color: "#ffffff",
+    color: colors.text,
     textAlign: "center",
     textTransform: "uppercase",
     letterSpacing: 2,
@@ -784,7 +784,7 @@ const styles = StyleSheet.create({
     padding: 15,
     marginBottom: 15,
     alignItems: "center",
-    shadowColor: "#000",
+    shadowColor: colors.black,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
@@ -794,14 +794,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   featureTitle: {
-    color: "#fff",
+    color: colors.text,
     fontSize: 16,
     fontWeight: "bold",
     marginVertical: 10,
     textAlign: "center",
   },
   featureText: {
-    color: "#ddd",
+    color: colors.textSecondary,
     fontSize: 13,
     textAlign: "center",
     lineHeight: 18,
@@ -816,11 +816,11 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 5,
     borderWidth: 1,
-    borderColor: "gray",
+    borderColor: colors.textMuted,
     marginHorizontal: 10,
   },
   filterButtonText: {
-    color: "white",
+    color: colors.onPrimary,
     fontWeight: "bold",
   },
   informanteButton: {

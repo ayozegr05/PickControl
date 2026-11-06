@@ -22,7 +22,7 @@ export function ErrorState({
       <MaterialCommunityIcons
         name="cloud-alert-outline"
         size={42}
-        color="#bbb"
+        color={colors.textSecondary}
       />
       <Text style={styles.message}>{message}</Text>
       <TouchableOpacity
@@ -45,7 +45,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
   },
   message: {
-    color: "#bbb",
+    color: colors.textSecondary,
     fontSize: 15,
     textAlign: "center",
     marginTop: 14,

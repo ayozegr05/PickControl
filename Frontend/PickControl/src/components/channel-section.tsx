@@ -84,7 +84,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: "#241a0d",
+    backgroundColor: colors.warningBg,
     borderLeftWidth: 4,
     borderLeftColor: colors.primary,
     borderRadius: 6,
@@ -101,13 +101,13 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   seeAll: {
-    color: "#ffcf8a",
+    color: colors.primarySoft,
     fontSize: 13,
     fontWeight: "bold",
     marginLeft: 12,
   },
   retosTitle: {
-    color: "#b388ff",
+    color: colors.purple,
     fontSize: 15,
     fontWeight: "bold",
     textTransform: "uppercase",
@@ -116,7 +116,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   emptyChannel: {
-    color: "#9a9a9a",
+    color: colors.textSecondary,
     fontSize: 13,
     marginBottom: 12,
     fontStyle: "italic",

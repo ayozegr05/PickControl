@@ -649,7 +649,7 @@ export default function InformantDetail() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#000",
+    backgroundColor: colors.black,
     padding: 20,
   },
   scrollView: {
@@ -659,7 +659,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#000",
+    backgroundColor: colors.black,
   },
   errorText: {
     fontSize: 18,
@@ -688,7 +688,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(33, 33, 33, 0.5)",
     padding: 20,
     borderRadius: 10,
-    shadowColor: "#000",
+    shadowColor: colors.black,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 4,
@@ -709,12 +709,12 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 18,
-    color: "white",
+    color: colors.text,
   },
   value: {
     fontSize: 16,
     fontWeight: "bold",
-    color: "white",
+    color: colors.text,
   },
   filterButtons: {
     flexDirection: "row",
@@ -725,12 +725,12 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   filterButton: {
-    backgroundColor: "#2e2e2e",
+    backgroundColor: colors.surface,
     paddingHorizontal: 15,
     paddingVertical: 8,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: "#424242",
+    borderColor: colors.border,
     minWidth: 70,
     alignItems: "center",
   },
@@ -739,24 +739,24 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
   },
   filterButtonText: {
-    color: "white",
+    color: colors.text,
     fontSize: 12,
     textAlign: "center",
   },
   filterButtonTextActive: {
-    color: "white",
+    color: colors.onPrimary,
     fontWeight: "bold",
   },
   cardSubtitle: {
     fontSize: 13,
-    color: "#999",
+    color: colors.textSecondary,
     textAlign: "center",
     marginTop: -20,
     marginBottom: 15,
   },
   emptyText: {
     fontSize: 15,
-    color: "#aaa",
+    color: colors.textSecondary,
     textAlign: "center",
     marginVertical: 15,
     fontStyle: "italic",
